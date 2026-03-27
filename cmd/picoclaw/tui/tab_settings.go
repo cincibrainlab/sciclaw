@@ -549,13 +549,13 @@ func fetchSettingsData(exec Executor) tea.Cmd {
 
 			// Config bootstrap: create defaults only when config is missing.
 			home := exec.HomePath()
-			_, _ = exec.ExecShell(5*time.Second, "mkdir -p "+shellEscape(home+"/.picoclaw/workspace"))
+			_, _ = exec.ExecShell(5*time.Second, "mkdir -p "+shellEscape(home+"/sciclaw"))
 			cfg = map[string]interface{}{
 				"agents": map[string]interface{}{
 					"defaults": map[string]interface{}{
 						"model":            "gpt-5.6-sol",
 						"reasoning_effort": "low",
-						"workspace":        "~/.picoclaw/workspace",
+						"workspace":        "~/sciclaw",
 					},
 				},
 				"channels": map[string]interface{}{
