@@ -140,11 +140,11 @@ See [Authentication docs](https://sciclaw.dev/docs.html#authentication) for all 
 sciClaw's default posture is **local, private, and locked down**. Here's what that means in practice:
 
 - **Runs on your machine.** sciClaw is a program on your computer, not a cloud service. There's no account to create with us, no server to connect to, nothing hosted anywhere.
-- **Your data stays in one folder.** Everything sciClaw produces lives in `~/sciclaw` — a folder on your machine that you own and control. You can open it, back it up, or delete it anytime.
+- **Your work stays visible.** Editable configuration, profile files, skills, templates, backups, and workspace content live under `~/sciclaw`. Machine-managed credentials, logs, sessions, caches, and runtime coordination live separately under `~/.sciclaw`.
 - **Nothing is exposed to the internet.** sciClaw doesn't open any ports or listen for incoming connections. It reaches out only when you send a message, and only to the AI provider you chose (OpenAI, Anthropic, etc.) and any tools you explicitly enable (like PubMed).
 - **Messages go through your private bot.** When you chat via Telegram or Discord, messages travel through a bot that only you control. Nobody else can talk to it unless you explicitly allow them.
 - **No telemetry, no analytics, no tracking.** sciClaw sends nothing back to us. No usage data, no error reports, no phone-home behavior. We don't know you're running it.
-- **API keys stay local.** Your credentials are stored in a config file on your machine (`~/sciclaw/config.json`). They're never transmitted to anyone except the provider they belong to.
+- **Credentials stay local.** Provider settings remain in `~/sciclaw/config.json`; OAuth tokens remain in the machine-managed `~/.sciclaw/auth.json`. They're never transmitted to anyone except the selected provider.
 - **Skills are validated before install.** Every skill goes through size limits, binary rejection, frontmatter validation, and SHA-256 provenance logging. Catalog fetches use pinned commit refs for supply-chain hardening.
 
 For the full security model, see [Security](https://sciclaw.dev/security.html).
@@ -265,7 +265,7 @@ Platform notes:
 
 ## Collaborative Routing (Channel -> Workspace)
 
-Give each project its own chat room. Routing maps a Discord or Telegram channel to a specific data folder so the agent only sees that project's files — while still having access to your shared personality, skills, and memory from `~/sciclaw`.
+Give each project its own chat room. Routing maps a Discord or Telegram channel to a specific visible workspace while retaining the shared profile from `~/sciclaw/profile`, global skills from `~/sciclaw/skills`, and shared memory from `~/sciclaw/workspaces/default`.
 
 **Mention to activate.** In routed channels the bot stays quiet unless someone `@mention`s it, so collaborators can talk freely without triggering responses. DMs always work without a mention.
 
@@ -303,7 +303,7 @@ Useful operations:
 - `sciclaw routing remove --channel <channel> --chat-id <id>`
 - `sciclaw routing export --out routing.json` / `sciclaw routing import --in routing.json [--replace]`
 
-Session isolation is namespaced as `<channel>:<chat_id>@<workspace_hash>` to prevent cross-workspace context bleed. Each routed workspace gets its own sessions, memory, and state, but inherits your personality files (`AGENTS.md`, `SOUL.md`, etc.) and skills from the shared workspace (`~/sciclaw`).
+Session isolation is namespaced as `<channel>:<chat_id>@<workspace_hash>` to prevent cross-workspace context bleed. Each routed workspace keeps user files at its configured path, while sessions, state, inbound staging, hook events, managed Python environments, and heartbeat logs live under a stable per-workspace directory in `~/.sciclaw/workspaces/`.
 
 ## IRL Integration
 
@@ -316,26 +316,37 @@ sciclaw agent -m "Create a new project for ERP correlation analysis"
 sciclaw agent -m "What projects do I have?"
 ```
 
-Every IRL command is recorded in `~/sciclaw/irl/commands/` for auditability.
+Every IRL command is recorded in the active visible workspace, under `irl/commands/`, for auditability.
 
 ## Workspace Layout
 
 ```
-~/sciclaw/
-├── sessions/          # Conversation history
-├── memory/            # Long-term memory (MEMORY.md)
-├── state/             # Persistent state
-├── cron/              # Scheduled jobs
-├── skills/            # Installed skills
-├── hooks/             # Hook audit log (JSONL)
-├── irl/commands/      # IRL command audit records
-├── AGENTS.md          # Agent behavior guide
-├── HOOKS.md           # Hook policy (plain-language)
-├── IDENTITY.md        # sciClaw identity
-├── SOUL.md            # Agent values & guardrails
-├── TOOLS.md           # Tool descriptions
-└── USER.md            # User preferences
+~/sciclaw/                         # User-facing
+├── config.json
+├── profile/{AGENTS,HOOKS,IDENTITY,SOUL,TOOLS,USER}.md
+├── skills/                        # Global user-installed skills
+├── templates/
+├── backups/
+├── addons/
+└── workspaces/default/            # Default/shared visible workspace
+    ├── memory/
+    ├── skills/
+    ├── cron/
+    ├── irl/
+    └── ... documents and outputs
+
+~/.sciclaw/                        # Machine-managed
+├── auth.json
+├── logs/                          # gateway/web stdout and stderr
+├── runtime/                       # gateway status, routing reload, async jobs, history
+├── cache/
+├── tmp/
+└── workspaces/<stable-id>/         # Sessions, state, inbound, hooks, .ctxclaw, .venv, heartbeat logs
 ```
+
+`SCICLAW_HOME` overrides the visible root and `SCICLAW_STATE_HOME` overrides the machine-state root. `~/.picoclaw` remains PicoClaw-owned and is never used as a SciClaw runtime fallback.
+
+Legacy SciClaw layouts are migrated manually only. SciClaw does not import, merge, remove, or symlink `~/.picoclaw`; update active config/workspace paths yourself after reviewing the files you intend to move.
 
 ## Docker
 

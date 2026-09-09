@@ -22,27 +22,31 @@
 
     <main class="wrap">
       <section>
-        <h2>One folder. Everything in it.</h2>
-        <p class="subhead">Drafts, session logs, skills, audit records &mdash; all in <code>~/sciclaw</code>. Open it in Finder, back it up with Git, or hand it to a collaborator.</p>
+        <h2>Your work visible. Runtime state separate.</h2>
+        <p class="subhead">Editable settings, profiles, skills, and workspace files live under <code>~/sciclaw</code>. Credentials, sessions, logs, and transient runtime data live under <code>~/.sciclaw</code>.</p>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start;">
-          <pre style="margin:0;padding:16px 18px;border-radius:10px;background:#0f172a;color:#e2e8f0;font-family:var(--mono);font-size:13px;line-height:1.7;overflow-x:auto;"><code>~/sciclaw/
-├── sessions/       <span style="color:#64748b;"># Every conversation, searchable</span>
-├── memory/         <span style="color:#64748b;"># Long-term notes across sessions</span>
-├── skills/         <span style="color:#64748b;"># 13 built-in + your custom skills</span>
-│   ├── scientific-writing/
-│   ├── pubmed-cli/
-│   ├── docx-review/
-│   └── <span style="color:#64748b;">… 10 more</span>
-├── hooks/          <span style="color:#64748b;"># Event audit log (JSONL)</span>
-├── cron/           <span style="color:#64748b;"># Scheduled jobs</span>
-├── state/          <span style="color:#64748b;"># Runtime state</span>
-├── AGENTS.md       <span style="color:#64748b;"># Agent behavior rules</span>
-├── HOOKS.md        <span style="color:#64748b;"># Lifecycle hook instructions</span>
-├── IDENTITY.md     <span style="color:#64748b;"># Lab identity &amp; voice</span>
-├── MEMORY.md       <span style="color:#64748b;"># Persistent memory template</span>
-├── SOUL.md         <span style="color:#64748b;"># Guardrails &amp; ethics</span>
-├── TOOLS.md        <span style="color:#64748b;"># Tool usage guidelines</span>
-└── USER.md         <span style="color:#64748b;"># Your preferences</span></code></pre>
+          <pre style="margin:0;padding:16px 18px;border-radius:10px;background:#0f172a;color:#e2e8f0;font-family:var(--mono);font-size:13px;line-height:1.7;overflow-x:auto;"><code>~/sciclaw/ <span style="color:#64748b;"># user-facing</span>
+├── config.json
+├── profile/
+├── skills/
+├── templates/
+├── backups/
+├── addons/
+└── workspaces/default/
+    ├── memory/
+    ├── skills/
+    ├── cron/
+    ├── irl/
+    └── <span style="color:#64748b;">documents and outputs</span>
+
+~/.sciclaw/ <span style="color:#64748b;"># machine-managed</span>
+├── auth.json
+├── logs/
+├── runtime/
+├── cache/
+├── tmp/
+└── workspaces/&lt;stable-id&gt;/
+    <span style="color:#64748b;"># sessions, state, inbound, hooks, venv</span></code></pre>
           <div>
             <div class="card" style="margin-bottom:10px;">
               <h3 style="font-size:14px;">Reproducible by default</h3>
@@ -54,7 +58,7 @@
             </div>
             <div class="card">
               <h3 style="font-size:14px;">You control the agent</h3>
-              <p>Edit <code>AGENTS.md</code> to change behavior, <code>SOUL.md</code> to set guardrails, <code>USER.md</code> to teach it your preferences. Plain text, version-controlled.</p>
+              <p>Edit files in <code>~/sciclaw/profile/</code> to change behavior, guardrails, identity, and preferences. <code>~/.picoclaw</code> remains reserved for PicoClaw.</p>
             </div>
           </div>
         </div>
