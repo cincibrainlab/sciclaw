@@ -14,6 +14,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/paths"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -29,16 +30,20 @@ func prepareInboundMedia(ctx context.Context, workspace string, msg *bus.Inbound
 		ctx = context.Background()
 	}
 
+	workspaceState, err := paths.EnsureWorkspaceStateDir(workspace)
+	if err != nil {
+		return fmt.Errorf("prepare workspace state: %w", err)
+	}
 	stageDir := filepath.Join(
-		workspace,
-		".sciclaw",
+		workspaceState,
 		"inbound",
 		sanitizePathSegment(msg.Channel),
 		inboundMediaMessageDir(msg),
 	)
-	if err := os.MkdirAll(stageDir, 0755); err != nil {
+	if err := os.MkdirAll(stageDir, 0700); err != nil {
 		return fmt.Errorf("create inbound media staging dir: %w", err)
 	}
+	_ = os.Chmod(stageDir, 0700)
 
 	seenNames := map[string]int{}
 	stagedPaths := make([]string, 0, len(msg.Media))
@@ -76,14 +81,8 @@ func prepareInboundMedia(ctx context.Context, workspace string, msg *bus.Inbound
 			continue
 		}
 
-		relPath, err := filepath.Rel(workspace, destPath)
-		if err != nil {
-			relPath = destPath
-		}
-		relPath = filepath.ToSlash(relPath)
-
 		stagedPaths = append(stagedPaths, destPath)
-		stagedLines = append(stagedLines, fmt.Sprintf("- %s -> %s", filename, relPath))
+		stagedLines = append(stagedLines, fmt.Sprintf("- %s -> %s", filename, filepath.ToSlash(destPath)))
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -218,10 +217,10 @@ func copyInboundFile(sourcePath, destPath string) error {
 }
 
 func writeInboundFile(r io.Reader, destPath string, maxBytes int64) error {
-	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(destPath), 0700); err != nil {
 		return err
 	}
-	out, err := os.Create(destPath)
+	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
 	}

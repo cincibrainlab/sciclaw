@@ -218,8 +218,7 @@ func main() {
 
 		workspace := cfg.WorkspacePath()
 		installer := skills.NewSkillInstaller(workspace)
-		globalDir := filepath.Dir(getConfigPath())
-		globalSkillsDir := filepath.Join(globalDir, "skills")
+		globalSkillsDir := paths.GlobalSkillsDir()
 		builtinSkillsDir := resolveBuiltinSkillsDir(workspace)
 		skillsLoader := skills.NewSkillsLoader(workspace, globalSkillsDir, builtinSkillsDir)
 
@@ -466,11 +465,11 @@ func applyRoutingMentionRequired(cfg *config.Config, indexes []int) int {
 }
 
 func requestRoutingReload() error {
-	return requestRoutingReloadAt(getConfigPath())
+	return requestRoutingReloadAt()
 }
 
-func requestRoutingReloadAt(configPath string) error {
-	triggerPath := filepath.Join(filepath.Dir(configPath), "routing.reload")
+func requestRoutingReloadAt() error {
+	triggerPath := routingReloadTriggerPath()
 	if err := os.MkdirAll(filepath.Dir(triggerPath), 0o755); err != nil {
 		return err
 	}
@@ -540,6 +539,10 @@ func onboard() {
 		return
 	}
 
+	if err := paths.ValidateHomes(); err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
 	configPath := getConfigPath()
 	if err := os.MkdirAll(filepath.Dir(configPath), 0700); err != nil {
 		fmt.Printf("Error creating config dir: %v\n", err)
@@ -1002,7 +1005,7 @@ func backupFile(path string) (string, error) {
 }
 
 func createWorkspaceTemplates(workspace string) {
-	dirs := []string{"memory", "skills", "sessions", "cron"}
+	dirs := []string{"memory", "skills", "cron"}
 	for _, dir := range dirs {
 		if err := os.MkdirAll(filepath.Join(workspace, dir), 0755); err != nil {
 			fmt.Printf("  Failed to create %s/: %v\n", dir, err)
@@ -1015,15 +1018,24 @@ func createWorkspaceTemplates(workspace string) {
 		return
 	}
 
+	profileDir := paths.ProfileDir()
+	if err := os.MkdirAll(profileDir, 0755); err != nil {
+		fmt.Printf("  Failed to create profile/: %v\n", err)
+		return
+	}
 	for _, tpl := range templates {
+		destinationRoot := profileDir
+		if strings.HasPrefix(tpl.RelativePath, "memory"+string(filepath.Separator)) {
+			destinationRoot = workspace
+		}
 		writeFileIfMissing(
-			filepath.Join(workspace, tpl.RelativePath),
+			filepath.Join(destinationRoot, tpl.RelativePath),
 			tpl.Content,
 			fmt.Sprintf("  Created %s\n", tpl.RelativePath),
 		)
 	}
 
-	if err := ensureToolsCLIFirstPolicy(workspace); err != nil {
+	if err := ensureToolsCLIFirstPolicy(profileDir); err != nil {
 		fmt.Printf("  Failed to apply TOOLS.md CLI-first policy: %v\n", err)
 	}
 
@@ -1100,8 +1112,8 @@ func baselineSkillSourceDirs(workspace string) []string {
 		candidates = append(candidates, skillSourceDirsForExecutable(exePath)...)
 	}
 
-	// User-local fallback, e.g. ~/.picoclaw/skills
-	candidates = append(candidates, filepath.Join(filepath.Dir(workspace), "skills"))
+	// User-global fallback.
+	candidates = append(candidates, paths.GlobalSkillsDir())
 
 	dirs := []string{}
 	seen := map[string]struct{}{}
@@ -1124,7 +1136,6 @@ func skillSourceDirsForExecutable(exePath string) []string {
 
 	dirs := []string{
 		filepath.Join(shareDir, "sciclaw", "skills"),
-		filepath.Join(shareDir, "picoclaw", "skills"),
 		filepath.Join(shareDir, "sciclaw-dev", "skills"),
 	}
 
@@ -1182,18 +1193,11 @@ func migrateCmd() {
 			opts.WorkspaceOnly = true
 		case "--force":
 			opts.Force = true
-		case "--unify":
-			opts.Unify = true
 		case "--refresh":
 			opts.Refresh = true
 		case "--openclaw-home":
 			if i+1 < len(args) {
 				opts.OpenClawHome = args[i+1]
-				i++
-			}
-		case "--picoclaw-home":
-			if i+1 < len(args) {
-				opts.PicoClawHome = args[i+1]
 				i++
 			}
 		default:
@@ -1226,16 +1230,13 @@ func migrateHelp() {
 	fmt.Println("  --config-only      Only migrate config, skip workspace files")
 	fmt.Println("  --workspace-only   Only migrate workspace files, skip config")
 	fmt.Println("  --force            Skip confirmation prompts")
-	fmt.Println("  --unify            Unify ~/.picoclaw into ~/sciclaw and create symlink")
 	fmt.Println("  --openclaw-home    Override OpenClaw home directory (default: ~/.openclaw)")
-	fmt.Println("  --picoclaw-home    Override PicoClaw home directory (default: ~/.picoclaw)")
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Printf("  %s migrate              Detect and migrate from OpenClaw\n", commandName)
 	fmt.Printf("  %s migrate --dry-run    Show what would be migrated\n", commandName)
 	fmt.Printf("  %s migrate --refresh    Re-sync workspace files\n", commandName)
 	fmt.Printf("  %s migrate --force      Migrate without confirmation\n", commandName)
-	fmt.Printf("  %s migrate --unify      Unify ~/.picoclaw into ~/sciclaw\n", commandName)
 }
 
 func agentCmd() {
@@ -1328,9 +1329,20 @@ func applyAgentCLIOverrides(cfg *config.Config, modelOverride, effortOverride st
 func interactiveMode(agentLoop *agent.AgentLoop, sessionKey string) {
 	prompt := fmt.Sprintf("%s You: ", logo)
 
+	if err := paths.EnsureStateLayout(); err != nil {
+		fmt.Printf("Error creating runtime directory: %v\n", err)
+		return
+	}
+	historyFile, err := os.OpenFile(paths.InteractiveHistoryPath(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		fmt.Printf("Error creating history file: %v\n", err)
+		return
+	}
+	_ = historyFile.Close()
+	_ = os.Chmod(paths.InteractiveHistoryPath(), 0600)
 	rl, err := readline.NewEx(&readline.Config{
 		Prompt:          prompt,
-		HistoryFile:     filepath.Join(os.TempDir(), ".picoclaw_history"),
+		HistoryFile:     paths.InteractiveHistoryPath(),
 		HistoryLimit:    100,
 		InterruptPrompt: "^C",
 		EOFPrompt:       "exit",
@@ -1458,14 +1470,21 @@ func gatewayCmd() {
 	// Resolve home directory once for all path construction below (status
 	// file, log file, etc.). If it fails, skip home-dependent setup.
 	_, gwHomeErr := os.UserHomeDir()
-	picoDir := paths.AppHome()
+	if err := paths.ValidateHomes(); err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
+	if err := paths.EnsureStateLayout(); err != nil {
+		fmt.Printf("Error preparing machine state: %v\n", err)
+		return
+	}
 
 	// Kill any stale gateway process from a previous run (e.g. orphaned SSH session).
 	// The status file is written on startup and removed on clean shutdown — if it
 	// still exists with a live PID, that process is a zombie competing for the
 	// Discord/Telegram websocket.
 	if gwHomeErr == nil {
-		statusPath := filepath.Join(picoDir, "gateway.status.json")
+		statusPath := paths.GatewayStatusPath()
 		if data, err := os.ReadFile(statusPath); err == nil {
 			var status struct {
 				PID int `json:"pid"`
@@ -1500,7 +1519,7 @@ func gatewayCmd() {
 	// this path, but EnableFileLogging writes structured JSON independently of
 	// how the process was launched.
 	if gwHomeErr == nil {
-		if err := logger.EnableFileLogging(filepath.Join(picoDir, "gateway.log")); err != nil {
+		if err := logger.EnableFileLogging(paths.GatewayLogPath()); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: could not enable file logging: %v\n", err)
 		}
 	}
@@ -1533,13 +1552,13 @@ func gatewayCmd() {
 		})
 
 	// Write gateway status file for TUI version mismatch detection.
-	gatewayStatusPath := filepath.Join(picoDir, "gateway.status.json")
+	gatewayStatusPath := paths.GatewayStatusPath()
 	if statusJSON, err := json.Marshal(map[string]interface{}{
 		"version":    version,
 		"pid":        os.Getpid(),
 		"started_at": time.Now().UTC().Format(time.RFC3339),
 	}); err == nil {
-		_ = os.WriteFile(gatewayStatusPath, statusJSON, 0644)
+		_ = os.WriteFile(gatewayStatusPath, statusJSON, 0600)
 	}
 
 	// Setup cron tool and service
@@ -1645,7 +1664,7 @@ func gatewayCmd() {
 	}
 	if cfg.Jobs.Enabled && cfg.Jobs.DiscordAsyncDefault {
 		jm, jmErr := routing.NewJobManager(
-			filepath.Join(filepath.Dir(getConfigPath()), "jobs.json"),
+			paths.JobsPath(),
 			cfg.Jobs,
 			msgBus,
 			channelManager,
@@ -2103,7 +2122,7 @@ func listDiscordSlashSkills(cfg *config.Config, channelID, guildID, userID strin
 		}
 		workspace = decision.Workspace
 	}
-	globalSkillsDir := filepath.Join(filepath.Dir(getConfigPath()), "skills")
+	globalSkillsDir := paths.GlobalSkillsDir()
 	builtinSkillsDir := resolveBuiltinSkillsDir(workspace)
 	skillsLoader := skills.NewSkillsLoader(workspace, globalSkillsDir, builtinSkillsDir)
 	infos := skillsLoader.ListSkills()
@@ -2710,7 +2729,7 @@ func runGatewayDefaultDispatch(ctx context.Context, msgBus *bus.MessageBus, agen
 }
 
 func routingReloadTriggerPath() string {
-	return filepath.Join(filepath.Dir(getConfigPath()), "routing.reload")
+	return paths.RoutingReloadPath()
 }
 
 func watchRoutingReload(ctx context.Context, dispatcher *routing.Dispatcher) {
@@ -2780,7 +2799,28 @@ func setupCronTool(agentLoop *agent.AgentLoop, msgBus *bus.MessageBus, workspace
 }
 
 func loadConfig() (*config.Config, error) {
-	return config.LoadConfig(getConfigPath())
+	if err := paths.ValidateHomes(); err != nil {
+		return nil, err
+	}
+	cfg, err := config.LoadConfig(getConfigPath())
+	if err != nil {
+		return nil, err
+	}
+	for _, workspace := range configuredWorkspaces(cfg) {
+		if err := paths.ValidateWorkspace(workspace); err != nil {
+			return nil, err
+		}
+	}
+	return cfg, nil
+}
+
+func configuredWorkspaces(cfg *config.Config) []string {
+	workspaces := []string{cfg.WorkspacePath(), cfg.SharedWorkspacePath()}
+	home, _ := os.UserHomeDir()
+	for _, mapping := range cfg.Routing.Mappings {
+		workspaces = append(workspaces, expandHomePath(mapping.Workspace, home))
+	}
+	return workspaces
 }
 
 func cronCmd() {
@@ -3014,9 +3054,8 @@ func skillsCmd() {
 	workspace := cfg.WorkspacePath()
 	installer := skills.NewSkillInstaller(workspace)
 	// 获取全局配置目录和内置 skills 目录
-	globalDir := filepath.Dir(getConfigPath())
-	globalSkillsDir := filepath.Join(globalDir, "skills")
-	builtinSkillsDir := filepath.Join(globalDir, "picoclaw", "skills")
+	globalSkillsDir := paths.GlobalSkillsDir()
+	builtinSkillsDir := resolveBuiltinSkillsDir(workspace)
 	skillsLoader := skills.NewSkillsLoader(workspace, globalSkillsDir, builtinSkillsDir)
 
 	switch subcommand {

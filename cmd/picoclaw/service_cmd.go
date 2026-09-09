@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/sipeed/picoclaw/pkg/paths"
 	svcmgr "github.com/sipeed/picoclaw/pkg/service"
 )
 
@@ -39,6 +40,10 @@ func serviceCmd() {
 	sub := strings.ToLower(args[0])
 	if sub == "help" || sub == "--help" || sub == "-h" {
 		serviceHelp()
+		return
+	}
+	if err := paths.ValidateHomes(); err != nil {
+		fmt.Printf("Error: %v\n", err)
 		return
 	}
 

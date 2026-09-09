@@ -293,7 +293,7 @@ func CreateProvider(cfg *config.Config) (LLMProvider, error) {
 				}
 			}
 		case "openai", "gpt":
-			// OAuth/token credentials are stored in ~/.picoclaw/auth.json. Treat their presence as "configured"
+			// OAuth/token credentials are stored in ~/.sciclaw/auth.json. Treat their presence as "configured"
 			// even if config.json was created earlier (idempotent onboard preserves it).
 			if cfg.Providers.OpenAI.AuthMethod == "oauth" || cfg.Providers.OpenAI.AuthMethod == "token" || (cfg.Providers.OpenAI.APIKey == "" && hasStoredCredential("openai")) {
 				return createCodexAuthProvider()

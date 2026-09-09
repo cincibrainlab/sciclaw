@@ -160,6 +160,26 @@ func TestSessionManagerPreloadTimeoutDoesNotBlockConstructor(t *testing.T) {
 	time.Sleep(5 * time.Millisecond)
 }
 
+func TestSessionSaveUsesPrivatePermissions(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "sessions")
+	sm := NewSessionManager(dir)
+	sm.AddMessage("private", "user", "secret")
+	if err := sm.Save("private"); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(dir, "private.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("session mode=%#o want 0600", info.Mode().Perm())
+	}
+	dirInfo, err := os.Stat(dir)
+	if err != nil || dirInfo.Mode().Perm() != 0700 {
+		t.Fatalf("session directory mode must be 0700: %#v, %v", dirInfo, err)
+	}
+}
+
 func TestSessionManagerRegisterArtifactsDedupsAndBuildsContext(t *testing.T) {
 	dir := t.TempDir()
 	inputPath := filepath.Join(dir, ".sciclaw", "inbound", "discord", "123", "source.docx")

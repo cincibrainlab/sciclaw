@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/paths"
 )
 
 func TestHasLikelyRelativePathToken(t *testing.T) {
@@ -55,8 +56,9 @@ func TestFindRelativePathGuardBlocks(t *testing.T) {
 func TestCheckExecGuardRelativePathWarnsOnDetectedBlocks(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(home, ".sciclaw"))
 
-	logPath := filepath.Join(home, ".picoclaw", "gateway.log")
+	logPath := paths.GatewayLogPath()
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}

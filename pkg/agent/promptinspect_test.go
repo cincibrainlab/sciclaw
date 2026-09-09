@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/paths"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/session"
 )
@@ -35,7 +36,7 @@ func TestInspectPromptBuildsBucketedReport(t *testing.T) {
 	}
 
 	sessionKey := "discord:allen-ernie@abc123"
-	sm := session.NewSessionManager(filepath.Join(workspace, "sessions"))
+	sm := session.NewSessionManager(filepath.Join(paths.WorkspaceStateDir(workspace), "sessions"))
 	sess := sm.GetOrCreate(sessionKey)
 	sess.Messages = []providers.Message{
 		{Role: "user", Content: "earlier user prompt"},
@@ -124,7 +125,7 @@ func TestInspectPromptMarksCompactedToolHistory(t *testing.T) {
 	}
 
 	sessionKey := "discord:allen-ernie@compacted"
-	sm := session.NewSessionManager(filepath.Join(workspace, "sessions"))
+	sm := session.NewSessionManager(filepath.Join(paths.WorkspaceStateDir(workspace), "sessions"))
 	sess := sm.GetOrCreate(sessionKey)
 	sess.Messages = []providers.Message{
 		{Role: "user", Content: "earlier user prompt"},
@@ -170,7 +171,7 @@ func TestBuildPromptEnvelopeIncludesLatestUserAndSchemas(t *testing.T) {
 	}
 
 	sessionKey := "discord:allen-ernie@envelope"
-	sm := session.NewSessionManager(filepath.Join(workspace, "sessions"))
+	sm := session.NewSessionManager(filepath.Join(paths.WorkspaceStateDir(workspace), "sessions"))
 	sess := sm.GetOrCreate(sessionKey)
 	sess.Messages = []providers.Message{
 		{Role: "tool", ToolName: "orphaned_tool", ToolCallID: "orphaned", Content: "should be pruned"},

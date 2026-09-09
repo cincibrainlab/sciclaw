@@ -27,6 +27,8 @@ func TestSystemdInstall_WritesPathEnvironment(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("PATH", "/custom/bin:/usr/bin")
+	t.Setenv("SCICLAW_HOME", filepath.Join(home, "custom-sciclaw"))
+	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(home, "custom-state"))
 
 	runner := &fakeCommandRunner{}
 	mgr := newSystemdUserManager("/tmp/sciclaw", runner).(*systemdUserManager)
@@ -49,6 +51,9 @@ func TestSystemdInstall_WritesPathEnvironment(t *testing.T) {
 	}
 	if !strings.Contains(unit, "ExecStart=/tmp/sciclaw gateway") {
 		t.Fatalf("expected ExecStart line, got:\n%s", unit)
+	}
+	if !strings.Contains(unit, `Environment="SCICLAW_HOME=`+filepath.Join(home, "custom-sciclaw")+`"`) || !strings.Contains(unit, `Environment="SCICLAW_STATE_HOME=`+filepath.Join(home, "custom-state")+`"`) {
+		t.Fatalf("expected custom roots in unit, got:\n%s", unit)
 	}
 
 	if len(runner.calls) < 2 {

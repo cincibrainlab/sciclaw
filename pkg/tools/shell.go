@@ -553,10 +553,6 @@ func sciclawTemplateCandidatePaths() []string {
 }
 
 func defaultNIHTemplatePath() string {
-	home := strings.TrimSpace(os.Getenv("PICOCLAW_HOME"))
-	if home != "" {
-		return filepath.Join(home, "templates", "nih-standard.docx")
-	}
 	return filepath.Join(paths.TemplatesDir(), "nih-standard.docx")
 }
 
@@ -593,9 +589,9 @@ func copyFileContents(srcPath, dstPath string, mode os.FileMode) error {
 func ensurePandocDefaultsFile(templatePath string) (string, error) {
 	defaultsPath := strings.TrimSpace(os.Getenv("SCICLAW_PANDOC_DEFAULTS_PATH"))
 	if defaultsPath == "" {
-		defaultsPath = filepath.Join(os.TempDir(), "sciclaw-pandoc-defaults.yaml")
+		defaultsPath = filepath.Join(paths.TempDir(), "pandoc-defaults.yaml")
 	}
-	if err := os.MkdirAll(filepath.Dir(defaultsPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(defaultsPath), 0o700); err != nil {
 		return "", err
 	}
 
@@ -687,6 +683,7 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 			readOnly bool
 		}
 		allowedRoots := []guardRoot{{path: cwdPath, readOnly: cwdInSharedRoot && t.sharedWorkspaceReadOnly}}
+		allowedRoots = append(allowedRoots, guardRoot{path: paths.WorkspaceStateDir(t.workingDir), readOnly: true})
 		if sharedRoot != "" && !isWithinWorkspace(cwdPath, sharedRoot) {
 			allowedRoots = append(allowedRoots, guardRoot{path: sharedRoot, readOnly: t.sharedWorkspaceReadOnly})
 		}

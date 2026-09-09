@@ -24,8 +24,11 @@ func NewJSONLAuditSink(workspace string) (*JSONLAuditSink, error) {
 
 func NewJSONLAuditSinkAt(path string) (*JSONLAuditSink, error) {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, fmt.Errorf("create hooks audit dir: %w", err)
+	}
+	if err := os.Chmod(dir, 0700); err != nil {
+		return nil, fmt.Errorf("secure hooks audit dir: %w", err)
 	}
 	sink := &JSONLAuditSink{
 		path:  path,
@@ -71,8 +74,12 @@ func (s *JSONLAuditSink) writeLoop() {
 }
 
 func (s *JSONLAuditSink) appendLine(line []byte) error {
-	f, err := os.OpenFile(s.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(s.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
+		return err
+	}
+	if err := os.Chmod(s.path, 0600); err != nil {
+		_ = f.Close()
 		return err
 	}
 	defer f.Close()

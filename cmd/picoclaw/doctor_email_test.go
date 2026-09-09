@@ -20,7 +20,7 @@ func TestRunDoctorReportsEmailConfig(t *testing.T) {
 	cfg.Channels.Email.BaseURL = "not a url"
 	cfg.Channels.Email.ReceiveEnabled = true
 
-	configPath := filepath.Join(home, ".picoclaw", "config.json")
+	configPath := filepath.Join(home, "sciclaw", "config.json")
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		t.Fatalf("mkdir config dir: %v", err)
 	}

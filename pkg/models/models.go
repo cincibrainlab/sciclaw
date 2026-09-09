@@ -132,7 +132,7 @@ func PrintList(cfg *config.Config) {
 
 	providers := ListProviders(cfg)
 	if len(providers) == 0 {
-		fmt.Println("\nNo providers configured. Add API keys to ~/.picoclaw/config.json")
+		fmt.Println("\nNo providers configured. Add provider settings to ~/sciclaw/config.json")
 		return
 	}
 

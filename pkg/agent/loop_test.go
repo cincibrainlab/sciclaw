@@ -17,6 +17,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/paths"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
@@ -775,9 +776,14 @@ func TestNewAgentLoop_StateInitialized(t *testing.T) {
 	}
 
 	// Verify state directory was created
-	stateDir := filepath.Join(tmpDir, "state")
+	stateDir := filepath.Join(paths.WorkspaceStateDir(tmpDir), "state")
 	if _, err := os.Stat(stateDir); os.IsNotExist(err) {
 		t.Error("Expected state directory to exist")
+	}
+	for _, runtimeDir := range []string{"sessions", "state", "hooks", ".venv", ".ctxclaw", ".sciclaw"} {
+		if _, err := os.Stat(filepath.Join(tmpDir, runtimeDir)); !os.IsNotExist(err) {
+			t.Fatalf("runtime directory %s leaked into visible workspace", runtimeDir)
+		}
 	}
 }
 
@@ -1446,7 +1452,7 @@ func TestAgentLoop_WritesHookAuditEvents(t *testing.T) {
 		t.Fatalf("processMessage failed: %v", err)
 	}
 
-	auditPath := filepath.Join(tmpDir, "hooks", "hook-events.jsonl")
+	auditPath := filepath.Join(paths.WorkspaceStateDir(tmpDir), "hooks", "hook-events.jsonl")
 	deadline := time.Now().Add(2 * time.Second)
 	var body string
 	for {

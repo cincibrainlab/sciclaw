@@ -10,6 +10,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/paths"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/session"
 )
@@ -123,12 +124,13 @@ func InspectPrompt(cfg *config.Config, opts PromptInspectOptions) (*PromptInspec
 	if sessionKey == "" {
 		return nil, fmt.Errorf("session key is required")
 	}
-	sessionPath := filepath.Join(workspace, "sessions", sessionKey+".json")
-	if _, err := os.Stat(sessionPath); err != nil {
-		return nil, fmt.Errorf("session not found at %s: %w", sessionPath, err)
+	workspaceState := paths.WorkspaceStateDir(workspace)
+	sessionPath, err := workspaceSessionPath(workspace, sessionKey)
+	if err != nil {
+		return nil, err
 	}
 
-	sm := session.NewSessionManager(filepath.Join(workspace, "sessions"))
+	sm := session.NewSessionManager(filepath.Join(workspaceState, "sessions"))
 	sess, ok := sm.Snapshot(sessionKey)
 	if !ok {
 		if loadErr := sm.LoadError(); loadErr != nil {
@@ -230,6 +232,18 @@ func InspectPrompt(cfg *config.Config, opts PromptInspectOptions) (*PromptInspec
 	return report, nil
 }
 
+func workspaceSessionPath(workspace, sessionKey string) (string, error) {
+	candidates := []string{
+		filepath.Join(paths.WorkspaceStateDir(workspace), "sessions", sessionKey+".json"),
+	}
+	for _, candidate := range candidates {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("session %q not found for workspace %s", sessionKey, workspace)
+}
+
 func buildSkillsBlock(cb *ContextBuilder) string {
 	skillsSummary := cb.skillsLoader.BuildSkillsSummary()
 	if skillsSummary == "" {
@@ -243,7 +257,8 @@ The following skills extend your capabilities. To use a skill, read its SKILL.md
 }
 
 func inspectBootstrapFiles(workspace, sharedWorkspace string) ([]PromptFileBreakdown, string, int) {
-	files := []string{"AGENTS.md", "SOUL.md", "USER.md", "IDENTITY.md", "TOOLS.md"}
+	files := []string{"AGENTS.md", "HOOKS.md", "SOUL.md", "USER.md", "IDENTITY.md", "TOOLS.md"}
+	profile := paths.ProfileDir()
 	primary := filepath.Clean(workspace)
 	fallback := filepath.Clean(strings.TrimSpace(sharedWorkspace))
 	out := make([]PromptFileBreakdown, 0, len(files))
@@ -254,6 +269,7 @@ func inspectBootstrapFiles(workspace, sharedWorkspace string) ([]PromptFileBreak
 			path   string
 			source string
 		}{
+			{path: filepath.Join(profile, name), source: profile},
 			{path: filepath.Join(primary, name), source: primary},
 		}
 		if fallback != "" && fallback != "." && fallback != primary {

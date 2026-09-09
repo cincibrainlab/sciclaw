@@ -9,10 +9,12 @@ import (
 
 func TestCreateWorkspaceTemplatesCreatesExpectedStructure(t *testing.T) {
 	workspace := t.TempDir()
+	userHome := t.TempDir()
+	t.Setenv("SCICLAW_HOME", userHome)
 
 	createWorkspaceTemplates(workspace)
 
-	dirs := []string{"memory", "skills", "sessions", "cron"}
+	dirs := []string{"memory", "skills", "cron"}
 	for _, dir := range dirs {
 		p := filepath.Join(workspace, dir)
 		info, err := os.Stat(p)
@@ -24,23 +26,26 @@ func TestCreateWorkspaceTemplatesCreatesExpectedStructure(t *testing.T) {
 		}
 	}
 
-	files := []string{
+	profileFiles := []string{
 		"AGENTS.md",
 		"HOOKS.md",
 		"SOUL.md",
 		"TOOLS.md",
 		"USER.md",
 		"IDENTITY.md",
-		filepath.Join("memory", "MEMORY.md"),
 	}
-	for _, file := range files {
-		p := filepath.Join(workspace, file)
+	for _, file := range profileFiles {
+		p := filepath.Join(userHome, "profile", file)
 		if _, err := os.Stat(p); err != nil {
 			t.Fatalf("expected file %s to exist: %v", file, err)
 		}
 	}
 
-	agentsContent, err := os.ReadFile(filepath.Join(workspace, "AGENTS.md"))
+	if _, err := os.Stat(filepath.Join(workspace, "memory", "MEMORY.md")); err != nil {
+		t.Fatalf("expected workspace memory file: %v", err)
+	}
+
+	agentsContent, err := os.ReadFile(filepath.Join(userHome, "profile", "AGENTS.md"))
 	if err != nil {
 		t.Fatalf("read AGENTS.md: %v", err)
 	}
@@ -51,7 +56,7 @@ func TestCreateWorkspaceTemplatesCreatesExpectedStructure(t *testing.T) {
 		t.Fatalf("AGENTS.md missing baseline skill manifest")
 	}
 
-	toolsContent, err := os.ReadFile(filepath.Join(workspace, "TOOLS.md"))
+	toolsContent, err := os.ReadFile(filepath.Join(userHome, "profile", "TOOLS.md"))
 	if err != nil {
 		t.Fatalf("read TOOLS.md: %v", err)
 	}
@@ -62,9 +67,14 @@ func TestCreateWorkspaceTemplatesCreatesExpectedStructure(t *testing.T) {
 
 func TestCreateWorkspaceTemplatesDoesNotOverwriteExistingFiles(t *testing.T) {
 	workspace := t.TempDir()
+	userHome := t.TempDir()
+	t.Setenv("SCICLAW_HOME", userHome)
 
 	customAgents := "# Agent Instructions\n\nCustom content.\n"
-	agentsPath := filepath.Join(workspace, "AGENTS.md")
+	agentsPath := filepath.Join(userHome, "profile", "AGENTS.md")
+	if err := os.MkdirAll(filepath.Dir(agentsPath), 0755); err != nil {
+		t.Fatalf("create profile dir: %v", err)
+	}
 	if err := os.WriteFile(agentsPath, []byte(customAgents), 0644); err != nil {
 		t.Fatalf("seed AGENTS.md: %v", err)
 	}
@@ -171,6 +181,11 @@ func TestSkillSourceDirsForExecutableIncludesStableShareDir(t *testing.T) {
 	want := filepath.Clean("/opt/homebrew/Cellar/sciclaw/0.1.53/share/sciclaw/skills")
 	if !sliceContainsPath(dirs, want) {
 		t.Fatalf("expected %q in %v", want, dirs)
+	}
+	for _, dir := range dirs {
+		if strings.Contains(filepath.ToSlash(dir), "/share/picoclaw/") {
+			t.Fatalf("unexpected PicoClaw share fallback: %s", dir)
+		}
 	}
 }
 

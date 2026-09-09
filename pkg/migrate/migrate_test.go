@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/paths"
 )
 
 func TestCamelToSnake(t *testing.T) {
@@ -279,8 +280,8 @@ func TestConvertConfig(t *testing.T) {
 		if cfg.Agents.Defaults.Temperature != 0.5 {
 			t.Errorf("Temperature = %f, want %f", cfg.Agents.Defaults.Temperature, 0.5)
 		}
-		if cfg.Agents.Defaults.Workspace != "~/sciclaw" {
-			t.Errorf("Workspace = %q, want %q", cfg.Agents.Defaults.Workspace, "~/sciclaw")
+		if cfg.Agents.Defaults.Workspace != "~/sciclaw/workspaces/default" {
+			t.Errorf("Workspace = %q, want %q", cfg.Agents.Defaults.Workspace, "~/sciclaw/workspaces/default")
 		}
 	})
 
@@ -373,7 +374,7 @@ func TestPlanWorkspaceMigration(t *testing.T) {
 		os.WriteFile(filepath.Join(srcDir, "SOUL.md"), []byte("# Soul"), 0644)
 		os.WriteFile(filepath.Join(srcDir, "USER.md"), []byte("# User"), 0644)
 
-		actions, err := PlanWorkspaceMigration(srcDir, dstDir, false)
+		actions, err := PlanWorkspaceMigration(srcDir, dstDir, filepath.Join(dstDir, "profile"), false)
 		if err != nil {
 			t.Fatalf("PlanWorkspaceMigration: %v", err)
 		}
@@ -391,19 +392,21 @@ func TestPlanWorkspaceMigration(t *testing.T) {
 		if copyCount != 3 {
 			t.Errorf("expected 3 copies, got %d", copyCount)
 		}
-		if skipCount != 3 {
-			t.Errorf("expected 3 skips (IDENTITY.md, TOOLS.md, HEARTBEAT.md), got %d", skipCount)
+		if skipCount != 4 {
+			t.Errorf("expected 4 skips (HOOKS.md, IDENTITY.md, TOOLS.md, HEARTBEAT.md), got %d", skipCount)
 		}
 	})
 
 	t.Run("plans backup for existing destination files", func(t *testing.T) {
 		srcDir := t.TempDir()
 		dstDir := t.TempDir()
+		profileDir := filepath.Join(dstDir, "profile")
+		os.MkdirAll(profileDir, 0755)
 
 		os.WriteFile(filepath.Join(srcDir, "AGENTS.md"), []byte("# Agents from OpenClaw"), 0644)
-		os.WriteFile(filepath.Join(dstDir, "AGENTS.md"), []byte("# Existing Agents"), 0644)
+		os.WriteFile(filepath.Join(profileDir, "AGENTS.md"), []byte("# Existing Agents"), 0644)
 
-		actions, err := PlanWorkspaceMigration(srcDir, dstDir, false)
+		actions, err := PlanWorkspaceMigration(srcDir, dstDir, profileDir, false)
 		if err != nil {
 			t.Fatalf("PlanWorkspaceMigration: %v", err)
 		}
@@ -419,22 +422,28 @@ func TestPlanWorkspaceMigration(t *testing.T) {
 		}
 	})
 
-	t.Run("force skips backup", func(t *testing.T) {
+	t.Run("force still plans backup", func(t *testing.T) {
 		srcDir := t.TempDir()
 		dstDir := t.TempDir()
+		profileDir := filepath.Join(dstDir, "profile")
+		os.MkdirAll(profileDir, 0755)
 
 		os.WriteFile(filepath.Join(srcDir, "AGENTS.md"), []byte("# Agents"), 0644)
-		os.WriteFile(filepath.Join(dstDir, "AGENTS.md"), []byte("# Existing"), 0644)
+		os.WriteFile(filepath.Join(profileDir, "AGENTS.md"), []byte("# Existing"), 0644)
 
-		actions, err := PlanWorkspaceMigration(srcDir, dstDir, true)
+		actions, err := PlanWorkspaceMigration(srcDir, dstDir, profileDir, true)
 		if err != nil {
 			t.Fatalf("PlanWorkspaceMigration: %v", err)
 		}
 
+		backupCount := 0
 		for _, a := range actions {
 			if a.Type == ActionBackup {
-				t.Error("expected no backup actions with force=true")
+				backupCount++
 			}
+		}
+		if backupCount != 1 {
+			t.Fatalf("force must not suppress backups, got %d", backupCount)
 		}
 	})
 
@@ -446,7 +455,7 @@ func TestPlanWorkspaceMigration(t *testing.T) {
 		os.MkdirAll(memDir, 0755)
 		os.WriteFile(filepath.Join(memDir, "MEMORY.md"), []byte("# Memory"), 0644)
 
-		actions, err := PlanWorkspaceMigration(srcDir, dstDir, false)
+		actions, err := PlanWorkspaceMigration(srcDir, dstDir, filepath.Join(dstDir, "profile"), false)
 		if err != nil {
 			t.Fatalf("PlanWorkspaceMigration: %v", err)
 		}
@@ -477,7 +486,7 @@ func TestPlanWorkspaceMigration(t *testing.T) {
 		os.MkdirAll(skillDir, 0755)
 		os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("# Weather"), 0644)
 
-		actions, err := PlanWorkspaceMigration(srcDir, dstDir, false)
+		actions, err := PlanWorkspaceMigration(srcDir, dstDir, filepath.Join(dstDir, "profile"), false)
 		if err != nil {
 			t.Fatalf("PlanWorkspaceMigration: %v", err)
 		}
@@ -493,7 +502,7 @@ func TestPlanWorkspaceMigration(t *testing.T) {
 		}
 	})
 
-	t.Run("handles sessions directory", func(t *testing.T) {
+	t.Run("does not copy sessions into visible workspace", func(t *testing.T) {
 		srcDir := t.TempDir()
 		dstDir := t.TempDir()
 
@@ -501,19 +510,15 @@ func TestPlanWorkspaceMigration(t *testing.T) {
 		os.MkdirAll(sessionDir, 0755)
 		os.WriteFile(filepath.Join(sessionDir, "2026-02-12.json"), []byte(`{"messages":[]}`), 0644)
 
-		actions, err := PlanWorkspaceMigration(srcDir, dstDir, false)
+		actions, err := PlanWorkspaceMigration(srcDir, dstDir, filepath.Join(dstDir, "profile"), false)
 		if err != nil {
 			t.Fatalf("PlanWorkspaceMigration: %v", err)
 		}
 
-		hasCopy := false
 		for _, a := range actions {
 			if a.Type == ActionCopy && filepath.Base(a.Source) == "2026-02-12.json" {
-				hasCopy = true
+				t.Fatalf("unexpected visible session copy: %#v", a)
 			}
-		}
-		if !hasCopy {
-			t.Error("expected copy action for sessions/2026-02-12.json")
 		}
 	})
 
@@ -525,7 +530,7 @@ func TestPlanWorkspaceMigration(t *testing.T) {
 		os.MkdirAll(cronDir, 0755)
 		os.WriteFile(filepath.Join(cronDir, "jobs.json"), []byte(`{"jobs":[]}`), 0644)
 
-		actions, err := PlanWorkspaceMigration(srcDir, dstDir, false)
+		actions, err := PlanWorkspaceMigration(srcDir, dstDir, filepath.Join(dstDir, "profile"), false)
 		if err != nil {
 			t.Fatalf("PlanWorkspaceMigration: %v", err)
 		}
@@ -602,7 +607,7 @@ func TestRewriteWorkspacePath(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"default path", "~/.openclaw/workspace", "~/sciclaw"},
+		{"default path", "~/.openclaw/workspace", "~/sciclaw/workspaces/default"},
 		{"custom path", "/custom/path", "/custom/path"},
 		{"empty", "", ""},
 	}
@@ -616,146 +621,11 @@ func TestRewriteWorkspacePath(t *testing.T) {
 	}
 }
 
-func TestRunUnifyMigratesWorkspace(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	oldDir := filepath.Join(home, ".picoclaw")
-	newDir := filepath.Join(home, "sciclaw")
-	if err := os.MkdirAll(filepath.Join(oldDir, "workspace"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(newDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	os.WriteFile(filepath.Join(oldDir, "config.json"), []byte(`{"agents":{"defaults":{"workspace":"~/.picoclaw/workspace"}}}`), 0644)
-	os.WriteFile(filepath.Join(oldDir, "workspace", "SOUL.md"), []byte("# Soul"), 0644)
-	os.WriteFile(filepath.Join(newDir, "config.json"), []byte("{}"), 0644)
-
-	if _, err := runUnify(Options{Force: true}); err != nil {
-		t.Fatalf("runUnify: %v", err)
-	}
-	if data, err := os.ReadFile(filepath.Join(newDir, "SOUL.md")); err != nil || string(data) != "# Soul" {
-		t.Errorf("workspace file = %q, %v", data, err)
-	}
-	if info, err := os.Lstat(oldDir); err != nil || info.Mode()&os.ModeSymlink == 0 {
-		t.Errorf("legacy directory should be a symlink: %v", err)
-	}
-	if data, err := os.ReadFile(filepath.Join(newDir, "config.json")); err != nil || !strings.Contains(string(data), "~/sciclaw") {
-		t.Errorf("rewritten config = %q, %v", data, err)
-	}
-}
-
-func TestRunUnifyRejectsWorkspaceAppRootCollision(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	oldDir := filepath.Join(home, ".picoclaw")
-	newDir := filepath.Join(home, "sciclaw")
-	if err := os.MkdirAll(filepath.Join(oldDir, "workspace"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(newDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	oldConfig := filepath.Join(oldDir, "config.json")
-	workspaceConfig := filepath.Join(oldDir, "workspace", "config.json")
-	newConfig := filepath.Join(newDir, "config.json")
-	if err := os.WriteFile(oldConfig, []byte("legacy config"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(workspaceConfig, []byte("workspace config"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(newConfig, []byte("target config"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	result, err := runUnify(Options{Force: true})
-	if err != nil {
-		t.Fatalf("runUnify: %v", err)
-	}
-	if len(result.Errors) == 0 {
-		t.Fatal("expected workspace collision error")
-	}
-	if data, err := os.ReadFile(oldConfig); err != nil || string(data) != "legacy config" {
-		t.Errorf("legacy config = %q, %v", data, err)
-	}
-	if data, err := os.ReadFile(workspaceConfig); err != nil || string(data) != "workspace config" {
-		t.Errorf("workspace config = %q, %v", data, err)
-	}
-	if data, err := os.ReadFile(newConfig); err != nil || string(data) != "target config" {
-		t.Errorf("target config = %q, %v", data, err)
-	}
-	if info, err := os.Lstat(oldDir); err != nil || info.Mode()&os.ModeSymlink != 0 {
-		t.Errorf("legacy directory should remain a real directory: %v", err)
-	}
-}
-
-func TestRunUnifyPreservesLegacyDirAfterMigrationError(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	oldDir := filepath.Join(home, ".picoclaw")
-	newDir := filepath.Join(home, "sciclaw")
-	if err := os.MkdirAll(filepath.Join(newDir, "auth.json"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(oldDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	os.WriteFile(filepath.Join(oldDir, "config.json"), []byte("{}"), 0644)
-	os.WriteFile(filepath.Join(oldDir, "auth.json"), []byte("credentials"), 0644)
-
-	result, err := runUnify(Options{Force: true})
-	if err != nil {
-		t.Fatalf("runUnify: %v", err)
-	}
-	if len(result.Errors) == 0 {
-		t.Fatal("expected migration error")
-	}
-	if info, err := os.Lstat(oldDir); err != nil || info.Mode()&os.ModeSymlink != 0 {
-		t.Errorf("legacy directory should remain intact: %v", err)
-	}
-	if data, err := os.ReadFile(filepath.Join(oldDir, "auth.json")); err != nil || string(data) != "credentials" {
-		t.Errorf("legacy auth file = %q, %v", data, err)
-	}
-}
-
-func TestRunUnifyPreservesLegacyDirAfterRewriteError(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	oldDir := filepath.Join(home, ".picoclaw")
-	newDir := filepath.Join(home, "sciclaw")
-	if err := os.MkdirAll(oldDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(newDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	const invalidConfig = "{"
-	if err := os.WriteFile(filepath.Join(oldDir, "config.json"), []byte(invalidConfig), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(newDir, "config.json"), []byte("{}"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	result, err := runUnify(Options{Force: true})
-	if err != nil {
-		t.Fatalf("runUnify: %v", err)
-	}
-	if len(result.Errors) == 0 {
-		t.Fatal("expected config rewrite error")
-	}
-	if info, err := os.Lstat(oldDir); err != nil || info.Mode()&os.ModeSymlink != 0 {
-		t.Errorf("legacy directory should remain intact: %v", err)
-	}
-	if data, err := os.ReadFile(filepath.Join(oldDir, "config.json")); err != nil || string(data) != invalidConfig {
-		t.Errorf("legacy config = %q, %v", data, err)
-	}
-}
-
 func TestRunDryRun(t *testing.T) {
 	openclawHome := t.TempDir()
 	picoClawHome := t.TempDir()
+	t.Setenv("SCICLAW_HOME", picoClawHome)
+	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(t.TempDir(), "state"))
 
 	wsDir := filepath.Join(openclawHome, "workspace")
 	os.MkdirAll(wsDir, 0755)
@@ -775,7 +645,6 @@ func TestRunDryRun(t *testing.T) {
 	opts := Options{
 		DryRun:       true,
 		OpenClawHome: openclawHome,
-		PicoClawHome: picoClawHome,
 	}
 
 	result, err := Run(opts)
@@ -783,7 +652,7 @@ func TestRunDryRun(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	picoWs := filepath.Join(picoClawHome, "workspace")
+	picoWs := filepath.Join(picoClawHome, "workspaces", "default")
 	if _, err := os.Stat(filepath.Join(picoWs, "SOUL.md")); !os.IsNotExist(err) {
 		t.Error("dry run should not create files")
 	}
@@ -794,15 +663,55 @@ func TestRunDryRun(t *testing.T) {
 	_ = result
 }
 
+func TestSciClawDestinationIgnoresPicoClawHome(t *testing.T) {
+	visible := filepath.Join(t.TempDir(), "visible")
+	t.Setenv("SCICLAW_HOME", visible)
+	t.Setenv("PICOCLAW_HOME", filepath.Join(t.TempDir(), "pico"))
+
+	got := paths.UserHome()
+	if got != visible {
+		t.Fatalf("UserHome()=%q want %q", got, visible)
+	}
+}
+
+func TestRunRejectsPicoClawAsExplicitOpenClawSource(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SCICLAW_HOME", filepath.Join(home, "sciclaw"))
+	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(home, ".sciclaw"))
+	legacy := filepath.Join(home, ".picoclaw")
+	if err := os.MkdirAll(legacy, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Run(Options{OpenClawHome: legacy, Force: true}); err == nil || !strings.Contains(err.Error(), "manual-only") {
+		t.Fatalf("expected clear manual-only rejection, got %v", err)
+	}
+}
+
+func TestRunValidatesDestinationRootsBeforeSource(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	overlap := filepath.Join(home, "sciclaw")
+	t.Setenv("SCICLAW_HOME", overlap)
+	t.Setenv("SCICLAW_STATE_HOME", overlap)
+	if _, err := Run(Options{OpenClawHome: filepath.Join(home, "missing")}); err == nil || !strings.Contains(err.Error(), "destination roots") {
+		t.Fatalf("expected destination-root validation before source lookup, got %v", err)
+	}
+}
+
 func TestRunFullMigration(t *testing.T) {
 	openclawHome := t.TempDir()
 	picoClawHome := t.TempDir()
+	t.Setenv("SCICLAW_HOME", picoClawHome)
+	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(t.TempDir(), "state"))
 
 	wsDir := filepath.Join(openclawHome, "workspace")
 	os.MkdirAll(wsDir, 0755)
 	os.WriteFile(filepath.Join(wsDir, "SOUL.md"), []byte("# Soul from OpenClaw"), 0644)
 	os.WriteFile(filepath.Join(wsDir, "AGENTS.md"), []byte("# Agents from OpenClaw"), 0644)
 	os.WriteFile(filepath.Join(wsDir, "USER.md"), []byte("# User from OpenClaw"), 0644)
+	os.MkdirAll(filepath.Join(wsDir, "sessions"), 0755)
+	os.WriteFile(filepath.Join(wsDir, "sessions", "chat.json"), []byte(`{"key":"chat"}`), 0644)
 
 	memDir := filepath.Join(wsDir, "memory")
 	os.MkdirAll(memDir, 0755)
@@ -830,7 +739,6 @@ func TestRunFullMigration(t *testing.T) {
 	opts := Options{
 		Force:        true,
 		OpenClawHome: openclawHome,
-		PicoClawHome: picoClawHome,
 	}
 
 	result, err := Run(opts)
@@ -838,9 +746,10 @@ func TestRunFullMigration(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	picoWs := filepath.Join(picoClawHome, "workspace")
+	picoWs := filepath.Join(picoClawHome, "workspaces", "default")
 
-	soulData, err := os.ReadFile(filepath.Join(picoWs, "SOUL.md"))
+	profileDir := filepath.Join(picoClawHome, "profile")
+	soulData, err := os.ReadFile(filepath.Join(profileDir, "SOUL.md"))
 	if err != nil {
 		t.Fatalf("reading SOUL.md: %v", err)
 	}
@@ -848,7 +757,7 @@ func TestRunFullMigration(t *testing.T) {
 		t.Errorf("SOUL.md content = %q, want %q", string(soulData), "# Soul from OpenClaw")
 	}
 
-	agentsData, err := os.ReadFile(filepath.Join(picoWs, "AGENTS.md"))
+	agentsData, err := os.ReadFile(filepath.Join(profileDir, "AGENTS.md"))
 	if err != nil {
 		t.Fatalf("reading AGENTS.md: %v", err)
 	}
@@ -862,6 +771,18 @@ func TestRunFullMigration(t *testing.T) {
 	}
 	if string(memData) != "# Memory notes" {
 		t.Errorf("MEMORY.md content = %q", string(memData))
+	}
+	managedSession := filepath.Join(paths.WorkspaceStateDir(picoWs), "sessions", "chat.json")
+	if _, err := os.Stat(managedSession); err != nil {
+		t.Fatalf("reading migrated managed session: %v", err)
+	}
+	if info, err := os.Stat(managedSession); err != nil {
+		t.Fatal(err)
+	} else if info.Mode().Perm() != 0600 {
+		t.Fatalf("managed session mode=%#o want 0600", info.Mode().Perm())
+	}
+	if _, err := os.Stat(filepath.Join(picoWs, "sessions")); !os.IsNotExist(err) {
+		t.Fatal("sessions must not be imported into the visible workspace")
 	}
 
 	picoConfig, err := config.LoadConfig(filepath.Join(picoClawHome, "config.json"))
@@ -880,6 +801,9 @@ func TestRunFullMigration(t *testing.T) {
 	if picoConfig.Channels.Telegram.Token != "tg-migrate-test" {
 		t.Errorf("Telegram.Token = %q, want %q", picoConfig.Channels.Telegram.Token, "tg-migrate-test")
 	}
+	if picoConfig.WorkspacePath() != picoWs || picoConfig.SharedWorkspacePath() != picoWs {
+		t.Fatalf("imported workspace defaults = %q / %q, want %q", picoConfig.WorkspacePath(), picoConfig.SharedWorkspacePath(), picoWs)
+	}
 
 	if result.FilesCopied < 3 {
 		t.Errorf("expected at least 3 files copied, got %d", result.FilesCopied)
@@ -892,10 +816,57 @@ func TestRunFullMigration(t *testing.T) {
 	}
 }
 
+func TestRunRefusesExistingAuthoritativeConfig(t *testing.T) {
+	openclawHome := t.TempDir()
+	visibleHome := t.TempDir()
+	t.Setenv("SCICLAW_HOME", visibleHome)
+	if err := os.WriteFile(filepath.Join(openclawHome, "openclaw.json"), []byte(`{}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(visibleHome, "config.json")
+	if err := os.WriteFile(destination, []byte(`{"authoritative":true}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Run(Options{Force: true, OpenClawHome: openclawHome}); err == nil {
+		t.Fatal("expected existing authoritative config to block import")
+	}
+	data, err := os.ReadFile(destination)
+	if err != nil || string(data) != `{"authoritative":true}` {
+		t.Fatalf("authoritative config changed: %q, %v", data, err)
+	}
+}
+
+func TestRunReturnsErrorWhenExecutionHasCopyFailure(t *testing.T) {
+	openclawHome := t.TempDir()
+	visibleHome := t.TempDir()
+	t.Setenv("SCICLAW_HOME", visibleHome)
+	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(t.TempDir(), "state"))
+	workspace := filepath.Join(openclawHome, "workspace")
+	if err := os.MkdirAll(workspace, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "AGENTS.md"), []byte("source"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(visibleHome, "profile", "AGENTS.md")
+	if err := os.MkdirAll(destination, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Run(Options{WorkspaceOnly: true, OpenClawHome: openclawHome, Force: true})
+	if err == nil {
+		t.Fatal("expected copy failure to produce Run error")
+	}
+	if result == nil || len(result.Errors) == 0 {
+		t.Fatalf("expected partial result errors, got %#v", result)
+	}
+}
+
 func TestRunOpenClawNotFound(t *testing.T) {
+	t.Setenv("SCICLAW_HOME", t.TempDir())
 	opts := Options{
 		OpenClawHome: "/nonexistent/path/to/openclaw",
-		PicoClawHome: t.TempDir(),
 	}
 
 	_, err := Run(opts)
@@ -958,6 +929,7 @@ func TestCopyFile(t *testing.T) {
 func TestRunConfigOnly(t *testing.T) {
 	openclawHome := t.TempDir()
 	picoClawHome := t.TempDir()
+	t.Setenv("SCICLAW_HOME", picoClawHome)
 
 	wsDir := filepath.Join(openclawHome, "workspace")
 	os.MkdirAll(wsDir, 0755)
@@ -977,7 +949,6 @@ func TestRunConfigOnly(t *testing.T) {
 		Force:        true,
 		ConfigOnly:   true,
 		OpenClawHome: openclawHome,
-		PicoClawHome: picoClawHome,
 	}
 
 	result, err := Run(opts)
@@ -989,7 +960,7 @@ func TestRunConfigOnly(t *testing.T) {
 		t.Error("config should have been migrated")
 	}
 
-	picoWs := filepath.Join(picoClawHome, "workspace")
+	picoWs := filepath.Join(picoClawHome, "workspaces", "default")
 	if _, err := os.Stat(filepath.Join(picoWs, "SOUL.md")); !os.IsNotExist(err) {
 		t.Error("config-only should not copy workspace files")
 	}
@@ -998,6 +969,7 @@ func TestRunConfigOnly(t *testing.T) {
 func TestRunWorkspaceOnly(t *testing.T) {
 	openclawHome := t.TempDir()
 	picoClawHome := t.TempDir()
+	t.Setenv("SCICLAW_HOME", picoClawHome)
 
 	wsDir := filepath.Join(openclawHome, "workspace")
 	os.MkdirAll(wsDir, 0755)
@@ -1017,7 +989,6 @@ func TestRunWorkspaceOnly(t *testing.T) {
 		Force:         true,
 		WorkspaceOnly: true,
 		OpenClawHome:  openclawHome,
-		PicoClawHome:  picoClawHome,
 	}
 
 	result, err := Run(opts)
@@ -1029,8 +1000,7 @@ func TestRunWorkspaceOnly(t *testing.T) {
 		t.Error("workspace-only should not migrate config")
 	}
 
-	picoWs := filepath.Join(picoClawHome, "workspace")
-	soulData, err := os.ReadFile(filepath.Join(picoWs, "SOUL.md"))
+	soulData, err := os.ReadFile(filepath.Join(picoClawHome, "profile", "SOUL.md"))
 	if err != nil {
 		t.Fatalf("reading SOUL.md: %v", err)
 	}

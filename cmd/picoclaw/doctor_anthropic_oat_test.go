@@ -21,7 +21,7 @@ func TestRunDoctorReportsAnthropicOATBridge(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Providers.Anthropic.APIKey = "sk-ant-oat-test"
 
-	configPath := filepath.Join(home, ".picoclaw", "config.json")
+	configPath := filepath.Join(home, "sciclaw", "config.json")
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		t.Fatalf("mkdir config dir: %v", err)
 	}

@@ -95,7 +95,7 @@ func TestFetchSettingsData_BootstrapsOnlyForMissingConfig(t *testing.T) {
 		if execStub.writtenRaw == "" {
 			t.Fatalf("expected bootstrap write when config is missing")
 		}
-		if !strings.Contains(execStub.writtenRaw, `"workspace": "~/.picoclaw/workspace"`) {
+		if !strings.Contains(execStub.writtenRaw, `"workspace": "~/sciclaw/workspaces/default"`) {
 			t.Fatalf("expected default workspace in bootstrap config, got %q", execStub.writtenRaw)
 		}
 	})

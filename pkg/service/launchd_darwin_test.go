@@ -70,6 +70,8 @@ func (r *launchdInstallTestRunner) Run(_ context.Context, name string, args ...s
 
 func TestLaunchdInstallIsIdempotent(t *testing.T) {
 	tmp := t.TempDir()
+	t.Setenv("SCICLAW_HOME", filepath.Join(tmp, "sciclaw"))
+	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(tmp, ".sciclaw"))
 	plistPath := filepath.Join(tmp, "LaunchAgents", "io.sciclaw.gateway.plist")
 	logDir := filepath.Join(tmp, "logs")
 
@@ -149,6 +151,8 @@ func (r *launchdRetryTestRunner) Run(_ context.Context, name string, args ...str
 
 func TestLaunchdInstallRetriesBootstrapOnTransientFailure(t *testing.T) {
 	tmp := t.TempDir()
+	t.Setenv("SCICLAW_HOME", filepath.Join(tmp, "sciclaw"))
+	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(tmp, ".sciclaw"))
 	plistPath := filepath.Join(tmp, "LaunchAgents", "io.sciclaw.gateway.plist")
 	logDir := filepath.Join(tmp, "logs")
 
@@ -174,6 +178,8 @@ func TestLaunchdInstallRetriesBootstrapOnTransientFailure(t *testing.T) {
 
 func TestLaunchdInstallWritesWebProgramArguments(t *testing.T) {
 	tmp := t.TempDir()
+	t.Setenv("SCICLAW_HOME", filepath.Join(tmp, "custom-sciclaw"))
+	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(tmp, "custom-state"))
 	plistPath := filepath.Join(tmp, "LaunchAgents", "io.sciclaw.web.plist")
 	logDir := filepath.Join(tmp, "logs")
 
@@ -199,5 +205,8 @@ func TestLaunchdInstallWritesWebProgramArguments(t *testing.T) {
 	}
 	if !strings.Contains(plist, "<string>web</string>") || !strings.Contains(plist, "<string>--listen</string>") || !strings.Contains(plist, "<string>10.0.0.5:4142</string>") {
 		t.Fatalf("expected web program args in plist:\n%s", plist)
+	}
+	if !strings.Contains(plist, filepath.Join(tmp, "custom-sciclaw")) || !strings.Contains(plist, filepath.Join(tmp, "custom-state")) {
+		t.Fatalf("expected custom roots in plist:\n%s", plist)
 	}
 }
