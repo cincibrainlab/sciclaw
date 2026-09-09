@@ -35,12 +35,12 @@ INSTALL_MAN_DIR=$(INSTALL_PREFIX)/share/man/man1
 
 # Workspace and Skills
 SCICLAW_HOME?=$(HOME)/sciclaw
-PICOCLAW_HOME?=$(SCICLAW_HOME)
-WORKSPACE_DIR?=$(SCICLAW_HOME)
+SCICLAW_STATE_HOME?=$(HOME)/.sciclaw
+WORKSPACE_DIR?=$(SCICLAW_HOME)/workspaces/default
 WORKSPACE_SKILLS_DIR=$(WORKSPACE_DIR)/skills
 BUILTIN_SKILLS_DIR=$(CURDIR)/skills
 BUILTIN_WORKSPACE_TEMPLATES_DIR=$(CURDIR)/pkg/workspacetpl/templates/workspace
-INSTALL_WORKSPACE_TEMPLATES_DIR=$(PICOCLAW_HOME)/templates/workspace
+INSTALL_WORKSPACE_TEMPLATES_DIR=$(SCICLAW_HOME)/templates/workspace
 
 # OS detection
 UNAME_S:=$(shell uname -s)
@@ -162,12 +162,9 @@ uninstall:
 	@echo "Note: Only the executable file has been deleted."
 	@echo "If you need to delete all configurations (config.json, workspace, etc.), run 'make uninstall-all'"
 
-## uninstall-all: Remove picoclaw and all data
-uninstall-all:
-	@echo "Removing workspace and skills..."
-	@rm -rf $(PICOCLAW_HOME)
-	@echo "Removed workspace: $(PICOCLAW_HOME)"
-	@echo "Complete uninstallation done!"
+## uninstall-all: Remove binaries while preserving all user data and machine state
+uninstall-all: uninstall
+	@echo "Preserved $(SCICLAW_HOME), $(SCICLAW_STATE_HOME), and PicoClaw data."
 
 ## clean: Remove build artifacts
 clean:
@@ -315,7 +312,9 @@ help:
 	@echo ""
 	@echo "Environment Variables:"
 	@echo "  INSTALL_PREFIX          # Installation prefix (default: ~/.local)"
-	@echo "  WORKSPACE_DIR           # Workspace directory (default: ~/sciclaw)"
+	@echo "  SCICLAW_HOME            # User-visible root (default: ~/sciclaw)"
+	@echo "  SCICLAW_STATE_HOME      # Machine state root (default: ~/.sciclaw)"
+	@echo "  WORKSPACE_DIR           # Workspace directory (default: ~/sciclaw/workspaces/default)"
 	@echo "  VERSION                 # Version string (default: git describe)"
 	@echo ""
 	@echo "Current Configuration:"

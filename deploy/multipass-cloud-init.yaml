@@ -133,23 +133,30 @@ runcmd:
     mkdir -p /usr/local/share/sciclaw
     cp -r "/tmp/sciclaw-${SCICLAW_VERSION}/skills" /usr/local/share/sciclaw/skills
 
-    # Bootstrap config/workspace/skills via the installed CLI.
-    su - ubuntu -c 'HOME=/home/ubuntu /usr/local/bin/sciclaw onboard --yes'
-    # VM-first defaults: trust full VM filesystem by default and point workspace at project mount path.
+    # Establish VM workspace before onboard so managed venv setup targets /home/ubuntu/project.
+    install -d -m 0700 -o ubuntu -g ubuntu /home/ubuntu/sciclaw /home/ubuntu/.sciclaw \
+      /home/ubuntu/.sciclaw/logs /home/ubuntu/.sciclaw/runtime /home/ubuntu/.sciclaw/cache \
+      /home/ubuntu/.sciclaw/tmp /home/ubuntu/.sciclaw/workspaces
+    install -d -m 0755 -o ubuntu -g ubuntu /home/ubuntu/project
     su - ubuntu -c 'python3 - <<'"'"'PY'"'"'
 import json
 import os
 
-cfg_path = os.path.expanduser("~/.picoclaw/config.json")
-if os.path.exists(cfg_path):
-    with open(cfg_path, "r", encoding="utf-8") as f:
-        cfg = json.load(f)
-    d = cfg.setdefault("agents", {}).setdefault("defaults", {})
-    d["workspace"] = "/home/ubuntu/project"
-    d["restrict_to_workspace"] = False
-    with open(cfg_path, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, indent=2)
+cfg_path = os.path.expanduser("~/sciclaw/config.json")
+cfg = {
+    "agents": {
+        "defaults": {
+            "workspace": "/home/ubuntu/project",
+            "shared_workspace": "/home/ubuntu/project",
+            "restrict_to_workspace": False,
+        }
+    }
+}
+with open(cfg_path, "w", encoding="utf-8") as f:
+    json.dump(cfg, f, indent=2)
+os.chmod(cfg_path, 0o600)
 PY'
+    su - ubuntu -c 'HOME=/home/ubuntu /usr/local/bin/sciclaw onboard --yes'
 
     rm -rf /tmp/uv* /tmp/quarto.tgz /tmp/irl /tmp/docx-review /tmp/xlsx-review \
            /tmp/pptx-review /tmp/pubmed \
