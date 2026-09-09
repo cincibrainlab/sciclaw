@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/paths"
 )
 
 func TestPrepareInboundMedia_DownloadsURLIntoWorkspaceAndAnnotatesContent(t *testing.T) {
@@ -38,16 +39,20 @@ func TestPrepareInboundMedia_DownloadsURLIntoWorkspaceAndAnnotatesContent(t *tes
 		t.Fatalf("expected one staged media path, got %#v", msg.Media)
 	}
 	stagedPath := msg.Media[0]
-	if !strings.HasPrefix(stagedPath, filepath.Join(workspace, ".sciclaw", "inbound")) {
-		t.Fatalf("staged path %q is not under workspace inbound dir", stagedPath)
+	if !strings.HasPrefix(stagedPath, filepath.Join(paths.WorkspaceStateDir(workspace), "inbound")) {
+		t.Fatalf("staged path %q is not under workspace state inbound dir", stagedPath)
 	}
-	if _, err := os.Stat(stagedPath); err != nil {
+	info, err := os.Stat(stagedPath)
+	if err != nil {
 		t.Fatalf("expected staged file to exist: %v", err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("staged file mode=%#o want 0600", info.Mode().Perm())
 	}
 	if !strings.Contains(msg.Content, "Attachments staged locally and available to tools:") {
 		t.Fatalf("expected staged attachment summary in content, got %q", msg.Content)
 	}
-	if !strings.Contains(msg.Content, ".sciclaw/inbound/discord/msg-1/report.docx") {
+	if !strings.Contains(msg.Content, filepath.ToSlash(stagedPath)) {
 		t.Fatalf("expected relative staged path in content, got %q", msg.Content)
 	}
 }
@@ -88,7 +93,7 @@ func TestPrepareInboundMedia_CopiesLocalFileIntoWorkspace(t *testing.T) {
 	if string(data) != "hello" {
 		t.Fatalf("unexpected staged file content: %q", string(data))
 	}
-	if !strings.Contains(msg.Content, ".sciclaw/inbound/discord/msg-2/input.docx") {
+	if !strings.Contains(msg.Content, filepath.ToSlash(stagedPath)) {
 		t.Fatalf("expected staged path in content, got %q", msg.Content)
 	}
 }

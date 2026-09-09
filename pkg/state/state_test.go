@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/sipeed/picoclaw/pkg/paths"
 )
 
 func newTestManager(t *testing.T, workspace string) *Manager {
@@ -47,14 +49,21 @@ func TestAtomicSave(t *testing.T) {
 	}
 
 	// Verify state file exists
-	stateFile := filepath.Join(tmpDir, "state", "state.json")
+	stateFile := filepath.Join(paths.WorkspaceStateDir(tmpDir), "state", "state.json")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if err := sm.Flush(ctx); err != nil {
 		t.Fatalf("Flush failed: %v", err)
 	}
-	if _, err := os.Stat(stateFile); err != nil {
+	info, err := os.Stat(stateFile)
+	if err != nil {
 		t.Fatalf("expected state file to exist: %v", err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("state file mode=%#o want 0600", info.Mode().Perm())
+	}
+	if dirInfo, err := os.Stat(filepath.Dir(stateFile)); err != nil || dirInfo.Mode().Perm() != 0700 {
+		t.Fatalf("state directory mode must be 0700: %#v, %v", dirInfo, err)
 	}
 
 	// Create a new manager to verify persistence.
@@ -123,7 +132,7 @@ func TestAtomicity_NoCorruptionOnInterrupt(t *testing.T) {
 	}
 
 	// Simulate a crash scenario by manually creating a corrupted temp file
-	tempFile := filepath.Join(tmpDir, "state", "state.json.tmp")
+	tempFile := filepath.Join(paths.WorkspaceStateDir(tmpDir), "state", "state.json.tmp")
 	err = os.WriteFile(tempFile, []byte("corrupted data"), 0644)
 	if err != nil {
 		t.Fatalf("Failed to create temp file: %v", err)
@@ -185,7 +194,7 @@ func TestConcurrentAccess(t *testing.T) {
 	}
 
 	// Verify state file is valid JSON.
-	stateFile := filepath.Join(tmpDir, "state", "state.json")
+	stateFile := filepath.Join(paths.WorkspaceStateDir(tmpDir), "state", "state.json")
 	if _, err := os.Stat(stateFile); err != nil {
 		t.Fatalf("expected state file to exist after concurrent writes: %v", err)
 	}
@@ -246,7 +255,7 @@ func TestNewManager_EmptyWorkspace(t *testing.T) {
 	}
 }
 
-func TestNewManager_LoadsLegacyStateFile(t *testing.T) {
+func TestNewManager_IgnoresLegacyVisibleStateFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	var err error
 
@@ -264,11 +273,11 @@ func TestNewManager_LoadsLegacyStateFile(t *testing.T) {
 	}
 
 	sm := newTestManager(t, tmpDir)
-	if sm.GetLastChannel() != "legacy-channel" {
-		t.Fatalf("expected legacy channel, got %q", sm.GetLastChannel())
+	if sm.GetLastChannel() != "" {
+		t.Fatalf("legacy visible state was loaded: %q", sm.GetLastChannel())
 	}
-	if sm.GetLastChatID() != "legacy-chat" {
-		t.Fatalf("expected legacy chat id, got %q", sm.GetLastChatID())
+	if sm.GetLastChatID() != "" {
+		t.Fatalf("legacy visible state was loaded: %q", sm.GetLastChatID())
 	}
 }
 

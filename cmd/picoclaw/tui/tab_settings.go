@@ -555,7 +555,7 @@ func fetchSettingsData(exec Executor) tea.Cmd {
 					"defaults": map[string]interface{}{
 						"model":            "gpt-5.6-sol",
 						"reasoning_effort": "low",
-						"workspace":        "~/sciclaw",
+						"workspace":        "~/sciclaw/workspaces/default",
 					},
 				},
 				"channels": map[string]interface{}{

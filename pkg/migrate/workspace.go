@@ -5,26 +5,37 @@ import (
 	"path/filepath"
 )
 
-var migrateableFiles = []string{
+var migrateableProfileFiles = []string{
 	"AGENTS.md",
+	"HOOKS.md",
 	"IDENTITY.md",
 	"SOUL.md",
 	"USER.md",
 	"TOOLS.md",
+}
+
+var migrateableWorkspaceFiles = []string{
 	"HEARTBEAT.md",
 }
 
 var migrateableDirs = []string{
 	"memory",
 	"skills",
-	"sessions",
 	"cron",
 }
 
-func PlanWorkspaceMigration(srcWorkspace, dstWorkspace string, force bool) ([]Action, error) {
+func PlanWorkspaceMigration(srcWorkspace, dstWorkspace, profileDir string, force bool) ([]Action, error) {
 	var actions []Action
 
-	for _, filename := range migrateableFiles {
+	for _, filename := range migrateableProfileFiles {
+		src := filepath.Join(srcWorkspace, filename)
+		dst := filepath.Join(profileDir, filename)
+		action := planFileCopy(src, dst, force)
+		if action.Type != ActionSkip || action.Description != "" {
+			actions = append(actions, action)
+		}
+	}
+	for _, filename := range migrateableWorkspaceFiles {
 		src := filepath.Join(srcWorkspace, filename)
 		dst := filepath.Join(dstWorkspace, filename)
 		action := planFileCopy(src, dst, force)
@@ -48,7 +59,7 @@ func PlanWorkspaceMigration(srcWorkspace, dstWorkspace string, force bool) ([]Ac
 	return actions, nil
 }
 
-func planFileCopy(src, dst string, force bool) Action {
+func planFileCopy(src, dst string, _ bool) Action {
 	if _, err := os.Stat(src); os.IsNotExist(err) {
 		return Action{
 			Type:        ActionSkip,
@@ -59,7 +70,7 @@ func planFileCopy(src, dst string, force bool) Action {
 	}
 
 	_, dstExists := os.Stat(dst)
-	if dstExists == nil && !force {
+	if dstExists == nil {
 		return Action{
 			Type:        ActionBackup,
 			Source:      src,

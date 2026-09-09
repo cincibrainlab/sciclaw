@@ -79,12 +79,21 @@ func (e *LocalExecutor) ExecCommand(timeout time.Duration, args ...string) (stri
 }
 
 func (e *LocalExecutor) ReadFile(path string) (string, error) {
+	if err := paths.ValidateHomes(); err != nil {
+		return "", err
+	}
 	b, err := os.ReadFile(path)
 	return string(b), err
 }
 
 func (e *LocalExecutor) WriteFile(path string, data []byte, perm os.FileMode) error {
-	return os.WriteFile(path, data, perm)
+	if err := paths.ValidateHomes(); err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, data, perm); err != nil {
+		return err
+	}
+	return os.Chmod(path, perm)
 }
 
 func (e *LocalExecutor) ConfigPath() string {

@@ -1,11 +1,15 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/paths"
 )
 
 func TestParseBackupOptions(t *testing.T) {
@@ -36,13 +40,17 @@ func TestParseBackupOptionsHelp(t *testing.T) {
 
 func TestCollectBackupEntries(t *testing.T) {
 	homeDir := t.TempDir()
-	workspace := filepath.Join(homeDir, "workspace")
+	t.Setenv("SCICLAW_HOME", filepath.Join(homeDir, "sciclaw"))
+	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(homeDir, ".sciclaw"))
+	workspace := filepath.Join(homeDir, "external-workspace")
+	managedDefault := paths.DefaultWorkspace()
+	managedSecond := filepath.Join(paths.UserHome(), "workspaces", "second")
 	if err := os.MkdirAll(workspace, 0755); err != nil {
 		t.Fatalf("mkdir workspace: %v", err)
 	}
 
-	mustWriteFile(t, filepath.Join(homeDir, ".picoclaw", "config.json"), "{}")
-	mustWriteFile(t, filepath.Join(homeDir, ".picoclaw", "auth.json"), "{}")
+	mustWriteFile(t, paths.ConfigPath(), "{}")
+	mustWriteFile(t, paths.AuthPath(), "{}")
 	mustWriteFile(t, filepath.Join(homeDir, ".config", "sciclaw", "op.env"), "OP_SERVICE_ACCOUNT_TOKEN=x")
 	mustWriteFile(t, filepath.Join(workspace, "AGENTS.md"), "# AGENTS")
 	mustWriteFile(t, filepath.Join(workspace, "HOOKS.md"), "# HOOKS")
@@ -59,8 +67,13 @@ func TestCollectBackupEntries(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(workspace, "cron"), 0755); err != nil {
 		t.Fatalf("mkdir cron: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(workspace, "sessions"), 0755); err != nil {
-		t.Fatalf("mkdir sessions: %v", err)
+	mustWriteFile(t, filepath.Join(workspace, "results", "arbitrary.txt"), "result")
+	mustWriteFile(t, filepath.Join(managedDefault, "memory", "MEMORY.md"), "default")
+	mustWriteFile(t, filepath.Join(managedSecond, "outputs", "second.txt"), "second")
+	for _, current := range []string{workspace, managedDefault, managedSecond} {
+		if err := os.MkdirAll(filepath.Join(paths.WorkspaceStateDir(current), "sessions"), 0700); err != nil {
+			t.Fatalf("mkdir sessions: %v", err)
+		}
 	}
 
 	cfg := &config.Config{
@@ -72,16 +85,101 @@ func TestCollectBackupEntries(t *testing.T) {
 	}
 
 	entriesNoSessions := collectBackupEntries(cfg, homeDir, false)
-	if !hasArchivePath(entriesNoSessions, "workspace/AGENTS.md") {
-		t.Fatalf("expected workspace/AGENTS.md in backup entries")
+	if !hasArchivePath(entriesNoSessions, "user/workspaces") {
+		t.Fatalf("expected all managed workspaces in backup entries")
 	}
-	if hasArchivePath(entriesNoSessions, "workspace/sessions") {
-		t.Fatalf("did not expect workspace/sessions without --with-sessions")
+	externalArchiveRoot := filepath.ToSlash(filepath.Join("external-workspaces", paths.WorkspaceID(workspace)))
+	if !hasArchivePath(entriesNoSessions, externalArchiveRoot) {
+		t.Fatalf("expected configured external workspace in backup entries")
+	}
+	if hasArchivePath(entriesNoSessions, filepath.ToSlash(filepath.Join("state", "workspaces", paths.WorkspaceID(workspace), "sessions"))) {
+		t.Fatalf("did not expect managed sessions without --with-sessions")
 	}
 
 	entriesWithSessions := collectBackupEntries(cfg, homeDir, true)
-	if !hasArchivePath(entriesWithSessions, "workspace/sessions") {
-		t.Fatalf("expected workspace/sessions with --with-sessions")
+	for _, current := range []string{workspace, managedDefault, managedSecond} {
+		sessionArchive := filepath.ToSlash(filepath.Join("state", "workspaces", paths.WorkspaceID(current), "sessions"))
+		if !hasArchivePath(entriesWithSessions, sessionArchive) {
+			t.Fatalf("expected sessions for %s", current)
+		}
+	}
+
+	archivePath := filepath.Join(t.TempDir(), "backup.tar.gz")
+	if err := createBackupArchive(archivePath, entriesNoSessions); err != nil {
+		t.Fatalf("create backup: %v", err)
+	}
+	if !archiveContains(t, archivePath, externalArchiveRoot+"/results/arbitrary.txt") {
+		t.Fatal("backup omitted arbitrary workspace output")
+	}
+	if !archiveContains(t, archivePath, "user/workspaces/second/outputs/second.txt") {
+		t.Fatal("backup omitted secondary managed workspace")
+	}
+
+	insideOutput := filepath.Join(workspace, "backup.tar.gz")
+	if err := createBackupArchive(insideOutput, entriesNoSessions); err != nil {
+		t.Fatalf("create backup inside workspace: %v", err)
+	}
+	if archiveContains(t, insideOutput, externalArchiveRoot+"/backup.tar.gz") {
+		t.Fatal("backup recursively included its own output")
+	}
+}
+
+func TestBackupFollowsConfiguredWorkspaceRootSymlinkOnly(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SCICLAW_HOME", filepath.Join(home, "sciclaw"))
+	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(home, ".sciclaw"))
+	realWorkspace := filepath.Join(home, "real-workspace")
+	workspaceLink := filepath.Join(home, "workspace-link")
+	mustWriteFile(t, filepath.Join(realWorkspace, "outputs", "result.txt"), "result")
+	outsideFile := filepath.Join(t.TempDir(), "outside.txt")
+	mustWriteFile(t, outsideFile, "outside")
+	if err := os.Symlink(outsideFile, filepath.Join(realWorkspace, "nested-link.txt")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if err := os.Symlink(realWorkspace, workspaceLink); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = workspaceLink
+	cfg.Agents.Defaults.SharedWorkspace = workspaceLink
+	entries := collectBackupEntries(cfg, home, false)
+	archiveRoot := filepath.ToSlash(filepath.Join("external-workspaces", paths.WorkspaceID(workspaceLink)))
+	archivePath := filepath.Join(t.TempDir(), "backup.tar.gz")
+	if err := createBackupArchive(archivePath, entries); err != nil {
+		t.Fatal(err)
+	}
+	if !archiveContains(t, archivePath, archiveRoot+"/outputs/result.txt") {
+		t.Fatal("configured symlink workspace contents were not archived")
+	}
+	if archiveContains(t, archivePath, archiveRoot+"/nested-link.txt") {
+		t.Fatal("nested workspace symlink must not be followed or archived")
+	}
+}
+
+func archiveContains(t *testing.T, path, want string) bool {
+	t.Helper()
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	gzipReader, err := gzip.NewReader(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gzipReader.Close()
+	tarReader := tar.NewReader(gzipReader)
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			return false
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if header.Name == want {
+			return true
+		}
 	}
 }
 

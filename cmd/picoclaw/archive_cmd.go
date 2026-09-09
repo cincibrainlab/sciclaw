@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/sipeed/picoclaw/pkg/archive/discordarchive"
+	"github.com/sipeed/picoclaw/pkg/paths"
 	"github.com/sipeed/picoclaw/pkg/session"
 )
 
@@ -54,7 +55,7 @@ func archiveDiscordCmd(args []string) {
 		return
 	}
 	workspace := cfg.WorkspacePath()
-	sm := session.NewSessionManager(filepath.Join(workspace, "sessions"))
+	sm := session.NewSessionManager(filepath.Join(paths.WorkspaceStateDir(workspace), "sessions"))
 	manager := discordarchive.NewManager(workspace, sm, cfg.Channels.Discord.Archive)
 
 	sub := strings.ToLower(strings.TrimSpace(args[0]))

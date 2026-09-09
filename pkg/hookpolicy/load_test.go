@@ -31,7 +31,7 @@ events:
 		t.Fatalf("write hooks.yaml: %v", err)
 	}
 
-	policy, _, err := LoadPolicy(ws)
+	policy, _, err := LoadPolicy(t.TempDir(), ws)
 	if err != nil {
 		t.Fatalf("LoadPolicy: %v", err)
 	}
@@ -50,7 +50,7 @@ events:
 
 func TestLoadPolicy_DefaultsWithoutFiles(t *testing.T) {
 	ws := t.TempDir()
-	policy, _, err := LoadPolicy(ws)
+	policy, _, err := LoadPolicy(t.TempDir(), ws)
 	if err != nil {
 		t.Fatalf("LoadPolicy: %v", err)
 	}
@@ -59,5 +59,28 @@ func TestLoadPolicy_DefaultsWithoutFiles(t *testing.T) {
 	}
 	if !policy.Events[hooks.EventBeforeTurn].Enabled {
 		t.Fatalf("before_turn should be enabled by default")
+	}
+}
+
+func TestLoadPolicy_ProfileThenWorkspacePrecedence(t *testing.T) {
+	profile := t.TempDir()
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(profile, "HOOKS.md"), []byte("## Before Tool\n- global instruction\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "HOOKS.md"), []byte("## Before Tool\n- workspace instruction\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "hooks.yaml"), []byte("events:\n  before_tool:\n    instructions:\n      - yaml override\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	policy, _, err := LoadPolicy(profile, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instructions := policy.Events[hooks.EventBeforeTool].Instructions
+	if len(instructions) != 1 || instructions[0] != "yaml override" {
+		t.Fatalf("workspace YAML should override merged profile/workspace instructions: %#v", instructions)
 	}
 }

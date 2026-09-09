@@ -24,6 +24,13 @@ func TestJSONLAuditSinkWrite(t *testing.T) {
 	for {
 		data, err := os.ReadFile(auditPath)
 		if err == nil && strings.Contains(string(data), "\"turn_id\":\"turn-1\"") {
+			info, statErr := os.Stat(auditPath)
+			if statErr != nil {
+				t.Fatal(statErr)
+			}
+			if info.Mode().Perm() != 0600 {
+				t.Fatalf("audit mode=%#o want 0600", info.Mode().Perm())
+			}
 			return
 		}
 		if time.Now().After(deadline) {

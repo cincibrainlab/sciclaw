@@ -1755,7 +1755,10 @@ func compactJobLine(s string) string {
 }
 
 func newJobStore(path string) (*jobStore, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(filepath.Dir(path), 0700); err != nil {
 		return nil, err
 	}
 	s := &jobStore{
@@ -1814,7 +1817,7 @@ func (s *jobStore) writeLocked() error {
 		return err
 	}
 	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, s.path)

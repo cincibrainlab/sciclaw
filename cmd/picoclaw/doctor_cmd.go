@@ -148,8 +148,11 @@ func runDoctor(opts doctorOptions) doctorReport {
 
 	// Config + workspace
 	configPath := getConfigPath()
-	configExists := fileExists(configPath)
-	if configExists {
+	homesErr := paths.ValidateHomes()
+	configExists := homesErr == nil && fileExists(configPath)
+	if homesErr != nil {
+		add(doctorCheck{Name: "config", Status: doctorErr, Message: homesErr.Error()})
+	} else if configExists {
 		add(doctorCheck{Name: "config", Status: doctorOK, Message: configPath})
 	} else {
 		add(doctorCheck{
@@ -162,15 +165,16 @@ func runDoctor(opts doctorOptions) doctorReport {
 	var cfg *config.Config
 	var cfgErr error
 	if configExists {
-		cfg, cfgErr = loadConfig()
+		cfg, cfgErr = config.LoadConfig(configPath)
 		if cfgErr != nil {
 			add(doctorCheck{Name: "config.load", Status: doctorErr, Message: cfgErr.Error()})
 		}
 	}
 
-	add(checkDirUnification())
+	layoutCheck := checkLayout(cfg)
+	add(layoutCheck)
 
-	if cfgErr == nil && cfg != nil {
+	if cfgErr == nil && cfg != nil && layoutCheck.Status != doctorErr {
 		for _, c := range checkConfigHealth(cfg, configPath, opts) {
 			add(c)
 		}
@@ -710,7 +714,7 @@ func checkHostVMChannelConflict(hostCfg *config.Config) doctorCheck {
 	}
 
 	// Read VM config to check which channels are enabled.
-	vmCfgRaw, err := tui.VMCatFile("/home/ubuntu/.picoclaw/config.json")
+	vmCfgRaw, err := tui.VMCatFile("/home/ubuntu/sciclaw/config.json")
 	if err != nil {
 		return doctorCheck{Name: name, Status: doctorSkip, Message: "cannot read VM config"}
 	}
@@ -748,40 +752,21 @@ func checkHostVMChannelConflict(hostCfg *config.Config) doctorCheck {
 	}
 }
 
-func checkDirUnification() doctorCheck {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return doctorCheck{Name: "home.unification", Status: doctorSkip, Message: "home directory unavailable"}
+func checkLayout(cfg *config.Config) doctorCheck {
+	if paths.IsPicoClawPath(paths.UserHome()) {
+		return doctorCheck{Name: "home.layout", Status: doctorErr, Message: "SCICLAW_HOME points at a PicoClaw-owned path; relocate SciClaw files manually and use ~/sciclaw"}
 	}
-	oldDir := filepath.Join(home, ".picoclaw")
-	newDir := filepath.Join(home, "sciclaw")
-
-	oldInfo, oldErr := os.Lstat(oldDir)
-	newInfo, newErr := os.Lstat(newDir)
-	if os.IsNotExist(oldErr) && os.IsNotExist(newErr) {
-		return doctorCheck{Name: "home.unification", Status: doctorSkip, Message: "no legacy or unified directories found"}
+	if paths.IsPicoClawPath(paths.StateHome()) {
+		return doctorCheck{Name: "home.layout", Status: doctorErr, Message: "SCICLAW_STATE_HOME points at a PicoClaw-owned path; choose a separate machine-state directory such as ~/.sciclaw"}
 	}
-	if oldErr == nil && (oldInfo.Mode()&os.ModeSymlink) != 0 {
-		return doctorCheck{Name: "home.unification", Status: doctorOK, Message: "~/.picoclaw is symlinked to unified root"}
+	if cfg != nil && (paths.IsPicoClawPath(cfg.WorkspacePath()) || paths.IsPicoClawPath(cfg.SharedWorkspacePath())) {
+		return doctorCheck{Name: "home.layout", Status: doctorErr, Message: "active SciClaw workspace configuration points at ~/.picoclaw; update it manually to a SciClaw-owned workspace"}
 	}
-	if oldErr == nil && newErr == nil {
-		oldCfg := filepath.Join(oldDir, "config.json")
-		newCfg := filepath.Join(newDir, "config.json")
-		if fileExists(oldCfg) && fileExists(newCfg) {
-			return doctorCheck{Name: "home.unification", Status: doctorWarn, Message: "Config found in both directories — run: sciclaw migrate --unify"}
-		}
-		if oldInfo.IsDir() && newInfo.IsDir() {
-			return doctorCheck{Name: "home.unification", Status: doctorWarn, Message: "split home directories detected — run: sciclaw migrate --unify"}
-		}
-	}
-	if oldErr == nil {
-		return doctorCheck{Name: "home.unification", Status: doctorWarn, Message: "legacy ~/.picoclaw directory detected — run: sciclaw migrate --unify"}
-	}
-	return doctorCheck{Name: "home.unification", Status: doctorOK, Message: "unified ~/sciclaw layout detected"}
+	return doctorCheck{Name: "home.layout", Status: doctorOK, Message: "SciClaw visible data and machine state use separate roots"}
 }
 
 func checkGatewayLog(telegramEnabled bool) doctorCheck {
-	p := filepath.Join(paths.AppHome(), "gateway.log")
+	p := paths.GatewayLogPath()
 	if !fileExists(p) {
 		return doctorCheck{Name: "gateway.log", Status: doctorSkip, Message: "not found"}
 	}
@@ -814,11 +799,7 @@ func checkExecGuardRelativePath(cfg *config.Config) doctorCheck {
 		return doctorCheck{Name: name, Status: doctorSkip, Message: "restrict_to_workspace=false"}
 	}
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return doctorCheck{Name: name, Status: doctorSkip, Message: "home directory unavailable"}
-	}
-	logPath := filepath.Join(home, ".picoclaw", "gateway.log")
+	logPath := paths.GatewayLogPath()
 	if !fileExists(logPath) {
 		return doctorCheck{Name: name, Status: doctorSkip, Message: "gateway log not found"}
 	}
@@ -1269,8 +1250,9 @@ func checkBaselineSkills(workspaceSkillsDir string, opts doctorOptions) doctorCh
 	return doctorCheck{Name: "skills.baseline", Status: st, Message: strings.Join(msgParts, "; "), Data: data}
 }
 
-func checkToolsPolicy(workspace string, opts doctorOptions) doctorCheck {
-	toolsPath := filepath.Join(workspace, "TOOLS.md")
+func checkToolsPolicy(_ string, opts doctorOptions) doctorCheck {
+	profileDir := paths.ProfileDir()
+	toolsPath := filepath.Join(profileDir, "TOOLS.md")
 	if !fileExists(toolsPath) {
 		return doctorCheck{
 			Name:    "tools.policy",
@@ -1306,7 +1288,7 @@ func checkToolsPolicy(workspace string, opts doctorOptions) doctorCheck {
 			"hint": fmt.Sprintf("run: %s doctor --fix", invokedCLIName()),
 		}
 		if opts.Fix {
-			if err := ensureToolsCLIFirstPolicy(workspace); err != nil {
+			if err := ensureToolsCLIFirstPolicy(profileDir); err != nil {
 				data["fix_error"] = err.Error()
 			} else {
 				return doctorCheck{Name: "tools.policy", Status: doctorOK, Message: "CLI-first policy refreshed", Data: map[string]string{"path": toolsPath}}
@@ -1320,7 +1302,7 @@ func checkToolsPolicy(workspace string, opts doctorOptions) doctorCheck {
 		"hint": fmt.Sprintf("run: %s doctor --fix (or %s onboard)", invokedCLIName(), invokedCLIName()),
 	}
 	if opts.Fix {
-		if err := ensureToolsCLIFirstPolicy(workspace); err != nil {
+		if err := ensureToolsCLIFirstPolicy(profileDir); err != nil {
 			data["fix_error"] = err.Error()
 		} else {
 			return doctorCheck{Name: "tools.policy", Status: doctorOK, Message: "CLI-first policy injected", Data: map[string]string{"path": toolsPath}}
@@ -1419,7 +1401,7 @@ func checkConfigHealth(cfg *config.Config, configPath string, opts doctorOptions
 			} else if err := config.SaveConfig(configPath, cfg); err != nil {
 				saveErr = fmt.Errorf("save config: %w", err)
 			} else {
-				reloadErr = requestRoutingReloadAt(configPath)
+				reloadErr = requestRoutingReloadAt()
 				after = detectConfigHealthIssues(cfg)
 			}
 		}

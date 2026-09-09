@@ -52,7 +52,7 @@ func backupHelp() {
 	fmt.Println()
 	fmt.Println("Create options:")
 	fmt.Println("  -o, --output <path>     Output tar.gz path")
-	fmt.Println("  --with-sessions         Include workspace/sessions in backup")
+	fmt.Println("  --with-sessions         Include managed session state in backup")
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Printf("  %s backup create\n", commandName)
@@ -185,69 +185,72 @@ func expandHomePath(path string, homeDir string) string {
 }
 
 func collectBackupEntries(cfg *config.Config, homeDir string, withSessions bool) []backupEntry {
-	baseDir := paths.AppHome()
-	workspace := cfg.WorkspacePath()
-
 	candidates := []backupEntry{
 		{
-			SourcePath:  filepath.Join(baseDir, "config.json"),
-			ArchivePath: filepath.ToSlash(filepath.Join("picoclaw", "config.json")),
+			SourcePath:  paths.ConfigPath(),
+			ArchivePath: filepath.ToSlash(filepath.Join("user", "config.json")),
 		},
 		{
-			SourcePath:  filepath.Join(baseDir, "auth.json"),
-			ArchivePath: filepath.ToSlash(filepath.Join("picoclaw", "auth.json")),
+			SourcePath:  paths.ProfileDir(),
+			ArchivePath: filepath.ToSlash(filepath.Join("user", "profile")),
+		},
+		{
+			SourcePath:  paths.GlobalSkillsDir(),
+			ArchivePath: filepath.ToSlash(filepath.Join("user", "skills")),
+		},
+		{
+			SourcePath:  paths.TemplatesDir(),
+			ArchivePath: filepath.ToSlash(filepath.Join("user", "templates")),
+		},
+		{
+			SourcePath:  paths.AddonsDir(),
+			ArchivePath: filepath.ToSlash(filepath.Join("user", "addons")),
+		},
+		{
+			SourcePath:  paths.AuthPath(),
+			ArchivePath: filepath.ToSlash(filepath.Join("state", "auth.json")),
 		},
 		{
 			SourcePath:  filepath.Join(homeDir, ".config", "sciclaw", "op.env"),
-			ArchivePath: filepath.ToSlash(filepath.Join("sciclaw", "op.env")),
-		},
-		{
-			SourcePath:  filepath.Join(workspace, "AGENTS.md"),
-			ArchivePath: filepath.ToSlash(filepath.Join("workspace", "AGENTS.md")),
-		},
-		{
-			SourcePath:  filepath.Join(workspace, "HOOKS.md"),
-			ArchivePath: filepath.ToSlash(filepath.Join("workspace", "HOOKS.md")),
-		},
-		{
-			SourcePath:  filepath.Join(workspace, "IDENTITY.md"),
-			ArchivePath: filepath.ToSlash(filepath.Join("workspace", "IDENTITY.md")),
-		},
-		{
-			SourcePath:  filepath.Join(workspace, "SOUL.md"),
-			ArchivePath: filepath.ToSlash(filepath.Join("workspace", "SOUL.md")),
-		},
-		{
-			SourcePath:  filepath.Join(workspace, "TOOLS.md"),
-			ArchivePath: filepath.ToSlash(filepath.Join("workspace", "TOOLS.md")),
-		},
-		{
-			SourcePath:  filepath.Join(workspace, "USER.md"),
-			ArchivePath: filepath.ToSlash(filepath.Join("workspace", "USER.md")),
-		},
-		{
-			SourcePath:  filepath.Join(workspace, "memory"),
-			ArchivePath: filepath.ToSlash(filepath.Join("workspace", "memory")),
-		},
-		{
-			SourcePath:  filepath.Join(workspace, "skills"),
-			ArchivePath: filepath.ToSlash(filepath.Join("workspace", "skills")),
-		},
-		{
-			SourcePath:  filepath.Join(workspace, "cron"),
-			ArchivePath: filepath.ToSlash(filepath.Join("workspace", "cron")),
+			ArchivePath: filepath.ToSlash(filepath.Join("state", "op.env")),
 		},
 	}
+	managedWorkspaces := filepath.Join(paths.UserHome(), "workspaces")
+	candidates = append(candidates, backupEntry{SourcePath: managedWorkspaces, ArchivePath: filepath.ToSlash(filepath.Join("user", "workspaces"))})
 
-	if withSessions {
-		candidates = append(candidates, backupEntry{
-			SourcePath:  filepath.Join(workspace, "sessions"),
-			ArchivePath: filepath.ToSlash(filepath.Join("workspace", "sessions")),
-		})
+	workspacePaths := configuredWorkspaces(cfg)
+	if entries, err := os.ReadDir(managedWorkspaces); err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() {
+				workspacePaths = append(workspacePaths, filepath.Join(managedWorkspaces, entry.Name()))
+			}
+		}
+	}
+	workspacePaths = uniqueCleanPaths(workspacePaths)
+	for _, workspace := range workspacePaths {
+		if !pathWithin(workspace, managedWorkspaces) {
+			candidates = append(candidates, backupEntry{
+				SourcePath:  backupWorkspaceSource(workspace),
+				ArchivePath: filepath.ToSlash(filepath.Join("external-workspaces", paths.WorkspaceID(workspace))),
+			})
+		}
+		if withSessions {
+			candidates = append(candidates, backupEntry{
+				SourcePath:  filepath.Join(paths.WorkspaceStateDir(workspace), "sessions"),
+				ArchivePath: filepath.ToSlash(filepath.Join("state", "workspaces", paths.WorkspaceID(workspace), "sessions")),
+			})
+		}
 	}
 
 	existing := make([]backupEntry, 0, len(candidates))
+	seen := map[string]bool{}
 	for _, entry := range candidates {
+		cleaned := filepath.Clean(entry.SourcePath)
+		if seen[cleaned] {
+			continue
+		}
+		seen[cleaned] = true
+		entry.SourcePath = cleaned
 		if _, err := os.Stat(entry.SourcePath); err == nil {
 			existing = append(existing, entry)
 		}
@@ -255,8 +258,44 @@ func collectBackupEntries(cfg *config.Config, homeDir string, withSessions bool)
 	return existing
 }
 
+func backupWorkspaceSource(workspace string) string {
+	info, err := os.Lstat(workspace)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return workspace
+	}
+	resolved, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		return workspace
+	}
+	return resolved
+}
+
+func uniqueCleanPaths(values []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		cleaned, err := filepath.Abs(filepath.Clean(strings.TrimSpace(value)))
+		if err != nil || strings.TrimSpace(value) == "" || seen[cleaned] {
+			continue
+		}
+		seen[cleaned] = true
+		out = append(out, cleaned)
+	}
+	return out
+}
+
+func pathWithin(path, root string) bool {
+	path, pathErr := filepath.Abs(filepath.Clean(path))
+	root, rootErr := filepath.Abs(filepath.Clean(root))
+	if pathErr != nil || rootErr != nil {
+		return false
+	}
+	relative, err := filepath.Rel(root, path)
+	return err == nil && (relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))))
+}
+
 func createBackupArchive(outputPath string, entries []backupEntry) error {
-	file, err := os.Create(outputPath)
+	file, err := os.OpenFile(outputPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
 	}
@@ -274,7 +313,7 @@ func createBackupArchive(outputPath string, entries []backupEntry) error {
 			return err
 		}
 		if info.IsDir() {
-			if err := addDirectoryToArchive(tw, entry.SourcePath, entry.ArchivePath); err != nil {
+			if err := addDirectoryToArchive(tw, entry.SourcePath, entry.ArchivePath, outputPath); err != nil {
 				return err
 			}
 			continue
@@ -287,10 +326,15 @@ func createBackupArchive(outputPath string, entries []backupEntry) error {
 	return nil
 }
 
-func addDirectoryToArchive(tw *tar.Writer, sourceDir, archiveRoot string) error {
+func addDirectoryToArchive(tw *tar.Writer, sourceDir, archiveRoot, outputPath string) error {
+	outputPath, _ = filepath.Abs(outputPath)
 	return filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
+		}
+		absolute, _ := filepath.Abs(path)
+		if absolute == outputPath {
+			return nil
 		}
 
 		relPath, err := filepath.Rel(sourceDir, path)

@@ -20,6 +20,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/paths"
 	"github.com/sipeed/picoclaw/pkg/routing"
 )
 
@@ -573,7 +574,7 @@ func TestHandleSkillsReadsResolvedSkillSources(t *testing.T) {
 	}
 	defer func() { _ = os.Chdir(oldWD) }()
 
-	cfgDir := filepath.Join(home, ".picoclaw")
+	cfgDir := filepath.Join(home, "sciclaw")
 	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
 		t.Fatalf("mkdir config dir: %v", err)
 	}
@@ -693,7 +694,7 @@ func TestHandleSkillsDeleteOnlyRemovesWorkspaceSkill(t *testing.T) {
 	}
 	defer func() { _ = os.Chdir(oldWD) }()
 
-	cfgDir := filepath.Join(home, ".picoclaw")
+	cfgDir := filepath.Join(home, "sciclaw")
 	workspace := filepath.Join(home, "workspace-a")
 	if err := os.MkdirAll(filepath.Join(workspace, "skills", "alpha"), 0o755); err != nil {
 		t.Fatalf("mkdir workspace alpha: %v", err)
@@ -739,7 +740,7 @@ func TestHandleSkillsDeleteOnlyRemovesWorkspaceSkill(t *testing.T) {
 func TestHandleRoutingReadsRealConfigMappings(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	cfgDir := filepath.Join(home, ".picoclaw")
+	cfgDir := filepath.Join(home, "sciclaw")
 	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
 		t.Fatalf("mkdir config dir: %v", err)
 	}
@@ -813,7 +814,7 @@ func TestHandleRoutingReadsRealConfigMappings(t *testing.T) {
 func TestHandleModelsPutPersistsResolvedProvider(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	cfgDir := filepath.Join(home, ".picoclaw")
+	cfgDir := filepath.Join(home, "sciclaw")
 	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
 		t.Fatalf("mkdir config dir: %v", err)
 	}
@@ -859,7 +860,8 @@ func TestHandleModelsPutPersistsResolvedProvider(t *testing.T) {
 func TestHandleJobsReadsPersistedLedger(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	cfgDir := filepath.Join(home, ".picoclaw")
+	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(home, ".sciclaw"))
+	cfgDir := filepath.Join(home, "sciclaw")
 	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
 		t.Fatalf("mkdir config dir: %v", err)
 	}
@@ -939,7 +941,10 @@ func TestHandleJobsReadsPersistedLedger(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal jobs: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(cfgDir, "jobs.json"), data, 0o644); err != nil {
+	if err := os.MkdirAll(paths.RuntimeDir(), 0o700); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+	if err := os.WriteFile(jobsStorePath(), data, 0o600); err != nil {
 		t.Fatalf("write jobs: %v", err)
 	}
 
@@ -988,7 +993,8 @@ func TestHandleJobsReadsPersistedLedger(t *testing.T) {
 func TestHandleJobsRejectsMutationEndpoints(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	cfgDir := filepath.Join(home, ".picoclaw")
+	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(home, ".sciclaw"))
+	cfgDir := filepath.Join(home, "sciclaw")
 	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
 		t.Fatalf("mkdir config dir: %v", err)
 	}
@@ -1018,7 +1024,10 @@ func TestHandleJobsRejectsMutationEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal jobs: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(cfgDir, "jobs.json"), data, 0o644); err != nil {
+	if err := os.MkdirAll(paths.RuntimeDir(), 0o700); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+	if err := os.WriteFile(jobsStorePath(), data, 0o600); err != nil {
 		t.Fatalf("write jobs: %v", err)
 	}
 

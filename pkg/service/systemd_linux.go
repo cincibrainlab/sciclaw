@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/sipeed/picoclaw/pkg/paths"
 )
 
 type systemdUserManager struct {
@@ -40,11 +42,14 @@ func newSystemdUserManagerForSpec(exePath string, runner commandRunner, spec Spe
 func (m *systemdUserManager) Backend() string { return BackendSystemdUser }
 
 func (m *systemdUserManager) Install() error {
+	if err := paths.EnsureStateLayout(); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(m.unitPath), 0755); err != nil {
 		return err
 	}
 	pathEnv := buildSystemdPath(os.Getenv("PATH"), m.detectBrewPrefix())
-	unit := renderSystemdUnit(m.spec.Description, m.exePath, m.spec.Args, pathEnv)
+	unit := renderSystemdUnit(m.spec.Description, m.exePath, m.spec.Args, pathEnv, paths.UserHome(), paths.StateHome())
 	if err := writeFileIfChanged(m.unitPath, []byte(unit), 0644); err != nil {
 		return err
 	}

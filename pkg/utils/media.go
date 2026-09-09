@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/paths"
 )
 
 // IsAudioFile checks if a file is an audio file based on its filename extension and content type.
@@ -56,6 +57,10 @@ type DownloadOptions struct {
 // DownloadFile downloads a file from URL to a local temp directory.
 // Returns the local file path or empty string on error.
 func DownloadFile(url, filename string, opts DownloadOptions) string {
+	if err := paths.EnsureStateLayout(); err != nil {
+		logger.ErrorCF("utils", "Invalid SciClaw home configuration", map[string]interface{}{"error": err.Error()})
+		return ""
+	}
 	// Set defaults
 	if opts.Timeout == 0 {
 		opts.Timeout = 60 * time.Second
@@ -64,7 +69,7 @@ func DownloadFile(url, filename string, opts DownloadOptions) string {
 		opts.LoggerPrefix = "utils"
 	}
 
-	mediaDir := filepath.Join(os.TempDir(), "picoclaw_media")
+	mediaDir := filepath.Join(paths.TempDir(), "media")
 	if err := os.MkdirAll(mediaDir, 0700); err != nil {
 		logger.ErrorCF(opts.LoggerPrefix, "Failed to create media directory", map[string]interface{}{
 			"error": err.Error(),
@@ -110,7 +115,7 @@ func DownloadFile(url, filename string, opts DownloadOptions) string {
 		return ""
 	}
 
-	out, err := os.Create(localPath)
+	out, err := os.OpenFile(localPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		logger.ErrorCF(opts.LoggerPrefix, "Failed to create local file", map[string]interface{}{
 			"error": err.Error(),

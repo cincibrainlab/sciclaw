@@ -60,6 +60,16 @@ func TestVMCloudInitInstallsCoreCompanions(t *testing.T) {
 			t.Fatalf("multipass-cloud-init.yaml missing %q", marker)
 		}
 	}
+	configIndex := strings.Index(txt, `"workspace": "/home/ubuntu/project"`)
+	onboardIndex := strings.Index(txt, "/usr/local/bin/sciclaw onboard --yes")
+	if configIndex < 0 || onboardIndex < 0 || configIndex > onboardIndex {
+		t.Fatal("VM config must select /home/ubuntu/project before onboard creates the managed venv")
+	}
+	for _, marker := range []string{"os.chmod(cfg_path, 0o600)", "install -d -m 0700", "/home/ubuntu/.sciclaw/runtime"} {
+		if !strings.Contains(txt, marker) {
+			t.Fatalf("multipass-cloud-init.yaml missing secure layout marker %q", marker)
+		}
+	}
 }
 
 func repoRoot(t *testing.T) string {

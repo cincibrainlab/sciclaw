@@ -11,6 +11,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	appPaths "github.com/sipeed/picoclaw/pkg/paths"
 )
 
 type AccessMode int
@@ -81,6 +83,8 @@ func validatePathWithPolicy(path, workspace string, restrict bool, mode AccessMo
 	}
 
 	roots := []allowedRoot{makeAllowedRoot(absWorkspace, false)}
+	runtimeRoot := makeAllowedRoot(appPaths.WorkspaceStateDir(absWorkspace), true)
+	roots = append(roots, runtimeRoot)
 	if strings.TrimSpace(sharedWorkspace) != "" {
 		if absShared, err := filepath.Abs(strings.TrimSpace(sharedWorkspace)); err == nil {
 			sharedRoot := makeAllowedRoot(absShared, sharedWorkspaceReadOnly)

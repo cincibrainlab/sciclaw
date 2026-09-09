@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/sipeed/picoclaw/pkg/paths"
 )
 
 func TestDetectWSLWith(t *testing.T) {
@@ -32,15 +34,19 @@ func TestDetectWSLWith(t *testing.T) {
 }
 
 func TestRenderSystemdUnit(t *testing.T) {
-	unit := renderSystemdUnit("sciClaw Gateway", "/usr/local/bin/sciclaw", []string{"gateway"}, "/usr/local/bin:/usr/bin:/bin")
+	unit := renderSystemdUnit("sciClaw Gateway", "/usr/local/bin/sciclaw", []string{"gateway"}, "/usr/local/bin:/usr/bin:/bin", "/custom/sciclaw", "/custom/.sciclaw")
 	mustContain(t, unit, "ExecStart=/usr/local/bin/sciclaw gateway")
 	mustContain(t, unit, "Restart=always")
 	mustContain(t, unit, "Environment=PATH=/usr/local/bin:/usr/bin:/bin")
+	mustContain(t, unit, `Environment="SCICLAW_HOME=/custom/sciclaw"`)
+	mustContain(t, unit, `Environment="SCICLAW_STATE_HOME=/custom/.sciclaw"`)
 	mustContain(t, unit, "WantedBy=default.target")
 }
 
 func TestBuildSystemdPath(t *testing.T) {
 	t.Setenv("HOME", "/home/tester")
+	t.Setenv("SCICLAW_HOME", "/home/tester/sciclaw")
+	t.Setenv("SCICLAW_STATE_HOME", "/home/tester/.sciclaw")
 	sep := string(os.PathListSeparator)
 	inputPath := strings.Join([]string{
 		"/custom/bin",
@@ -65,8 +71,12 @@ func TestBuildSystemdPath(t *testing.T) {
 	mustContainPath(t, parts, "/home/linuxbrew/.linuxbrew/sbin")
 
 	// Managed venv candidates.
-	mustContainPath(t, parts, "/home/tester/sciclaw/.venv/bin")
-	mustContainPath(t, parts, "/home/tester/.picoclaw/workspace/.venv/bin")
+	mustContainPath(t, parts, paths.WorkspaceVenvBinDir(paths.DefaultWorkspace()))
+	for _, part := range parts {
+		if strings.Contains(part, ".picoclaw") || part == filepath.Join(paths.StateHome(), ".venv", "bin") {
+			t.Fatalf("unexpected legacy/global venv candidate: %s", part)
+		}
+	}
 
 	// Installer PATH is preserved.
 	mustContainPath(t, parts, "/custom/bin")
@@ -83,16 +93,18 @@ func TestBuildSystemdPath(t *testing.T) {
 
 func TestBuildSystemdPath_NoBrewPrefix(t *testing.T) {
 	t.Setenv("HOME", "/home/tester")
+	t.Setenv("SCICLAW_HOME", "/home/tester/sciclaw")
+	t.Setenv("SCICLAW_STATE_HOME", "/home/tester/.sciclaw")
 	sep := string(os.PathListSeparator)
 	got := buildSystemdPath(strings.Join([]string{"/alpha/bin", "/beta/bin"}, sep), "")
 	parts := strings.Split(got, sep)
 	mustContainPath(t, parts, "/alpha/bin")
 	mustContainPath(t, parts, "/beta/bin")
-	mustContainPath(t, parts, "/home/tester/sciclaw/.venv/bin")
+	mustContainPath(t, parts, paths.WorkspaceVenvBinDir(paths.DefaultWorkspace()))
 }
 
 func TestRenderLaunchdPlist(t *testing.T) {
-	plist := renderLaunchdPlist("io.sciclaw.gateway", "/opt/homebrew/bin/sciclaw", []string{"gateway"}, "/tmp/out.log", "/tmp/err.log", "/opt/homebrew/bin:/usr/bin:/bin")
+	plist := renderLaunchdPlist("io.sciclaw.gateway", "/opt/homebrew/bin/sciclaw", []string{"gateway"}, "/tmp/out.log", "/tmp/err.log", "/opt/homebrew/bin:/usr/bin:/bin", "/custom/sciclaw", "/custom/.sciclaw")
 	mustContain(t, plist, "<string>io.sciclaw.gateway</string>")
 	mustContain(t, plist, "<string>/opt/homebrew/bin/sciclaw</string>")
 	mustContain(t, plist, "<string>gateway</string>")
@@ -100,6 +112,10 @@ func TestRenderLaunchdPlist(t *testing.T) {
 	mustContain(t, plist, "<key>EnvironmentVariables</key>")
 	mustContain(t, plist, "<key>PATH</key>")
 	mustContain(t, plist, "<string>/opt/homebrew/bin:/usr/bin:/bin</string>")
+	mustContain(t, plist, "<key>SCICLAW_HOME</key>")
+	mustContain(t, plist, "<string>/custom/sciclaw</string>")
+	mustContain(t, plist, "<key>SCICLAW_STATE_HOME</key>")
+	mustContain(t, plist, "<string>/custom/.sciclaw</string>")
 }
 
 func TestWebSpecDefaults(t *testing.T) {
