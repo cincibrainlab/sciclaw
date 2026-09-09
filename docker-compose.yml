@@ -12,7 +12,13 @@ services:
       - agent
     volumes:
       - ./config/config.json:/root/sciclaw/config.json:ro
-      - sciclaw-workspace:/root/sciclaw
+      - sciclaw-profile:/root/sciclaw/profile
+      - sciclaw-global-skills:/root/sciclaw/skills
+      - sciclaw-templates:/root/sciclaw/templates
+      - sciclaw-backups:/root/sciclaw/backups
+      - sciclaw-addons:/root/sciclaw/addons
+      - sciclaw-workspace:/root/sciclaw/workspaces/default
+      - sciclaw-state:/root/.sciclaw
     entrypoint: ["sciclaw", "agent"]
     stdin_open: true
     tty: true
@@ -32,9 +38,21 @@ services:
     volumes:
       # Configuration file
       - ./config/config.json:/root/sciclaw/config.json:ro
-      # Persistent workspace (sessions, memory, logs)
-      - sciclaw-workspace:/root/sciclaw
+      - sciclaw-profile:/root/sciclaw/profile
+      - sciclaw-global-skills:/root/sciclaw/skills
+      - sciclaw-templates:/root/sciclaw/templates
+      - sciclaw-backups:/root/sciclaw/backups
+      - sciclaw-addons:/root/sciclaw/addons
+      # Persistent user workspace and separate machine-managed state
+      - sciclaw-workspace:/root/sciclaw/workspaces/default
+      - sciclaw-state:/root/.sciclaw
     command: ["gateway"]
 
 volumes:
+  sciclaw-profile:
+  sciclaw-global-skills:
+  sciclaw-templates:
+  sciclaw-backups:
+  sciclaw-addons:
   sciclaw-workspace:
+  sciclaw-state:
