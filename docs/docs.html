@@ -1349,7 +1349,9 @@ http://localhost:4142</code></pre>
 ├── runtime/                       <span class="hl-comment"># status, reload, async jobs, history</span>
 ├── cache/
 ├── tmp/
-└── workspaces/&lt;stable-id&gt;/        <span class="hl-comment"># sessions, state, inbound, hooks, .ctxclaw, .venv</span></code></pre>
+└── workspaces/
+    ├── default/                    <span class="hl-comment"># default workspace runtime state</span>
+    └── &lt;hash&gt;/                     <span class="hl-comment"># routed/external runtime state</span></code></pre>
 
         <p>Legacy SciClaw relocation is manual-only. The runtime never imports, merges, removes, or symlinks <code>~/.picoclaw</code>.</p>
 
@@ -2268,7 +2270,7 @@ Top contributors
       <!-- ─── Hook Audit ─── -->
       <div class="section" id="hook-audit">
         <h3>Audit Log</h3>
-        <p>Every hook execution is appended to <code>hooks/hook-events.jsonl</code> inside that workspace's private state directory under <code>~/.sciclaw/workspaces/&lt;stable-id&gt;/</code>. Each entry records:</p>
+        <p>Every hook execution is appended to <code>hooks/hook-events.jsonl</code> inside that workspace's private state directory. The configured default uses <code>~/.sciclaw/workspaces/default/</code>; routed and external workspaces use <code>~/.sciclaw/workspaces/&lt;hash&gt;/</code>.</p>
 
         <ul>
           <li>Turn ID, event name, and handler name</li>

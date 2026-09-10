@@ -341,7 +341,9 @@ Every IRL command is recorded in the active visible workspace, under `irl/comman
 ├── runtime/                       # gateway status, routing reload, async jobs, history
 ├── cache/
 ├── tmp/
-└── workspaces/<stable-id>/         # Sessions, state, inbound, hooks, .ctxclaw, .venv, heartbeat logs
+└── workspaces/
+    ├── default/                    # Runtime state for the configured default workspace
+    └── <hash>/                     # Runtime state for routed/external workspaces
 ```
 
 `SCICLAW_HOME` overrides the visible root and `SCICLAW_STATE_HOME` overrides the machine-state root. `~/.picoclaw` remains PicoClaw-owned and is never used as a SciClaw runtime fallback.
