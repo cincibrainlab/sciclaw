@@ -106,7 +106,11 @@ func WorkspaceStateDir(workspacePath string) string {
 }
 
 func WorkspaceID(workspacePath string) string {
-	sum := sha256.Sum256([]byte(canonicalWorkspacePath(workspacePath)))
+	canonical := canonicalWorkspacePath(workspacePath)
+	if canonical == canonicalWorkspacePath(DefaultWorkspace()) {
+		return "default"
+	}
+	sum := sha256.Sum256([]byte(canonical))
 	return hex.EncodeToString(sum[:])
 }
 

@@ -114,6 +114,37 @@ func TestWorkspaceStateDirDoesNotResolveSymlinks(t *testing.T) {
 	}
 }
 
+func TestDefaultWorkspaceUsesStableDefaultStateID(t *testing.T) {
+	visibleHome := filepath.Join(t.TempDir(), "custom-visible")
+	stateHome := filepath.Join(t.TempDir(), "custom-state")
+	t.Setenv("SCICLAW_HOME", visibleHome)
+	t.Setenv("SCICLAW_STATE_HOME", stateHome)
+
+	workspace := filepath.Join(visibleHome, "workspaces", "default", ".")
+	if got := WorkspaceID(workspace); got != "default" {
+		t.Fatalf("WorkspaceID(default)=%q want default", got)
+	}
+	if got, want := WorkspaceStateDir(workspace), filepath.Join(stateHome, "workspaces", "default"); got != want {
+		t.Fatalf("WorkspaceStateDir(default)=%q want %q", got, want)
+	}
+}
+
+func TestExternalAliasOfDefaultWorkspaceRemainsHashed(t *testing.T) {
+	visibleHome := filepath.Join(t.TempDir(), "visible")
+	t.Setenv("SCICLAW_HOME", visibleHome)
+	t.Setenv("SCICLAW_STATE_HOME", t.TempDir())
+	if err := os.MkdirAll(DefaultWorkspace(), 0755); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(t.TempDir(), "default-alias")
+	if err := os.Symlink(DefaultWorkspace(), alias); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if got := WorkspaceID(alias); got == "default" {
+		t.Fatal("external lexical alias must retain a collision-resistant hash")
+	}
+}
+
 func TestValidateHomesAndWorkspaceRejectPicoClawTree(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -218,6 +249,9 @@ func TestWorkspaceStateDirStableAndCollisionResistant(t *testing.T) {
 	}
 	if firstState == WorkspaceStateDir(second) {
 		t.Fatalf("same-basename workspaces collided at %s", firstState)
+	}
+	if WorkspaceID(first) == "default" || WorkspaceID(second) == "default" {
+		t.Fatal("routed workspaces must retain hashed IDs")
 	}
 	if err := os.MkdirAll(first, 0o755); err != nil {
 		t.Fatal(err)
