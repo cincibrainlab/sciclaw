@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -136,8 +137,10 @@ func (r *ToolRegistry) GetDefinitions() []map[string]interface{} {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	definitions := make([]map[string]interface{}, 0, len(r.tools))
-	for _, tool := range r.tools {
+	names := sortedToolNames(r.tools)
+	definitions := make([]map[string]interface{}, 0, len(names))
+	for _, name := range names {
+		tool := r.tools[name]
 		definitions = append(definitions, ToolToSchema(tool))
 	}
 	return definitions
@@ -149,8 +152,10 @@ func (r *ToolRegistry) ToProviderDefs() []providers.ToolDefinition {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	definitions := make([]providers.ToolDefinition, 0, len(r.tools))
-	for _, tool := range r.tools {
+	names := sortedToolNames(r.tools)
+	definitions := make([]providers.ToolDefinition, 0, len(names))
+	for _, name := range names {
+		tool := r.tools[name]
 		schema := ToolToSchema(tool)
 
 		// Safely extract nested values with type checks
@@ -184,6 +189,7 @@ func (r *ToolRegistry) List() []string {
 	for name := range r.tools {
 		names = append(names, name)
 	}
+	sort.Strings(names)
 	return names
 }
 
@@ -200,9 +206,20 @@ func (r *ToolRegistry) GetSummaries() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	summaries := make([]string, 0, len(r.tools))
-	for _, tool := range r.tools {
+	names := sortedToolNames(r.tools)
+	summaries := make([]string, 0, len(names))
+	for _, name := range names {
+		tool := r.tools[name]
 		summaries = append(summaries, fmt.Sprintf("- `%s` - %s", tool.Name(), tool.Description()))
 	}
 	return summaries
+}
+
+func sortedToolNames(registered map[string]Tool) []string {
+	names := make([]string, 0, len(registered))
+	for name := range registered {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }

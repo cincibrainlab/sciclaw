@@ -948,20 +948,20 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (llm
 				"user_prompt_len": len(userMessageForPrompt),
 			})
 	}
-	// Clear per-turn sender context to prevent leaking between users/turns,
-	// then resolve per-user answer theme if available.
-	al.contextBuilder.SetSenderContext("", "", "")
+	theme := ""
 	if opts.SenderID != "" && al.profileStore != nil {
-		theme := al.profileStore.AnswerTheme(opts.SenderID)
-		al.contextBuilder.SetSenderContext(opts.SenderID, opts.SenderName, theme)
+		theme = al.profileStore.AnswerTheme(opts.SenderID)
 	}
-	messages := al.contextBuilder.BuildMessages(
+	messages := al.contextBuilder.BuildMessagesForSender(
 		history,
 		summary,
 		userMessageForPrompt,
 		nil,
 		opts.Channel,
 		opts.ChatID,
+		opts.SenderID,
+		opts.SenderName,
+		theme,
 	)
 	if constraints := toolProfileRuntimeConstraints(al.toolProfile); constraints != "" && len(messages) > 0 && messages[0].Role == "system" {
 		messages[0].Content = strings.TrimSpace(messages[0].Content) + "\n\n" + constraints

@@ -20,6 +20,7 @@ type MemoryStore struct {
 	workspace  string
 	memoryDir  string
 	memoryFile string
+	now        func() time.Time
 }
 
 // NewMemoryStore creates a new MemoryStore with the given workspace path.
@@ -35,13 +36,14 @@ func NewMemoryStore(workspace string) *MemoryStore {
 		workspace:  workspace,
 		memoryDir:  memoryDir,
 		memoryFile: memoryFile,
+		now:        time.Now,
 	}
 }
 
 // getTodayFile returns the path to today's daily note file (memory/YYYYMM/YYYYMMDD.md).
 func (ms *MemoryStore) getTodayFile() string {
-	today := time.Now().Format("20060102") // YYYYMMDD
-	monthDir := today[:6]                  // YYYYMM
+	today := ms.now().Format("20060102") // YYYYMMDD
+	monthDir := today[:6]                // YYYYMM
 	filePath := filepath.Join(ms.memoryDir, monthDir, today+".md")
 	return filePath
 }
@@ -87,7 +89,7 @@ func (ms *MemoryStore) AppendToday(content string) error {
 	var newContent string
 	if existingContent == "" {
 		// Add header for new day
-		header := fmt.Sprintf("# %s\n\n", time.Now().Format("2006-01-02"))
+		header := fmt.Sprintf("# %s\n\n", ms.now().Format("2006-01-02"))
 		newContent = header + content
 	} else {
 		// Append to existing content
@@ -102,12 +104,7 @@ func (ms *MemoryStore) AppendToday(content string) error {
 func (ms *MemoryStore) GetRecentDailyNotes(days int) string {
 	var notes []string
 
-	for i := 0; i < days; i++ {
-		date := time.Now().AddDate(0, 0, -i)
-		dateStr := date.Format("20060102") // YYYYMMDD
-		monthDir := dateStr[:6]            // YYYYMM
-		filePath := filepath.Join(ms.memoryDir, monthDir, dateStr+".md")
-
+	for _, filePath := range ms.recentDailyFiles(days) {
 		if data, err := os.ReadFile(filePath); err == nil {
 			notes = append(notes, string(data))
 		}
@@ -126,6 +123,15 @@ func (ms *MemoryStore) GetRecentDailyNotes(days int) string {
 		result += note
 	}
 	return result
+}
+
+func (ms *MemoryStore) recentDailyFiles(days int) []string {
+	files := make([]string, 0, days)
+	for i := 0; i < days; i++ {
+		dateStr := ms.now().AddDate(0, 0, -i).Format("20060102")
+		files = append(files, filepath.Join(ms.memoryDir, dateStr[:6], dateStr+".md"))
+	}
+	return files
 }
 
 // GetMemoryContext returns formatted memory context for the agent prompt.

@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -52,5 +53,23 @@ func TestFilteredClonesChannelHistoryToolContext(t *testing.T) {
 	}
 	if !strings.Contains(filteredResult.ForLLM, "btw-room") {
 		t.Fatalf("expected filtered registry to retain btw-room context, got: %s", filteredResult.ForLLM)
+	}
+}
+
+func TestRegistryOutputsAreSortedByToolName(t *testing.T) {
+	registry := NewToolRegistry()
+	registry.Register(NewWeatherForecastTool())
+	registry.Register(NewWordCountTool(t.TempDir(), true))
+
+	if got, want := registry.List(), []string{"weather_forecast", "word_count"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("List() = %v, want %v", got, want)
+	}
+	definitions := registry.ToProviderDefs()
+	if got, want := []string{definitions[0].Function.Name, definitions[1].Function.Name}, registry.List(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("provider definition order = %v, want %v", got, want)
+	}
+	summaries := registry.GetSummaries()
+	if !strings.Contains(summaries[0], "`weather_forecast`") || !strings.Contains(summaries[1], "`word_count`") {
+		t.Fatalf("summary order = %v", summaries)
 	}
 }

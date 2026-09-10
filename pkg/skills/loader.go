@@ -37,6 +37,11 @@ func NewSkillsLoader(workspace string, globalSkills string, builtinSkills string
 	}
 }
 
+// Roots returns the skill directories in precedence order.
+func (sl *SkillsLoader) Roots() []string {
+	return []string{sl.workspaceSkills, sl.globalSkills, sl.builtinSkills}
+}
+
 func (sl *SkillsLoader) ListSkills() []SkillInfo {
 	skills := make([]SkillInfo, 0)
 

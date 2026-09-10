@@ -161,10 +161,12 @@ func InspectPrompt(cfg *config.Config, opts PromptInspectOptions) (*PromptInspec
 	cb.SetIncludePromptToolSummaries(false)
 	cb.SetVersion(Version)
 
-	identity := cb.getIdentity()
+	identity := cb.getStaticIdentity()
+	dynamicBlock := currentTimeSection()
 	bootstrapFiles, _, bootstrapTotalChars := inspectBootstrapFiles(workspace, cfg.SharedWorkspacePath())
 	skillsBlock := buildSkillsBlock(cb)
-	memoryFile, memoryBlock := inspectMemoryFile(workspace, cfg.SharedWorkspacePath())
+	memoryFile := inspectMemoryFile(workspace)
+	memoryBlock := buildMemoryBlock(cb)
 	sessionBlock := buildCurrentSessionBlock(channel, chatID)
 	summaryBlock := buildSummaryBlock(sess.Summary)
 	systemPrompt := cb.BuildSystemPrompt()
@@ -175,7 +177,7 @@ func InspectPrompt(cfg *config.Config, opts PromptInspectOptions) (*PromptInspec
 		systemPrompt += summaryBlock
 	}
 
-	joinSeparatorChars := buildJoinSeparatorChars(identity, bootstrapTotalChars > 0, skillsBlock != "", memoryBlock != "")
+	joinSeparatorChars := buildJoinSeparatorChars(identity, bootstrapTotalChars > 0, skillsBlock != "", memoryBlock != "", dynamicBlock != "")
 
 	messages := cb.BuildMessages(history, sess.Summary, currentUser, nil, channel, chatID)
 	providerToolDefs := registry.ToProviderDefs()
@@ -206,7 +208,7 @@ func InspectPrompt(cfg *config.Config, opts PromptInspectOptions) (*PromptInspec
 		SystemPrompt: PromptSectionBreakdown{
 			TotalChars:          len(systemPrompt),
 			EstimatedTokens:     estimateTokens(len(systemPrompt)),
-			IdentityChars:       len(identity),
+			IdentityChars:       len(identity) + len(dynamicBlock),
 			Bootstrap:           bootstrapFiles,
 			BootstrapTotalChars: bootstrapTotalChars,
 			SkillsChars:         len(skillsBlock),
@@ -284,34 +286,27 @@ func inspectBootstrapFiles(workspace, sharedWorkspace string) ([]PromptFileBreak
 	return out, joined.String(), total
 }
 
-func inspectMemoryFile(workspace, sharedWorkspace string) (PromptFileBreakdown, string) {
+func inspectMemoryFile(workspace string) PromptFileBreakdown {
 	primary := filepath.Join(filepath.Clean(workspace), "memory", "MEMORY.md")
-	fallbackRoot := filepath.Clean(strings.TrimSpace(sharedWorkspace))
-	candidates := []struct {
-		path   string
-		source string
-	}{{path: primary, source: filepath.Dir(filepath.Dir(primary))}}
-	if fallbackRoot != "" && fallbackRoot != "." && filepath.Clean(filepath.Dir(filepath.Dir(primary))) != fallbackRoot {
-		candidates = append(candidates, struct {
-			path   string
-			source string
-		}{path: filepath.Join(fallbackRoot, "memory", "MEMORY.md"), source: fallbackRoot})
-	}
-	for _, candidate := range candidates {
-		data, err := os.ReadFile(candidate.path)
-		if err != nil {
-			continue
-		}
-		block := "# Memory\n\n" + string(data)
+	data, err := os.ReadFile(primary)
+	if err == nil {
 		return PromptFileBreakdown{
 			Name:            "memory/MEMORY.md",
-			Path:            candidate.path,
-			SourceWorkspace: candidate.source,
-			Chars:           len(block),
-			EstimatedTokens: estimateTokens(len(block)),
-		}, block
+			Path:            primary,
+			SourceWorkspace: filepath.Clean(workspace),
+			Chars:           len(data),
+			EstimatedTokens: estimateTokens(len(data)),
+		}
 	}
-	return PromptFileBreakdown{Name: "memory/MEMORY.md"}, ""
+	return PromptFileBreakdown{Name: "memory/MEMORY.md"}
+}
+
+func buildMemoryBlock(cb *ContextBuilder) string {
+	memoryContext := cb.memory.GetMemoryContext()
+	if memoryContext == "" {
+		return ""
+	}
+	return "# Memory\n\n" + memoryContext
 }
 
 func buildCurrentSessionBlock(channel, chatID string) string {
@@ -425,7 +420,7 @@ func buildToolSchemaBreakdown(defs []providers.ToolDefinition) PromptToolSchemaR
 	}
 }
 
-func buildJoinSeparatorChars(identity string, hasBootstrap bool, hasSkills bool, hasMemory bool) int {
+func buildJoinSeparatorChars(identity string, hasBootstrap bool, hasSkills bool, hasMemory bool, hasDynamic bool) int {
 	parts := 0
 	if identity != "" {
 		parts++
@@ -437,6 +432,9 @@ func buildJoinSeparatorChars(identity string, hasBootstrap bool, hasSkills bool,
 		parts++
 	}
 	if hasMemory {
+		parts++
+	}
+	if hasDynamic {
 		parts++
 	}
 	if parts <= 1 {

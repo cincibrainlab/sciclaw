@@ -111,6 +111,11 @@ func TestInspectPromptBuildsBucketedReport(t *testing.T) {
 	if report.Payload.MessagesJSONChars == 0 || report.Payload.ToolSchemasJSONChars == 0 {
 		t.Fatalf("expected non-zero payload measurements: %#v", report.Payload)
 	}
+	accounted := report.SystemPrompt.IdentityChars + report.SystemPrompt.BootstrapTotalChars + report.SystemPrompt.SkillsChars +
+		report.SystemPrompt.MemoryChars + report.SystemPrompt.SessionBlockChars + report.SystemPrompt.SummaryChars + report.SystemPrompt.JoinSeparatorChars
+	if accounted != report.SystemPrompt.TotalChars {
+		t.Fatalf("system prompt accounting = %d, want total %d", accounted, report.SystemPrompt.TotalChars)
+	}
 }
 
 func TestInspectPromptMarksCompactedToolHistory(t *testing.T) {

@@ -5,7 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -16,6 +18,7 @@ import (
 )
 
 type ContextBuilder struct {
+	mu                         sync.RWMutex
 	workspace                  string
 	sharedWorkspace            string
 	version                    string
@@ -32,13 +35,45 @@ type ContextBuilder struct {
 	senderID    string
 	senderName  string
 	answerTheme string
+
+	staticPrompt         string
+	staticPromptSnapshot promptSnapshot
+	staticPromptCached   bool
+	staticPromptBuiltAt  time.Time
 }
 
-// SetSenderContext sets per-turn sender identity and answer theme.
-// Call this before BuildMessages on each turn.
+const staticPromptRefreshInterval = time.Second
+
+type promptFileMetadata struct {
+	path    string
+	exists  bool
+	size    int64
+	modTime int64
+}
+
+type promptSnapshot struct {
+	files                      []promptFileMetadata
+	version                    string
+	includePromptToolSummaries bool
+	hostedToolNotes            []string
+	toolSummaries              []string
+}
+
+// SetSenderContext sets sender identity and answer theme for BuildMessages.
+// Deprecated: use BuildMessagesForSender to keep per-turn values isolated.
 func (cb *ContextBuilder) SetSenderContext(senderID, displayName, theme string) {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	cb.setSenderContextLocked(senderID, displayName, theme)
+}
+
+func (cb *ContextBuilder) setSenderContextLocked(senderID, displayName, theme string) {
 	cb.senderID = senderID
-	// Sanitize display name: single line, bounded length, no control chars
+	cb.senderName = sanitizeSenderName(displayName)
+	cb.answerTheme = theme
+}
+
+func sanitizeSenderName(displayName string) string {
 	name := strings.Map(func(r rune) rune {
 		if r == '\n' || r == '\r' || r < 32 {
 			return ' '
@@ -48,8 +83,7 @@ func (cb *ContextBuilder) SetSenderContext(senderID, displayName, theme string) 
 	if len(name) > 64 {
 		name = name[:64]
 	}
-	cb.senderName = name
-	cb.answerTheme = theme
+	return name
 }
 
 func getGlobalConfigDir() string {
@@ -136,12 +170,17 @@ func NewContextBuilder(workspace string, sharedWorkspace ...string) *ContextBuil
 
 // SetToolsRegistry sets the tools registry for dynamic tool summary generation.
 func (cb *ContextBuilder) SetToolsRegistry(registry *tools.ToolRegistry) {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
 	cb.tools = registry
+	cb.staticPromptCached = false
 }
 
 // SetHostedToolNotes records provider-hosted tools that are not in the local
 // ToolRegistry but are available on the current provider path.
 func (cb *ContextBuilder) SetHostedToolNotes(notes ...string) {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
 	cb.hostedToolNotes = nil
 	for _, note := range notes {
 		note = strings.TrimSpace(note)
@@ -150,29 +189,40 @@ func (cb *ContextBuilder) SetHostedToolNotes(notes ...string) {
 		}
 		cb.hostedToolNotes = append(cb.hostedToolNotes, note)
 	}
+	cb.staticPromptCached = false
 }
 
 // SetIncludePromptToolSummaries controls whether human-readable tool summaries
 // are embedded into the system prompt. When the provider already receives native
 // tool schemas, duplicating the tool list in prose wastes prompt tokens.
 func (cb *ContextBuilder) SetIncludePromptToolSummaries(include bool) {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
 	cb.includePromptToolSummaries = include
+	cb.staticPromptCached = false
 }
 
 // SetVersion sets the runtime version for inclusion in the system prompt.
 func (cb *ContextBuilder) SetVersion(v string) {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
 	cb.version = v
+	cb.staticPromptCached = false
 }
 
-func (cb *ContextBuilder) getIdentity() string {
-	now := time.Now().Format("2006-01-02 15:04 (Monday)")
+func (cb *ContextBuilder) getStaticIdentity() string {
+	cb.mu.RLock()
+	defer cb.mu.RUnlock()
+	snapshot := cb.promptSnapshotLocked()
+	return cb.buildStaticIdentity(snapshot)
+}
+
+func (cb *ContextBuilder) buildStaticIdentity(snapshot promptSnapshot) string {
 	workspacePath, _ := filepath.Abs(filepath.Join(cb.workspace))
 	runtime := fmt.Sprintf("%s %s, Go %s", runtime.GOOS, runtime.GOARCH, runtime.Version())
+	toolsSection := buildToolsSection(snapshot.toolSummaries, snapshot.hostedToolNotes)
 
-	// Build tools section dynamically
-	toolsSection := cb.buildToolsSection()
-
-	versionStr := cb.version
+	versionStr := snapshot.version
 	if versionStr == "" {
 		versionStr = "dev"
 	}
@@ -180,9 +230,6 @@ func (cb *ContextBuilder) getIdentity() string {
 	return fmt.Sprintf(`# sciClaw v%s
 
 You are sciClaw v%s, an autonomous paired-scientist execution assistant.
-
-## Current Time
-%s
 
 ## Runtime
 %s
@@ -207,15 +254,11 @@ Your workspace is at: %s
 4. **Reproducibility** - Prefer idempotent actions and report assumptions/uncertainty.
 
 5. **PubMed-first verification** - For citation checks, PMID lookup, and PubMed literature verification, start with the dedicated `+"`pubmed_search`"+` and `+"`pubmed_fetch`"+` tools. Use raw `+"`exec`"+` with the installed `+"`pubmed`"+` CLI only for advanced PubMed flags not covered by the typed tools. Do not start with `+"`web_fetch`"+` on PubMed or publisher pages when the task is bibliographic verification.`,
-		versionStr, versionStr, now, runtime, workspacePath, workspacePath, workspacePath, toolsSection, workspacePath, workspacePath, workspacePath)
+		versionStr, versionStr, runtime, workspacePath, workspacePath, workspacePath, toolsSection, workspacePath, workspacePath, workspacePath)
 }
 
-func (cb *ContextBuilder) buildToolsSection() string {
-	localSummaries := []string(nil)
-	if cb.includePromptToolSummaries && cb.tools != nil {
-		localSummaries = cb.tools.GetSummaries()
-	}
-	if len(localSummaries) == 0 && len(cb.hostedToolNotes) == 0 {
+func buildToolsSection(localSummaries, hostedToolNotes []string) string {
+	if len(localSummaries) == 0 && len(hostedToolNotes) == 0 {
 		return ""
 	}
 
@@ -229,12 +272,12 @@ func (cb *ContextBuilder) buildToolsSection() string {
 			sb.WriteString("\n")
 		}
 	}
-	if len(cb.hostedToolNotes) > 0 {
+	if len(hostedToolNotes) > 0 {
 		if len(localSummaries) > 0 {
 			sb.WriteString("\n")
 		}
 		sb.WriteString("### Provider-hosted tools\n\n")
-		for _, note := range cb.hostedToolNotes {
+		for _, note := range hostedToolNotes {
 			sb.WriteString("- ")
 			sb.WriteString(note)
 			sb.WriteString("\n")
@@ -245,26 +288,70 @@ func (cb *ContextBuilder) buildToolsSection() string {
 }
 
 func (cb *ContextBuilder) BuildSystemPrompt() string {
-	parts := []string{}
+	cb.mu.RLock()
+	senderName := cb.senderName
+	answerTheme := cb.answerTheme
+	cb.mu.RUnlock()
+	return cb.buildSystemPrompt(senderName, answerTheme)
+}
 
-	// Core identity section
-	parts = append(parts, cb.getIdentity())
+func (cb *ContextBuilder) buildSystemPrompt(senderName, answerTheme string) string {
+	staticPrompt := cb.getStaticPrompt()
+	dynamicParts := []string{currentTimeSection()}
+	if answerTheme != "" {
+		userSection := "## Active User\n"
+		if senderName != "" {
+			userSection += fmt.Sprintf("Name: %s\n", senderName)
+		}
+		userSection += fmt.Sprintf("Answer Theme: %s\n\nIMPORTANT: Follow the %s theme rules from the Answer Themes section above.",
+			answerTheme, answerTheme)
+		dynamicParts = append(dynamicParts, userSection)
+	}
+	return staticPrompt + "\n\n---\n\n" + strings.Join(dynamicParts, "\n\n---\n\n")
+}
+
+func (cb *ContextBuilder) getStaticPrompt() string {
+	now := time.Now()
+	cb.mu.RLock()
+	if cb.staticPromptCached && now.Sub(cb.staticPromptBuiltAt) < staticPromptRefreshInterval {
+		snapshot := cb.promptSnapshotLocked()
+		if promptSnapshotsEqual(cb.staticPromptSnapshot, snapshot) {
+			prompt := cb.staticPrompt
+			cb.mu.RUnlock()
+			return prompt
+		}
+	}
+	cb.mu.RUnlock()
+
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	now = time.Now()
+	if cb.staticPromptCached && now.Sub(cb.staticPromptBuiltAt) < staticPromptRefreshInterval {
+		snapshot := cb.promptSnapshotLocked()
+		if promptSnapshotsEqual(cb.staticPromptSnapshot, snapshot) {
+			return cb.staticPrompt
+		}
+	}
+	snapshot := cb.promptSnapshotLocked()
+	cb.staticPrompt = cb.buildStaticPromptLocked(snapshot)
+	cb.staticPromptSnapshot = snapshot
+	cb.staticPromptCached = true
+	cb.staticPromptBuiltAt = now
+	return cb.staticPrompt
+}
+
+func currentTimeSection() string {
+	return "## Current Time\n" + time.Now().Format("2006-01-02 15:04 (Monday)")
+}
+
+func (cb *ContextBuilder) buildStaticPromptLocked(snapshot promptSnapshot) string {
+	parts := []string{}
+	parts = append(parts, cb.buildStaticIdentity(snapshot))
 
 	// Bootstrap files
 	bootstrapContent := cb.LoadBootstrapFiles()
 	if bootstrapContent != "" {
 		parts = append(parts, bootstrapContent)
-	}
-
-	// Active user profile (injected after bootstrap so theme definitions are in context)
-	if cb.answerTheme != "" {
-		userSection := "## Active User\n"
-		if cb.senderName != "" {
-			userSection += fmt.Sprintf("Name: %s\n", cb.senderName)
-		}
-		userSection += fmt.Sprintf("Answer Theme: %s\n\nIMPORTANT: Follow the %s theme rules from the Answer Themes section above.",
-			cb.answerTheme, cb.answerTheme)
-		parts = append(parts, userSection)
 	}
 
 	// Skills - show summary, AI can read full content with read_file tool
@@ -285,6 +372,91 @@ The following skills extend your capabilities. To use a skill, read its SKILL.md
 
 	// Join with "---" separator
 	return strings.Join(parts, "\n\n---\n\n")
+}
+
+func (cb *ContextBuilder) promptSnapshotLocked() promptSnapshot {
+	snapshot := promptSnapshot{
+		version:                    cb.version,
+		includePromptToolSummaries: cb.includePromptToolSummaries,
+		hostedToolNotes:            append([]string(nil), cb.hostedToolNotes...),
+	}
+	if cb.includePromptToolSummaries && cb.tools != nil {
+		snapshot.toolSummaries = cb.tools.GetSummaries()
+	}
+
+	primaryWorkspace := filepath.Clean(cb.workspace)
+	fallbackWorkspace := filepath.Clean(cb.sharedWorkspace)
+	for _, filename := range []string{"AGENTS.md", "SOUL.md", "USER.md", "IDENTITY.md", "TOOLS.md"} {
+		snapshot.files = append(snapshot.files, statPromptFile(filepath.Join(primaryWorkspace, filename)))
+		if fallbackWorkspace != "" && fallbackWorkspace != "." && fallbackWorkspace != primaryWorkspace {
+			snapshot.files = append(snapshot.files, statPromptFile(filepath.Join(fallbackWorkspace, filename)))
+		}
+	}
+	snapshot.files = append(snapshot.files, statPromptFile(cb.memory.memoryFile))
+	for _, dailyFile := range cb.memory.recentDailyFiles(3) {
+		snapshot.files = append(snapshot.files, statPromptFile(dailyFile))
+	}
+	for _, root := range cb.skillsLoader.Roots() {
+		root = strings.TrimSpace(root)
+		if root == "" {
+			continue
+		}
+		snapshot.files = append(snapshot.files, statPromptFile(root))
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				snapshot.files = append(snapshot.files, statPromptFile(filepath.Join(root, entry.Name(), "SKILL.md")))
+			}
+		}
+	}
+	sort.Slice(snapshot.files, func(i, j int) bool { return snapshot.files[i].path < snapshot.files[j].path })
+	return snapshot
+}
+
+func statPromptFile(path string) promptFileMetadata {
+	metadata := promptFileMetadata{path: filepath.Clean(path)}
+	info, err := os.Stat(path)
+	if err == nil {
+		metadata.exists = true
+		metadata.size = info.Size()
+		metadata.modTime = info.ModTime().UnixNano()
+	}
+	return metadata
+}
+
+func promptSnapshotsEqual(left, right promptSnapshot) bool {
+	if left.version != right.version || left.includePromptToolSummaries != right.includePromptToolSummaries ||
+		!stringSlicesEqual(left.hostedToolNotes, right.hostedToolNotes) ||
+		!stringSlicesEqual(left.toolSummaries, right.toolSummaries) || len(left.files) != len(right.files) {
+		return false
+	}
+	for i := range left.files {
+		if left.files[i] != right.files[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func stringSlicesEqual(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func (cb *ContextBuilder) invalidateStaticPrompt() {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	cb.staticPromptCached = false
 }
 
 func (cb *ContextBuilder) LoadBootstrapFiles() string {
@@ -318,9 +490,22 @@ func (cb *ContextBuilder) LoadBootstrapFiles() string {
 }
 
 func (cb *ContextBuilder) BuildMessages(history []providers.Message, summary string, currentMessage string, media []string, channel, chatID string) []providers.Message {
+	cb.mu.RLock()
+	senderName := cb.senderName
+	answerTheme := cb.answerTheme
+	cb.mu.RUnlock()
+	return cb.buildMessages(history, summary, currentMessage, media, channel, chatID, senderName, answerTheme)
+}
+
+// BuildMessagesForSender builds messages with isolated per-turn sender values.
+func (cb *ContextBuilder) BuildMessagesForSender(history []providers.Message, summary string, currentMessage string, media []string, channel, chatID, senderID, displayName, theme string) []providers.Message {
+	return cb.buildMessages(history, summary, currentMessage, media, channel, chatID, sanitizeSenderName(displayName), theme)
+}
+
+func (cb *ContextBuilder) buildMessages(history []providers.Message, summary string, currentMessage string, media []string, channel, chatID, senderName, answerTheme string) []providers.Message {
 	messages := []providers.Message{}
 
-	systemPrompt := cb.BuildSystemPrompt()
+	systemPrompt := cb.buildSystemPrompt(senderName, answerTheme)
 
 	// Add Current Session info if provided
 	if channel != "" && chatID != "" {
