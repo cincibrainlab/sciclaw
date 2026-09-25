@@ -75,6 +75,7 @@ auth.json
 
 # Local agent scratch
 .agent/
+output/correspondences/
 .agents/*
 !.agents/skills/
 .agents/skills/*
