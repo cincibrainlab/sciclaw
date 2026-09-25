@@ -1291,6 +1291,9 @@ func agentCmd() {
 	provider, err := providers.CreateProvider(cfg)
 	if err != nil {
 		fmt.Printf("Error creating provider: %v\n", err)
+		if logger.Shutdown() != nil {
+			os.Exit(1)
+		}
 		os.Exit(1)
 	}
 
@@ -1529,6 +1532,7 @@ func gatewayCmd() {
 	provider, err := providers.CreateProvider(cfg)
 	if err != nil {
 		fmt.Printf("Error creating provider: %v\n", err)
+		_ = logger.Shutdown()
 		os.Exit(1)
 	}
 
@@ -1672,6 +1676,9 @@ func gatewayCmd() {
 	channelManager, err := channels.NewManager(cfg, msgBus)
 	if err != nil {
 		fmt.Printf("Error creating channel manager: %v\n", err)
+		if logger.Shutdown() != nil {
+			os.Exit(1)
+		}
 		os.Exit(1)
 	}
 
@@ -1800,6 +1807,9 @@ func gatewayCmd() {
 		resolver, err := routing.NewResolver(cfg)
 		if err != nil {
 			fmt.Printf("Error initializing routing: %v\n", err)
+			if logger.Shutdown() != nil {
+				os.Exit(1)
+			}
 			os.Exit(1)
 		}
 		// Build a setup function that wires channel_history and profile store for each routed agent loop.
@@ -1860,7 +1870,8 @@ func gatewayCmd() {
 	}
 
 	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigChan)
 	<-sigChan
 
 	fmt.Println("\nShutting down...")
@@ -1897,7 +1908,10 @@ func gatewayCmd() {
 		stopCancel()
 	}
 	_ = os.Remove(gatewayStatusPath)
-	logger.DisableFileLogging()
+	if err := logger.Shutdown(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error flushing logs during shutdown: %v\n", err)
+		os.Exit(1)
+	}
 	fmt.Println("✓ Gateway stopped")
 }
 

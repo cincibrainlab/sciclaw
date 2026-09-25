@@ -613,7 +613,7 @@ func TestProcessDirect_LocalModeEmitsRuntimeSummaryLog(t *testing.T) {
 	if err := logger.EnableFileLogging(logPath); err != nil {
 		t.Fatalf("EnableFileLogging() error = %v", err)
 	}
-	defer logger.DisableFileLogging()
+	t.Cleanup(logger.DisableFileLogging)
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -639,6 +639,7 @@ func TestProcessDirect_LocalModeEmitsRuntimeSummaryLog(t *testing.T) {
 	if _, err := al.ProcessDirect(context.Background(), "hello local mode", "local-runtime-test"); err != nil {
 		t.Fatalf("ProcessDirect() error = %v", err)
 	}
+	logger.DisableFileLogging()
 
 	data, err := os.ReadFile(logPath)
 	if err != nil {
