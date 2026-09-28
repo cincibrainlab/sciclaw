@@ -762,7 +762,7 @@ func TestHandleInboundHidesProviderDiagnosticsButLogsThem(t *testing.T) {
 			continue
 		}
 		if entry.Fields["error_reference"] == outbound.Error.ReferenceID && strings.Contains(entry.Fields["error"].(string), rawCanary) {
-			if entry.Fields["error_kind"] != "rate_limited" || entry.Fields["provider"] != "HTTP" || entry.Fields["model"] == "" || entry.Fields["attempt"] != float64(1) || entry.Fields["final"] != true {
+			if entry.Fields["error_kind"] != "rate_limited" || entry.Fields["provider"] != "HTTP" || entry.Fields["model"] == "" || entry.Fields["attempt"] != float64(2) || entry.Fields["final"] != true {
 				t.Fatalf("missing stable failure fields: %#v", entry.Fields)
 			}
 			if entry.Fields["llm_call_id"] != entry.Fields["turn_id"].(string)+":1" || entry.Fields["status_code"] != float64(http.StatusTooManyRequests) || entry.Fields["provider_code"] != "rate_limit" || entry.Fields["provider_request_id"] != "req-agent-inbound" {
