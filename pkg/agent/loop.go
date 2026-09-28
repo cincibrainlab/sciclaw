@@ -1460,7 +1460,26 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 				"messages_count": len(messages),
 				"tools_count":    len(providerToolDefs),
 			})
-		response, err := al.provider.Chat(ctx, messages, providerToolDefs, al.model, llmOpts)
+		response, attempts, recoveredFrom, err := providers.RetryChat(ctx, al.provider, messages, providerToolDefs, al.model, llmOpts, func(attempt providers.RetryAttempt) {
+			if attempt.Final {
+				return
+			}
+			logger.WarnCF("agent", "LLM call attempt failed", map[string]interface{}{
+				"turn_id":             opts.TurnID,
+				"llm_call_id":         llmCallID,
+				"attempt":             attempt.Number,
+				"final":               false,
+				"error_kind":          string(attempt.Info.Kind),
+				"provider":            attempt.Info.Provider,
+				"model":               al.model,
+				"status_code":         attempt.Info.StatusCode,
+				"provider_code":       attempt.Info.ProviderCode,
+				"provider_request_id": attempt.Info.RequestID,
+				"retry_after_ms":      attempt.Info.RetryAfter.Milliseconds(),
+				"recovery_action":     string(attempt.Decision.Action),
+				"error":               attempt.Err.Error(),
+			})
+		})
 
 		if err != nil {
 			referenceID := "ERR-" + strings.TrimPrefix(opts.TurnID, "turn-")
@@ -1473,7 +1492,7 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 					"iteration":           iteration,
 					"turn_id":             opts.TurnID,
 					"llm_call_id":         llmCallID,
-					"attempt":             1,
+					"attempt":             attempts,
 					"final":               true,
 					"error_kind":          string(info.Kind),
 					"provider":            info.Provider,
@@ -1495,6 +1514,17 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 		if localDiag != nil {
 			localDiag.recordLLMResponse(time.Since(llmCallStartedAt), response)
 		}
+		if recoveredFrom != nil {
+			logger.InfoCF("agent", "LLM call recovered", map[string]interface{}{
+				"turn_id":             opts.TurnID,
+				"llm_call_id":         llmCallID,
+				"attempts":            attempts,
+				"recovered_from_kind": string(recoveredFrom.Kind),
+				"provider":            recoveredFrom.Provider,
+				"model":               al.model,
+				"duration_ms":         time.Since(llmCallStartedAt).Milliseconds(),
+			})
+		}
 		usage.add(response.Usage)
 		if len(response.Media) > 0 {
 			saved := al.persistProviderMedia(response.Media)
@@ -1505,7 +1535,7 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 		llmCompleteFields := map[string]interface{}{
 			"turn_id":          opts.TurnID,
 			"llm_call_id":      llmCallID,
-			"attempt":          1,
+			"attempt":          attempts,
 			"final":            true,
 			"iteration":        iteration,
 			"duration":         time.Since(llmCallStartedAt).String(),
@@ -2347,10 +2377,10 @@ func (al *AgentLoop) summarizeSession(sessionKey string) {
 
 		// Merge them
 		mergePrompt := fmt.Sprintf("Merge these two conversation summaries into one cohesive summary:\n\n1: %s\n\n2: %s", s1, s2)
-		resp, err := al.provider.Chat(ctx, []providers.Message{{Role: "user", Content: mergePrompt}}, nil, al.model, map[string]interface{}{
+		resp, _, _, err := providers.RetryChat(ctx, al.provider, []providers.Message{{Role: "user", Content: mergePrompt}}, nil, al.model, map[string]interface{}{
 			"max_tokens":  1024,
 			"temperature": 0.3,
-		})
+		}, nil)
 		if err == nil {
 			finalSummary = resp.Content
 		} else {
@@ -2698,10 +2728,10 @@ func (al *AgentLoop) summarizeBatch(ctx context.Context, batch []providers.Messa
 		prompt += fmt.Sprintf("%s: %s\n", m.Role, m.Content)
 	}
 
-	response, err := al.provider.Chat(ctx, []providers.Message{{Role: "user", Content: prompt}}, nil, al.model, map[string]interface{}{
+	response, _, _, err := providers.RetryChat(ctx, al.provider, []providers.Message{{Role: "user", Content: prompt}}, nil, al.model, map[string]interface{}{
 		"max_tokens":  1024,
 		"temperature": 0.3,
-	})
+	}, nil)
 	if err != nil {
 		return "", err
 	}
