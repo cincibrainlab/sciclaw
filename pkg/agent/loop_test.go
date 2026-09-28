@@ -16,6 +16,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/archive/discordarchive"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/hooks"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/tools"
@@ -38,6 +39,36 @@ func (m *mockProvider) GetDefaultModel() string {
 type diagnosticMockProvider struct {
 	response    string
 	diagnostics *providers.ResponseDiagnostics
+}
+
+type captureHookHandler struct {
+	contexts map[hooks.Event]hooks.Context
+}
+
+func (h *captureHookHandler) Name() string { return "capture" }
+
+func (h *captureHookHandler) Handle(_ context.Context, event hooks.Event, data hooks.Context) hooks.Result {
+	h.contexts[event] = data
+	return hooks.Result{}
+}
+
+func TestLLMHooksShareLogicalCallID(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{})
+	defer al.Stop()
+	handler := &captureHookHandler{contexts: make(map[hooks.Event]hooks.Context)}
+	al.hooks.Register(hooks.EventBeforeLLM, handler)
+	al.hooks.Register(hooks.EventAfterLLM, handler)
+
+	if _, err := al.ProcessDirect(context.Background(), "hello", "hook-call-id"); err != nil {
+		t.Fatalf("ProcessDirect() error = %v", err)
+	}
+	before := handler.contexts[hooks.EventBeforeLLM].Metadata["llm_call_id"]
+	after := handler.contexts[hooks.EventAfterLLM].Metadata["llm_call_id"]
+	if before == "" || before != after {
+		t.Fatalf("before=%v after=%v", before, after)
+	}
 }
 
 func (m *diagnosticMockProvider) Chat(ctx context.Context, messages []providers.Message, tools []providers.ToolDefinition, model string, opts map[string]interface{}) (*providers.LLMResponse, error) {
@@ -731,6 +762,12 @@ func TestHandleInboundHidesProviderDiagnosticsButLogsThem(t *testing.T) {
 			continue
 		}
 		if entry.Fields["error_reference"] == outbound.Error.ReferenceID && strings.Contains(entry.Fields["error"].(string), rawCanary) {
+			if entry.Fields["error_kind"] != "rate_limited" || entry.Fields["provider"] != "HTTP" || entry.Fields["model"] == "" || entry.Fields["attempt"] != float64(1) || entry.Fields["final"] != true {
+				t.Fatalf("missing stable failure fields: %#v", entry.Fields)
+			}
+			if entry.Fields["llm_call_id"] != entry.Fields["turn_id"].(string)+":1" || entry.Fields["status_code"] != float64(http.StatusTooManyRequests) || entry.Fields["provider_code"] != "rate_limit" || entry.Fields["provider_request_id"] != "req-agent-inbound" {
+				t.Fatalf("incorrect failure facts: %#v", entry.Fields)
+			}
 			found = true
 			break
 		}

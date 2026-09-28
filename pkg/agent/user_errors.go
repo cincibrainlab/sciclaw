@@ -13,13 +13,14 @@ type providerFailureError struct {
 	cause    error
 	outbound bus.OutboundError
 	message  string
+	info     providers.ProviderErrorInfo
 }
 
 func (e *providerFailureError) Error() string { return e.cause.Error() }
 func (e *providerFailureError) Unwrap() error { return e.cause }
 
-func newProviderFailureError(cause error, referenceID string) error {
-	message, details := classifyProviderFailure(cause)
+func newProviderFailureError(cause error, referenceID string, info providers.ProviderErrorInfo) error {
+	message, details := providerFailurePresentation(info)
 	return &providerFailureError{
 		cause:   cause,
 		message: message + "\n\nReference ID: `" + referenceID + "`",
@@ -27,6 +28,7 @@ func newProviderFailureError(cause error, referenceID string) error {
 			TechnicalDetails: details,
 			ReferenceID:      referenceID,
 		},
+		info: info,
 	}
 }
 
@@ -43,45 +45,33 @@ func UserError(err error) (string, *bus.OutboundError, bool) {
 	return "", nil, false
 }
 
-func classifyProviderFailure(err error) (string, string) {
-	var apiErr *providers.APIError
-	status, code := 0, ""
-	if errors.As(err, &apiErr) {
-		status, code = apiErr.StatusCode, strings.ToLower(apiErr.Code)
-	}
-	lower := strings.ToLower(err.Error())
+func providerFailurePresentation(info providers.ProviderErrorInfo) (string, string) {
 	message, detail := "The AI service could not complete this request. Please try again, then contact an administrator if it continues.", "The provider did not return a recognized error category."
-	switch {
-	case status == 401 || status == 403 || containsAny(lower, "invalid api key", "invalid bearer token", "unauthorized", "authentication"):
+	switch info.Kind {
+	case providers.ProviderErrorKindAuthentication, providers.ProviderErrorKindPermission:
 		message, detail = "The AI service needs administrator attention before it can respond.", "Authentication or account access was rejected."
-	case containsAny(code, "insufficient_quota", "billing", "quota") || containsAny(lower, "insufficient quota", "billing", "quota exceeded", "token usage"):
+	case providers.ProviderErrorKindQuota:
 		message, detail = "The AI service has reached its usage limit. Please contact an administrator.", "The provider rejected the request because of an account usage limit."
-	case status == 429 || containsAny(lower, "rate limit", "rate_limit"):
+	case providers.ProviderErrorKindRateLimited:
 		message, detail = "The AI service is busy. Please wait a moment and try again.", "The provider rate-limited this request."
-	case containsAny(code, "context_length", "context_window", "max_context", "too_many_tokens") || containsAny(lower, "context length", "maximum context", "too many tokens"):
+	case providers.ProviderErrorKindContextLimit:
 		message, detail = "This conversation is too long for the selected AI model. Start a new conversation or shorten your request.", "The provider rejected the request because it exceeds the model context limit."
-	case status == 400 && isModelNotFound(code, lower) || status == 404 && isModelNotFound(code, lower):
+	case providers.ProviderErrorKindModelUnavailable:
 		message, detail = "The selected AI model is not available. Choose another model or contact an administrator.", "The provider rejected the selected model."
-	case status >= 500 || containsAny(lower, "timeout", "deadline exceeded", "temporarily unavailable"):
+	case providers.ProviderErrorKindTimeout, providers.ProviderErrorKindNetwork, providers.ProviderErrorKindProviderUnavailable, providers.ProviderErrorKindInvalidResponse:
 		message, detail = "The AI service is temporarily unavailable. Please try again shortly.", "The provider or network did not complete the request."
 	}
 	technical := []string{detail}
-	if status != 0 {
-		technical = append(technical, fmt.Sprintf("Status: %d", status))
+	if info.StatusCode != 0 {
+		technical = append(technical, fmt.Sprintf("Status: %d", info.StatusCode))
 	}
 	return message, strings.Join(technical, "\n")
 }
 
-func isModelNotFound(code, message string) bool {
-	return containsAny(code, "model_not_found", "model_not_available", "model_not_supported", "unknown_model") ||
-		strings.Contains(message, "model") && containsAny(message, "not found", "does not exist")
-}
-
-func containsAny(value string, candidates ...string) bool {
-	for _, candidate := range candidates {
-		if strings.Contains(value, candidate) {
-			return true
-		}
+func providerFailureInfo(err error) (providers.ProviderErrorInfo, bool) {
+	var providerErr *providerFailureError
+	if errors.As(err, &providerErr) {
+		return providerErr.info, true
 	}
-	return false
+	return providers.ProviderErrorInfo{}, false
 }
