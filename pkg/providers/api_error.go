@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 )
 
 const maxErrorResponseBytes = 64 << 10
@@ -20,6 +22,7 @@ type APIError struct {
 	Code       string
 	Message    string
 	RequestID  string
+	RetryAfter time.Duration
 	Body       string
 	cause      error
 }
@@ -41,12 +44,14 @@ func newAPIError(provider string, response *http.Response, body []byte, cause er
 	code, message := parseAPIErrorBody(body)
 	var statusCode int
 	var requestID string
+	var retryAfter time.Duration
 	if response != nil {
 		statusCode = response.StatusCode
 		requestID = response.Header.Get("x-request-id")
 		if requestID == "" {
 			requestID = response.Header.Get("request-id")
 		}
+		retryAfter = parseRetryAfter(response.Header, time.Now())
 	}
 	return &APIError{
 		Provider:   provider,
@@ -54,9 +59,27 @@ func newAPIError(provider string, response *http.Response, body []byte, cause er
 		Code:       code,
 		Message:    message,
 		RequestID:  requestID,
+		RetryAfter: retryAfter,
 		Body:       string(body),
 		cause:      cause,
 	}
+}
+
+func parseRetryAfter(header http.Header, now time.Time) time.Duration {
+	if milliseconds, err := strconv.ParseInt(strings.TrimSpace(header.Get("Retry-After-Ms")), 10, 64); err == nil && milliseconds >= 0 {
+		return time.Duration(milliseconds) * time.Millisecond
+	}
+	value := strings.TrimSpace(header.Get("Retry-After"))
+	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil {
+		if seconds >= 0 {
+			return time.Duration(seconds) * time.Second
+		}
+		return 0
+	}
+	if retryAt, err := http.ParseTime(value); err == nil && retryAt.After(now) {
+		return retryAt.Sub(now)
+	}
+	return 0
 }
 
 func readProviderResponse(response *http.Response) ([]byte, error) {
