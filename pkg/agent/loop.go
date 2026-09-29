@@ -1461,9 +1461,6 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 				"tools_count":    len(providerToolDefs),
 			})
 		response, attempts, recoveredFrom, err := providers.RetryChat(ctx, al.provider, messages, providerToolDefs, al.model, llmOpts, func(attempt providers.RetryAttempt) {
-			if attempt.Final {
-				return
-			}
 			logger.WarnCF("agent", "LLM call attempt failed", map[string]interface{}{
 				"turn_id":             opts.TurnID,
 				"llm_call_id":         llmCallID,
