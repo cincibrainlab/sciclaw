@@ -9,9 +9,8 @@ import (
 type RetryAction string
 
 const (
-	RetryActionFail       RetryAction = "fail"
-	RetryActionRetry      RetryAction = "retry"
-	RetryActionRetryAfter RetryAction = "retry_after"
+	RetryActionFail  RetryAction = "fail"
+	RetryActionRetry RetryAction = "retry"
 
 	maxProviderAttempts = 2
 	retryBaseDelay      = 250 * time.Millisecond
@@ -27,7 +26,6 @@ type RetryAttempt struct {
 	Number   int
 	Info     ProviderErrorInfo
 	Decision RetryDecision
-	Final    bool
 	Err      error
 }
 
@@ -41,7 +39,7 @@ func DecideRetry(info ProviderErrorInfo, attempt int) RetryDecision {
 			return RetryDecision{Action: RetryActionFail}
 		}
 		if info.RetryAfter > 0 {
-			return RetryDecision{Action: RetryActionRetryAfter, Delay: info.RetryAfter}
+			return RetryDecision{Action: RetryActionRetry, Delay: info.RetryAfter}
 		}
 	case ProviderErrorKindTimeout, ProviderErrorKindNetwork, ProviderErrorKindProviderUnavailable, ProviderErrorKindInvalidResponse:
 	default:
@@ -52,19 +50,18 @@ func DecideRetry(info ProviderErrorInfo, attempt int) RetryDecision {
 
 func RetryChat(ctx context.Context, provider LLMProvider, messages []Message, tools []ToolDefinition, model string, options map[string]interface{}, observe func(RetryAttempt)) (*LLMResponse, int, *ProviderErrorInfo, error) {
 	var recoveredFrom *ProviderErrorInfo
-	for attempt := 1; attempt <= maxProviderAttempts; attempt++ {
+	for attempt := 1; ; attempt++ {
 		response, err := provider.Chat(ctx, messages, tools, model, options)
 		if err == nil {
 			return response, attempt, recoveredFrom, nil
 		}
 		info := ClassifyProviderError(err)
 		decision := DecideRetry(info, attempt)
-		final := decision.Action == RetryActionFail
-		if observe != nil {
-			observe(RetryAttempt{Number: attempt, Info: info, Decision: decision, Final: final, Err: err})
-		}
-		if final {
+		if decision.Action == RetryActionFail {
 			return nil, attempt, recoveredFrom, err
+		}
+		if observe != nil {
+			observe(RetryAttempt{Number: attempt, Info: info, Decision: decision, Err: err})
 		}
 		copy := info
 		recoveredFrom = &copy
@@ -72,7 +69,6 @@ func RetryChat(ctx context.Context, provider LLMProvider, messages []Message, to
 			return nil, attempt, recoveredFrom, err
 		}
 	}
-	return nil, maxProviderAttempts, recoveredFrom, context.DeadlineExceeded
 }
 
 func waitForRetry(ctx context.Context, delay time.Duration) error {

@@ -486,9 +486,7 @@ func (s *webServer) runLiteChat(ctx context.Context, message string) (*liteChatR
 		"max_tokens":  384,
 		"temperature": 0.7,
 	}, func(attempt providers.RetryAttempt) {
-		if !attempt.Final {
-			logger.WarnCF("web", "Lightweight web chat attempt failed", map[string]interface{}{"attempt": attempt.Number, "error_kind": attempt.Info.Kind, "recovery_action": attempt.Decision.Action, "error": attempt.Err.Error()})
-		}
+		logger.WarnCF("web", "Lightweight web chat attempt failed", map[string]interface{}{"attempt": attempt.Number, "error_kind": attempt.Info.Kind, "recovery_action": attempt.Decision.Action, "error": attempt.Err.Error()})
 	})
 	if err != nil {
 		return nil, err
