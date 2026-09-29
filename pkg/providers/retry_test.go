@@ -46,7 +46,7 @@ func TestRetryChat(t *testing.T) {
 
 func TestDecideRetryHonorsBoundedRetryAfter(t *testing.T) {
 	decision := DecideRetry(ProviderErrorInfo{Kind: ProviderErrorKindRateLimited, RetryAfter: time.Second}, 1)
-	if decision.Action != RetryActionRetryAfter || decision.Delay != time.Second {
+	if decision.Action != RetryActionRetry || decision.Delay != time.Second {
 		t.Fatalf("decision=%#v", decision)
 	}
 	if decision := DecideRetry(ProviderErrorInfo{Kind: ProviderErrorKindRateLimited, RetryAfter: retryMaxDelay + time.Second}, 1); decision.Action != RetryActionFail {

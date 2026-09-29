@@ -83,9 +83,7 @@ func RunToolLoop(ctx context.Context, config ToolLoopConfig, messages []provider
 
 		// 3. Call LLM
 		response, _, _, err := providers.RetryChat(ctx, config.Provider, messages, providerToolDefs, config.Model, llmOpts, func(attempt providers.RetryAttempt) {
-			if !attempt.Final {
-				logger.WarnCF("toolloop", "LLM call attempt failed", map[string]any{"iteration": iteration, "attempt": attempt.Number, "error_kind": attempt.Info.Kind, "recovery_action": attempt.Decision.Action, "error": attempt.Err.Error()})
-			}
+			logger.WarnCF("toolloop", "LLM call attempt failed", map[string]any{"iteration": iteration, "attempt": attempt.Number, "error_kind": attempt.Info.Kind, "recovery_action": attempt.Decision.Action, "error": attempt.Err.Error()})
 		})
 		if err != nil {
 			logger.ErrorCF("toolloop", "LLM call failed",
