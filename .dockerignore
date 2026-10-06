@@ -6,9 +6,7 @@ config/
 .env
 .env.example
 *.md
-!skills/gitea-move-work-item/SKILL.md
-!skills/gitea-create-change-request/SKILL.md
-!skills/gitea-move-file-phase-0-to-1/SKILL.md
+!skills/atomic-gene-therapy/SKILL.md
 LICENSE
 assets/
 node_modules/

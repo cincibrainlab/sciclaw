@@ -482,6 +482,17 @@ func TestDiscordEnsureSlashCommandsCreatesSlashCommands(t *testing.T) {
 			if cmd.Options[1].Name != "prompt" || !cmd.Options[1].Required {
 				t.Fatalf("unexpected skill prompt option: %#v", cmd.Options[1])
 			}
+		case "atomic-gene-therapy":
+			if len(cmd.Options) != 2 {
+				t.Fatalf("unexpected atomic-gene-therapy options: %#v", cmd.Options)
+			}
+			workflow := cmd.Options[0]
+			if workflow.Name != "workflow" || !workflow.Required || len(workflow.Choices) != 8 || workflow.Choices[3].Value != "status" {
+				t.Fatalf("unexpected atomic-gene-therapy workflow option: %#v", workflow)
+			}
+			if cmd.Options[1].Name != "details" || !cmd.Options[1].Autocomplete || cmd.Options[1].Required {
+				t.Fatalf("unexpected atomic-gene-therapy details option: %#v", cmd.Options[1])
+			}
 		case "theme":
 			if len(cmd.Options) != 1 || cmd.Options[0].Name != "style" || !cmd.Options[0].Required {
 				t.Fatalf("unexpected theme command options: %#v", cmd.Options)
@@ -499,9 +510,146 @@ func TestDiscordEnsureSlashCommandsCreatesSlashCommands(t *testing.T) {
 	if err := ch.ensureSlashCommands(); err != nil {
 		t.Fatalf("ensureSlashCommands: %v", err)
 	}
-	if len(created) != 3 {
-		t.Fatalf("expected three create calls, got %d (%v)", len(created), created)
+	if len(created) != 4 {
+		t.Fatalf("expected four create calls, got %d (%v)", len(created), created)
 	}
+}
+
+func TestAtomicGeneTherapySlashTask(t *testing.T) {
+	tests := []struct {
+		workflow string
+		details  string
+	}{
+		{workflow: "setup"}, {workflow: "workspace"}, {workflow: "onboard"}, {workflow: "status", details: "all"}, {workflow: "item"}, {workflow: "evidence"}, {workflow: "attest"}, {workflow: "gate"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.workflow, func(t *testing.T) {
+			options := []*discordgo.ApplicationCommandInteractionDataOption{{Name: "workflow", Type: discordgo.ApplicationCommandOptionString, Value: tc.workflow}}
+			if tc.details != "" {
+				options = append(options, &discordgo.ApplicationCommandInteractionDataOption{Name: "details", Type: discordgo.ApplicationCommandOptionString, Value: tc.details})
+			}
+			got, err := atomicGeneTherapySlashTask(options)
+			if err != nil {
+				t.Fatalf("atomicGeneTherapySlashTask() error = %v", err)
+			}
+			if !strings.Contains(got, tc.workflow) {
+				t.Fatalf("atomicGeneTherapySlashTask() = %q, want workflow %q", got, tc.workflow)
+			}
+		})
+	}
+	if _, err := atomicGeneTherapySlashTask([]*discordgo.ApplicationCommandInteractionDataOption{{Name: "workflow", Type: discordgo.ApplicationCommandOptionString, Value: "missing"}}); err == nil {
+		t.Fatal("expected unknown workflow error")
+	}
+}
+
+func TestDiscordHandleInteractionCreateAtomicGeneTherapyStatusAll(t *testing.T) {
+	ch := newTestDiscordChannel()
+	ch.botUserID = "bot-1"
+	ch.skillCatalogFn = func(channelID, guildID, userID string) ([]SlashSkillChoice, error) {
+		return []SlashSkillChoice{{Name: "atomic-gene-therapy"}}, nil
+	}
+	var response *discordgo.InteractionResponse
+	ch.interactionRespondFn = func(interaction *discordgo.Interaction, resp *discordgo.InteractionResponse) error {
+		response = resp
+		return nil
+	}
+	ch.interactionEditFn = func(interaction *discordgo.Interaction, edit *discordgo.WebhookEdit) error { return nil }
+	interaction := &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+		ID: "ix-atomic-status", Type: discordgo.InteractionApplicationCommand, Token: "token-atomic", GuildID: "guild-1", ChannelID: "chan-1",
+		Member: &discordgo.Member{User: &discordgo.User{ID: "user-1", Username: "alice"}},
+		Data:   discordgo.ApplicationCommandInteractionData{Name: "atomic-gene-therapy", Options: []*discordgo.ApplicationCommandInteractionDataOption{{Name: "workflow", Type: discordgo.ApplicationCommandOptionString, Value: "status"}, {Name: "details", Type: discordgo.ApplicationCommandOptionString, Value: "all"}}},
+	}}
+
+	ch.handleInteractionCreate(nil, interaction)
+
+	if response == nil || response.Type != discordgo.InteractionResponseDeferredChannelMessageWithSource {
+		t.Fatalf("expected deferred response, got %#v", response)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	in, ok := ch.BaseChannel.bus.ConsumeInbound(ctx)
+	if !ok {
+		t.Fatal("expected inbound task")
+	}
+	if !strings.Contains(in.Content, `Use the skill "atomic-gene-therapy"`) || !strings.Contains(in.Content, `"status" workflow with these semicolon-separated details: all`) {
+		t.Fatalf("unexpected inbound task: %q", in.Content)
+	}
+	if in.Metadata["command_name"] != "atomic-gene-therapy" || in.Metadata["requested_skill_name"] != "atomic-gene-therapy" {
+		t.Fatalf("unexpected metadata: %#v", in.Metadata)
+	}
+}
+
+func TestDiscordHandleInteractionCreateAtomicGeneTherapyAutocomplete(t *testing.T) {
+	ch := newTestDiscordChannel()
+	var response *discordgo.InteractionResponse
+	ch.interactionRespondFn = func(interaction *discordgo.Interaction, resp *discordgo.InteractionResponse) error {
+		response = resp
+		return nil
+	}
+	interaction := &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+		Type: discordgo.InteractionApplicationCommandAutocomplete, ChannelID: "chan-1", Member: &discordgo.Member{User: &discordgo.User{ID: "user-1", Username: "alice"}},
+		Data: discordgo.ApplicationCommandInteractionData{Name: "atomic-gene-therapy", Options: []*discordgo.ApplicationCommandInteractionDataOption{{Name: "workflow", Type: discordgo.ApplicationCommandOptionString, Value: "status"}, {Name: "details", Type: discordgo.ApplicationCommandOptionString, Value: "all", Focused: true}}},
+	}}
+
+	ch.handleInteractionCreate(nil, interaction)
+
+	if response == nil || response.Type != discordgo.InteractionApplicationCommandAutocompleteResult || len(response.Data.Choices) != 1 || response.Data.Choices[0].Value != "all" {
+		t.Fatalf("unexpected autocomplete response: %#v", response)
+	}
+}
+
+func TestAutocompleteAtomicGeneTherapyDetailsReturnsAllAndAppendsValues(t *testing.T) {
+	all := autocompleteAtomicGeneTherapyDetails("gate", "")
+	if len(all) != 7 {
+		t.Fatalf("expected all gate suggestions, got %#v", all)
+	}
+	appended := autocompleteAtomicGeneTherapyDetails("gate", "Lab: Smith Lab; Ph")
+	if len(appended) != 5 || appended[0].Value != "Lab: Smith Lab; Phase: P1" {
+		t.Fatalf("unexpected appended suggestions: %#v", appended)
+	}
+}
+
+func TestDiscordHandleInteractionCreateAtomicGeneTherapyRejectsInvalidAndUnavailable(t *testing.T) {
+	t.Run("invalid action", func(t *testing.T) {
+		ch := newTestDiscordChannel()
+		var response *discordgo.InteractionResponse
+		ch.interactionRespondFn = func(interaction *discordgo.Interaction, resp *discordgo.InteractionResponse) error {
+			response = resp
+			return nil
+		}
+		interaction := &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+			Type: discordgo.InteractionApplicationCommand, ChannelID: "chan-1", Member: &discordgo.Member{User: &discordgo.User{ID: "user-1", Username: "alice"}},
+			Data: discordgo.ApplicationCommandInteractionData{Name: "atomic-gene-therapy", Options: []*discordgo.ApplicationCommandInteractionDataOption{{Name: "workflow", Type: discordgo.ApplicationCommandOptionString, Value: "missing"}}},
+		}}
+		ch.handleInteractionCreate(nil, interaction)
+		if response == nil || !strings.Contains(response.Data.Content, "not supported") {
+			t.Fatalf("expected invalid action response, got %#v", response)
+		}
+	})
+
+	t.Run("unavailable skill", func(t *testing.T) {
+		ch := newTestDiscordChannel()
+		ch.skillCatalogFn = func(channelID, guildID, userID string) ([]SlashSkillChoice, error) { return nil, nil }
+		var edited string
+		ch.interactionRespondFn = func(interaction *discordgo.Interaction, resp *discordgo.InteractionResponse) error { return nil }
+		ch.interactionEditFn = func(interaction *discordgo.Interaction, edit *discordgo.WebhookEdit) error {
+			edited = *edit.Content
+			return nil
+		}
+		interaction := &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+			Type: discordgo.InteractionApplicationCommand, ChannelID: "chan-1", Member: &discordgo.Member{User: &discordgo.User{ID: "user-1", Username: "alice"}},
+			Data: discordgo.ApplicationCommandInteractionData{Name: "atomic-gene-therapy", Options: []*discordgo.ApplicationCommandInteractionDataOption{{Name: "workflow", Type: discordgo.ApplicationCommandOptionString, Value: "status"}, {Name: "details", Type: discordgo.ApplicationCommandOptionString, Value: "all"}}},
+		}}
+		ch.handleInteractionCreate(nil, interaction)
+		if !strings.Contains(edited, "not available") {
+			t.Fatalf("expected unavailable skill response, got %q", edited)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		if _, ok := ch.BaseChannel.bus.ConsumeInbound(ctx); ok {
+			t.Fatal("unavailable skill should not publish inbound work")
+		}
+	})
 }
 
 func TestDiscordHandleInteractionCreateBTWPublishesInboundAndDefers(t *testing.T) {

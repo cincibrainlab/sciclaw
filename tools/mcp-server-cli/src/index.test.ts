@@ -17,7 +17,7 @@ test("rejects invalid arguments", () => {
   expect(() => parseCallArguments(["call", "example", "nope"])).toThrow("valid JSON");
 });
 
-test("calls an authenticated Streamable HTTP MCP tool", async () => {
+test("calls a Gitea MCP HTTP tool", async () => {
   const httpServer = createServer(async (request, response) => {
     if (request.headers.authorization !== "Bearer test-key") {
       response.writeHead(401).end();
@@ -40,8 +40,8 @@ test("calls an authenticated Streamable HTTP MCP tool", async () => {
     const address = httpServer.address();
     if (!address || typeof address === "string") throw new Error("test server has no TCP address");
     const result = await callTool("echo", { value: "connected" }, {
-      SCICLAW_MCP_URL: `http://127.0.0.1:${address.port}/mcp`,
-      SCICLAW_MCP_API_KEY: "test-key",
+      GITEA_MCP_URL: `http://127.0.0.1:${address.port}/mcp`,
+      GITEA_ACCESS_TOKEN: "test-key",
     });
     expect(result.content).toEqual([{ type: "text", text: "connected" }]);
   } finally {

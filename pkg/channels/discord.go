@@ -485,6 +485,39 @@ func buildSkillSlashCommand() *discordgo.ApplicationCommand {
 	}
 }
 
+func slashChoices(values ...string) []*discordgo.ApplicationCommandOptionChoice {
+	choices := make([]*discordgo.ApplicationCommandOptionChoice, 0, len(values))
+	for _, value := range values {
+		choices = append(choices, &discordgo.ApplicationCommandOptionChoice{Name: value, Value: value})
+	}
+	return choices
+}
+
+func slashChoice(name, description string, values ...string) *discordgo.ApplicationCommandOption {
+	return &discordgo.ApplicationCommandOption{
+		Name:        name,
+		Description: description,
+		Type:        discordgo.ApplicationCommandOptionString,
+		Required:    true,
+		Choices:     slashChoices(values...),
+	}
+}
+
+func slashText(name, description string, required bool) *discordgo.ApplicationCommandOption {
+	return &discordgo.ApplicationCommandOption{Name: name, Description: description, Type: discordgo.ApplicationCommandOptionString, Required: required}
+}
+
+func buildAtomicGeneTherapySlashCommand() *discordgo.ApplicationCommand {
+	return &discordgo.ApplicationCommand{
+		Name:        "atomic-gene-therapy",
+		Description: "Run the synthetic Genesis gene-therapy demonstration workflow",
+		Options: []*discordgo.ApplicationCommandOption{
+			slashChoice("workflow", "Workflow to run", "setup", "workspace", "onboard", "status", "item", "evidence", "attest", "gate"),
+			{Name: "details", Description: "Semicolon-separated workflow values", Type: discordgo.ApplicationCommandOptionString, Autocomplete: true},
+		},
+	}
+}
+
 func buildThemeSlashCommand() *discordgo.ApplicationCommand {
 	return &discordgo.ApplicationCommand{
 		Name:        "theme",
@@ -523,6 +556,15 @@ func slashOptionString(options []*discordgo.ApplicationCommandInteractionDataOpt
 		return strings.TrimSpace(opt.StringValue())
 	}
 	return ""
+}
+
+func slashOptionBool(options []*discordgo.ApplicationCommandInteractionDataOption, name string) (bool, bool) {
+	for _, opt := range options {
+		if opt != nil && opt.Name == name && opt.Type == discordgo.ApplicationCommandOptionBoolean {
+			return opt.BoolValue(), true
+		}
+	}
+	return false, false
 }
 
 func focusedSlashOptionString(options []*discordgo.ApplicationCommandInteractionDataOption, name string) string {
@@ -610,6 +652,41 @@ func autocompleteSkillChoices(all []SlashSkillChoice, query string) []*discordgo
 	return choices
 }
 
+func autocompleteAtomicGeneTherapyDetails(workflow, query string) []*discordgo.ApplicationCommandOptionChoice {
+	suggestions := map[string][]string{
+		"setup":     {"division"},
+		"workspace": {"create lab: smith-lab", "create lab: jones-lab"},
+		"onboard":   {"Lab: Smith Lab", "Lab: Jones Lab", "Therapy: Therapy A", "Route: intravenous; Modality: viral vector; Ex vivo: no", "Storage: cryogenic; Funding: commercial; Site REMS: required; Pathway: standard", "P1: October 15, 2026; P2: October 29, 2026; P3: November 12, 2026", "P4: November 26, 2026; P5: December 10, 2026"},
+		"status":    {"all", "therapy: therapy-a", "overdue: lab=smith-lab, therapy=therapy-a, asOf=2026-10-15", "pending: lab=smith-lab, therapy=therapy-a"},
+		"item":      {"Lab: Smith Lab", "Therapy: Therapy A", "Work item: P1-001", "Completed: yes", "Completed: no"},
+		"evidence":  {"Evidence: text", "Evidence: HTTPS link", "Lab: Smith Lab", "Therapy: Therapy A", "Work item: P1-001"},
+		"attest":    {"Lab: Smith Lab", "Therapy: Therapy A", "Work item: P1-001", "Confirmed by: PI"},
+		"gate":      {"Lab: Smith Lab", "Therapy: Therapy A", "Phase: P1", "Phase: P2", "Phase: P3", "Phase: P4", "Phase: P5"},
+	}
+	prefix, query := autocompleteDetailsPrefix(query)
+	query = strings.ToLower(query)
+	choices := make([]*discordgo.ApplicationCommandOptionChoice, 0, len(suggestions[workflow]))
+	for _, suggestion := range suggestions[workflow] {
+		if query != "" && !strings.Contains(strings.ToLower(suggestion), query) {
+			continue
+		}
+		value := prefix + suggestion
+		if len(value) > 100 {
+			continue
+		}
+		choices = append(choices, &discordgo.ApplicationCommandOptionChoice{Name: suggestion, Value: value})
+	}
+	return choices
+}
+
+func autocompleteDetailsPrefix(value string) (string, string) {
+	lastSeparator := strings.LastIndex(value, ";")
+	if lastSeparator < 0 {
+		return "", strings.TrimSpace(value)
+	}
+	return strings.TrimSpace(value[:lastSeparator+1]) + " ", strings.TrimSpace(value[lastSeparator+1:])
+}
+
 func normalizeSkillName(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
 }
@@ -626,6 +703,168 @@ func validateSlashSkill(available []SlashSkillChoice, requested string) (SlashSk
 
 func skillSlashContent(name, prompt string) string {
 	return fmt.Sprintf("Use the skill %q for this task. Read its SKILL.md first and follow it.\n\nTask:\n%s", name, prompt)
+}
+
+func nestedSlashCommand(options []*discordgo.ApplicationCommandInteractionDataOption) (string, string, []*discordgo.ApplicationCommandInteractionDataOption, error) {
+	if len(options) != 1 || options[0] == nil || options[0].Type != discordgo.ApplicationCommandOptionSubCommandGroup {
+		return "", "", nil, fmt.Errorf("choose a workflow group and action")
+	}
+	group := options[0]
+	if len(group.Options) != 1 || group.Options[0] == nil || group.Options[0].Type != discordgo.ApplicationCommandOptionSubCommand {
+		return "", "", nil, fmt.Errorf("choose a workflow action")
+	}
+	return group.Name, group.Options[0].Name, group.Options[0].Options, nil
+}
+
+func requiredAtomicOption(options []*discordgo.ApplicationCommandInteractionDataOption, name string) (string, error) {
+	value := slashOptionString(options, name)
+	if value == "" {
+		return "", fmt.Errorf("the %q option is required", name)
+	}
+	return value, nil
+}
+
+func atomicGeneTherapySlashTask(options []*discordgo.ApplicationCommandInteractionDataOption) (string, error) {
+	if workflow := slashOptionString(options, "workflow"); workflow != "" {
+		switch workflow {
+		case "setup", "workspace", "onboard", "status", "item", "evidence", "attest", "gate":
+		default:
+			return "", fmt.Errorf("the selected workflow is not supported")
+		}
+		details := slashOptionString(options, "details")
+		if details == "" {
+			return fmt.Sprintf("Run the atomic gene therapy %q workflow. Details accept multiple semicolon-separated values; ask for the workflow's remaining required inputs before making a synthetic mutation.", workflow), nil
+		}
+		return fmt.Sprintf("Run the atomic gene therapy %q workflow with these semicolon-separated details: %s. Ask for any remaining required inputs before making a synthetic mutation.", workflow, details), nil
+	}
+	group, action, values, err := nestedSlashCommand(options)
+	if err != nil {
+		return "", err
+	}
+	option := func(name string) (string, error) { return requiredAtomicOption(values, name) }
+	labTherapy := func() (string, string, error) {
+		lab, err := option("lab")
+		if err != nil {
+			return "", "", err
+		}
+		therapy, err := option("therapy-slug")
+		return lab, therapy, err
+	}
+	mutationWarning := "\n\nThe selected slash-command values authorize this synthetic mutation. Execute it through the skill's MCP workflow and report the result."
+	switch group + "/" + action {
+	case "setup/division":
+		return "Set up or verify the fixed synthetic Genesis demo division." + mutationWarning, nil
+	case "workspace/create":
+		lab, err := option("lab")
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Create the fixed private PI workspace for lab %q.", lab) + mutationWarning, nil
+	case "onboard/therapy":
+		keys := []string{"lab", "therapy-slug", "therapy-name", "route", "modality", "ex-vivo", "storage", "funding", "site-rems", "pathway", "p1-date", "p2-date", "p3-date", "p4-date", "p5-date"}
+		arguments := make([]string, 0, len(keys))
+		for _, key := range keys {
+			value, err := option(key)
+			if err != nil {
+				return "", err
+			}
+			arguments = append(arguments, fmt.Sprintf("%s=%q", key, value))
+		}
+		return "Create synthetic therapy onboarding with " + strings.Join(arguments, ", ") + "." + mutationWarning, nil
+	case "item/update":
+		lab, therapy, err := labTherapy()
+		if err != nil {
+			return "", err
+		}
+		item, err := option("item-id")
+		if err != nil {
+			return "", err
+		}
+		completed, ok := slashOptionBool(values, "completed")
+		if !ok {
+			return "", fmt.Errorf("the \"completed\" option is required")
+		}
+		return fmt.Sprintf("Update fixed work item %q for lab %q and therapy %q: completed=%t.", item, lab, therapy, completed) + mutationWarning, nil
+	case "evidence/text", "evidence/link":
+		lab, therapy, err := labTherapy()
+		if err != nil {
+			return "", err
+		}
+		item, err := option("item-id")
+		if err != nil {
+			return "", err
+		}
+		field := "content"
+		if action == "link" {
+			field = "url"
+		}
+		proof, err := option(field)
+		if err != nil {
+			return "", err
+		}
+		matches, ok := slashOptionBool(values, "matches")
+		if !ok {
+			return "", fmt.Errorf("the \"matches\" option is required")
+		}
+		confirmedBy, err := option("confirmed-by")
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("For lab %q, therapy %q, and fixed work item %q, read the item first, then record synthetic %s evidence %q, its exact required attestation, and an evidence check with matches=%t confirmed-by=%q.", lab, therapy, item, field, proof, matches, confirmedBy) + mutationWarning, nil
+	case "attest/record":
+		lab, therapy, err := labTherapy()
+		if err != nil {
+			return "", err
+		}
+		item, err := option("item-id")
+		if err != nil {
+			return "", err
+		}
+		confirmedBy, err := option("confirmed-by")
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("For lab %q, therapy %q, and fixed work item %q, read the item first and record its exact synthetic attestation with confirmed-by=%q.", lab, therapy, item, confirmedBy) + mutationWarning, nil
+	case "gate/advance":
+		lab, therapy, err := labTherapy()
+		if err != nil {
+			return "", err
+		}
+		phase, err := option("phase")
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Advance the %q gate for lab %q and therapy %q, moving each completed phase work-item file into the next phase folder.", phase, lab, therapy) + mutationWarning, nil
+	case "status/all":
+		return "/status all", nil
+	case "status/therapy":
+		therapy, err := option("therapy-slug")
+		if err != nil {
+			return "", err
+		}
+		if lab := slashOptionString(values, "lab"); lab != "" {
+			return fmt.Sprintf("Show therapy status for lab %q and therapy %q.", lab, therapy), nil
+		}
+		return "/status " + therapy, nil
+	case "status/overdue":
+		lab, therapy, err := labTherapy()
+		if err != nil {
+			return "", err
+		}
+		asOf, err := option("as-of")
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("List overdue items for lab %q and therapy %q as of %q.", lab, therapy, asOf), nil
+	case "status/pending":
+		lab, therapy, err := labTherapy()
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("List pending gate reviews for lab %q and therapy %q.", lab, therapy), nil
+	default:
+		return "", fmt.Errorf("the selected workflow action is not supported")
+	}
 }
 
 func (c *DiscordChannel) ensureSlashCommands() error {
@@ -646,7 +885,7 @@ func (c *DiscordChannel) ensureSlashCommands() error {
 		}
 		existingByName[existing.Name] = existing
 	}
-	for _, cmd := range []*discordgo.ApplicationCommand{buildBTWSlashCommand(), buildSkillSlashCommand(), buildThemeSlashCommand()} {
+	for _, cmd := range []*discordgo.ApplicationCommand{buildBTWSlashCommand(), buildSkillSlashCommand(), buildAtomicGeneTherapySlashCommand(), buildThemeSlashCommand()} {
 		existing := existingByName[cmd.Name]
 		if existing == nil {
 			if _, err := c.createCommandFn(c.botUserID, "", cmd); err != nil {
@@ -678,10 +917,15 @@ func (c *DiscordChannel) handleInteractionCreate(_ *discordgo.Session, i *discor
 	data := i.ApplicationCommandData()
 	switch i.Type {
 	case discordgo.InteractionApplicationCommandAutocomplete:
-		if data.Name != "skill" || c.interactionRespondFn == nil {
+		if c.interactionRespondFn == nil {
 			return
 		}
-		c.handleSkillAutocomplete(i, data)
+		switch data.Name {
+		case "skill":
+			c.handleSkillAutocomplete(i, data)
+		case "atomic-gene-therapy":
+			c.handleAtomicGeneTherapyAutocomplete(i, data)
+		}
 		return
 	case discordgo.InteractionApplicationCommand:
 	default:
@@ -696,6 +940,8 @@ func (c *DiscordChannel) handleInteractionCreate(_ *discordgo.Session, i *discor
 		c.handleBTWInteraction(i, data)
 	case "skill":
 		c.handleSkillInteraction(i, data)
+	case "atomic-gene-therapy":
+		c.handleAtomicGeneTherapyInteraction(i, data)
 	case "theme":
 		c.handleThemeInteraction(i, data)
 	}
@@ -800,15 +1046,47 @@ func (c *DiscordChannel) handleSkillAutocomplete(i *discordgo.InteractionCreate,
 	})
 }
 
+func (c *DiscordChannel) handleAtomicGeneTherapyAutocomplete(i *discordgo.InteractionCreate, data discordgo.ApplicationCommandInteractionData) {
+	author := interactionAuthor(i.Interaction)
+	if author == nil || !c.IsAllowed(author.ID) || focusedSlashOptionString(data.Options, "details") == "" && !hasFocusedSlashOption(data.Options, "details") {
+		return
+	}
+	workflow := slashOptionString(data.Options, "workflow")
+	query := focusedSlashOptionString(data.Options, "details")
+	_ = c.interactionRespondFn(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionApplicationCommandAutocompleteResult, Data: &discordgo.InteractionResponseData{Choices: autocompleteAtomicGeneTherapyDetails(workflow, query)}})
+}
+
+func hasFocusedSlashOption(options []*discordgo.ApplicationCommandInteractionDataOption, name string) bool {
+	for _, option := range options {
+		if option != nil && option.Name == name && option.Focused {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *DiscordChannel) handleSkillInteraction(i *discordgo.InteractionCreate, data discordgo.ApplicationCommandInteractionData) {
 	name := slashOptionString(data.Options, "name")
 	prompt := slashOptionString(data.Options, "prompt")
+	c.handleExplicitSkillInteraction(i, data.Name, name, prompt)
+}
+
+func (c *DiscordChannel) handleAtomicGeneTherapyInteraction(i *discordgo.InteractionCreate, data discordgo.ApplicationCommandInteractionData) {
+	prompt, err := atomicGeneTherapySlashTask(data.Options)
+	if err != nil {
+		c.respondInteractionMessage(i.Interaction, "Invalid `/atomic-gene-therapy` command: "+err.Error()+".")
+		return
+	}
+	c.handleExplicitSkillInteraction(i, data.Name, "atomic-gene-therapy", prompt)
+}
+
+func (c *DiscordChannel) handleExplicitSkillInteraction(i *discordgo.InteractionCreate, commandName, name, prompt string) {
 	if name == "" {
-		c.respondInteractionMessage(i.Interaction, "The `/skill` name is required.")
+		c.respondInteractionMessage(i.Interaction, fmt.Sprintf("The `/%s` name is required.", commandName))
 		return
 	}
 	if prompt == "" {
-		c.respondInteractionMessage(i.Interaction, "The `/skill` prompt is required.")
+		c.respondInteractionMessage(i.Interaction, fmt.Sprintf("The `/%s` prompt is required.", commandName))
 		return
 	}
 	author := interactionAuthor(i.Interaction)
@@ -820,18 +1098,18 @@ func (c *DiscordChannel) handleSkillInteraction(i *discordgo.InteractionCreate, 
 		return
 	}
 	if c.skillCatalogFn == nil {
-		c.respondInteractionMessage(i.Interaction, "The `/skill` catalog is not configured on this sciClaw instance.")
+		c.respondInteractionMessage(i.Interaction, fmt.Sprintf("The `/%s` catalog is not configured on this sciClaw instance.", commandName))
 		return
 	}
 	if err := c.deferInteraction(i.Interaction); err != nil {
-		logger.WarnCF("discord", "Failed to defer /skill interaction", map[string]any{
+		logger.WarnCF("discord", "Failed to defer explicit skill interaction", map[string]any{
 			"error": err.Error(),
 		})
 		return
 	}
 	available, err := c.skillCatalogFn(i.ChannelID, i.GuildID, author.ID)
 	if err != nil {
-		logger.WarnCF("discord", "Failed to load /skill catalog", map[string]any{
+		logger.WarnCF("discord", "Failed to load explicit skill catalog", map[string]any{
 			"error":      err.Error(),
 			"channel_id": i.ChannelID,
 			"guild_id":   i.GuildID,
@@ -845,7 +1123,7 @@ func (c *DiscordChannel) handleSkillInteraction(i *discordgo.InteractionCreate, 
 		c.editDeferredInteractionMessage(i.Interaction, fmt.Sprintf("The skill %q is not available in this channel.", name))
 		return
 	}
-	metadata := buildSlashMetadata(i.Interaction, data.Name, author)
+	metadata := buildSlashMetadata(i.Interaction, commandName, author)
 	metadata["requested_skill_name"] = selected.Name
 	c.publishSlashTask(i, author, skillSlashContent(selected.Name, prompt), metadata, fmt.Sprintf("Started. I’m using the skill %q and will reply in the channel below.", selected.Name))
 }
