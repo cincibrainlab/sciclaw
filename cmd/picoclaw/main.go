@@ -1834,7 +1834,7 @@ func gatewayCmd() {
 					LocalModel:   cfg.Agents.Defaults.LocalModel,
 					LocalPreset:  cfg.Agents.Defaults.LocalPreset,
 				},
-			})
+			}, cfg.Routing.InboundMediaURLRewrites)
 		} else {
 			go agentLoop.Run(ctx)
 		}
@@ -2840,7 +2840,7 @@ func getConfigPath() string {
 	return filepath.Join(home, ".picoclaw", "config.json")
 }
 
-func runGatewayDefaultDispatch(ctx context.Context, msgBus *bus.MessageBus, agentLoop *agent.AgentLoop, jobManager *routing.JobManager, target routing.LoopTarget) {
+func runGatewayDefaultDispatch(ctx context.Context, msgBus *bus.MessageBus, agentLoop *agent.AgentLoop, jobManager *routing.JobManager, target routing.LoopTarget, inboundMediaURLRewrites map[string]string) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -2848,6 +2848,16 @@ func runGatewayDefaultDispatch(ctx context.Context, msgBus *bus.MessageBus, agen
 		default:
 			msg, ok := msgBus.ConsumeInbound(ctx)
 			if !ok {
+				continue
+			}
+			if err := routing.PrepareInboundMedia(ctx, target.Workspace, &msg, inboundMediaURLRewrites); err != nil {
+				if !constants.IsInternalChannel(msg.Channel) {
+					_ = msgBus.PublishOutbound(ctx, bus.OutboundMessage{
+						Channel: msg.Channel,
+						ChatID:  msg.ChatID,
+						Content: fmt.Sprintf("Failed to stage inbound attachments: %v", err),
+					})
+				}
 				continue
 			}
 			if jobManager != nil && jobManager.ShouldHandleChannel(msg.Channel) {
