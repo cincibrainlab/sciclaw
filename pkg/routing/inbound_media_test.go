@@ -31,7 +31,7 @@ func TestPrepareInboundMedia_DownloadsURLIntoWorkspaceAndAnnotatesContent(t *tes
 		},
 	}
 
-	if err := prepareInboundMedia(context.Background(), workspace, msg); err != nil {
+	if err := prepareInboundMedia(context.Background(), workspace, msg, nil); err != nil {
 		t.Fatalf("prepareInboundMedia: %v", err)
 	}
 	if len(msg.Media) != 1 {
@@ -49,6 +49,37 @@ func TestPrepareInboundMedia_DownloadsURLIntoWorkspaceAndAnnotatesContent(t *tes
 	}
 	if !strings.Contains(msg.Content, ".sciclaw/inbound/discord/msg-1/report.docx") {
 		t.Fatalf("expected relative staged path in content, got %q", msg.Content)
+	}
+}
+
+func TestPrepareInboundMedia_RewritesLocalPublicURLToInternalOrigin(t *testing.T) {
+	workspace := t.TempDir()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.URL.RequestURI(), "/attachments/guild/id/report.pdf?ex=1"; got != want {
+			t.Fatalf("request URI=%q want %q", got, want)
+		}
+		_, _ = w.Write([]byte("stub pdf"))
+	}))
+	defer server.Close()
+
+	msg := &bus.InboundMessage{
+		Channel: "discord",
+		ChatID:  "chan-1",
+		Media:   []string{"http://localhost:13001/attachments/guild/id/report.pdf?ex=1"},
+		Metadata: map[string]string{
+			"message_id": "msg-local-url",
+		},
+	}
+	if err := prepareInboundMedia(
+		context.Background(),
+		workspace,
+		msg,
+		map[string]string{"http://localhost:13001": server.URL},
+	); err != nil {
+		t.Fatalf("prepareInboundMedia: %v", err)
+	}
+	if len(msg.Media) != 1 || !strings.HasPrefix(msg.Media[0], workspace) {
+		t.Fatalf("staged media=%#v", msg.Media)
 	}
 }
 
@@ -71,7 +102,7 @@ func TestPrepareInboundMedia_CopiesLocalFileIntoWorkspace(t *testing.T) {
 		},
 	}
 
-	if err := prepareInboundMedia(context.Background(), workspace, msg); err != nil {
+	if err := prepareInboundMedia(context.Background(), workspace, msg, nil); err != nil {
 		t.Fatalf("prepareInboundMedia: %v", err)
 	}
 	if len(msg.Media) != 1 {
@@ -114,7 +145,7 @@ func TestPrepareInboundMedia_UsesContextCancellationForDownloads(t *testing.T) {
 		},
 	}
 
-	err := prepareInboundMedia(ctx, workspace, msg)
+	err := prepareInboundMedia(ctx, workspace, msg, nil)
 	if err == nil {
 		t.Fatal("expected cancelled context to abort download")
 	}
@@ -139,7 +170,7 @@ func TestPrepareInboundMedia_RejectsOversizedDownloads(t *testing.T) {
 		},
 	}
 
-	err := prepareInboundMedia(context.Background(), workspace, msg)
+	err := prepareInboundMedia(context.Background(), workspace, msg, nil)
 	if err == nil {
 		t.Fatal("expected oversized attachment to fail")
 	}
@@ -175,7 +206,7 @@ func TestPrepareInboundMedia_RejectsOversizedLocalFiles(t *testing.T) {
 		},
 	}
 
-	err = prepareInboundMedia(context.Background(), workspace, msg)
+	err = prepareInboundMedia(context.Background(), workspace, msg, nil)
 	if err == nil {
 		t.Fatal("expected oversized local attachment to fail")
 	}
