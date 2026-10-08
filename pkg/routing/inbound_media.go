@@ -21,6 +21,10 @@ var inboundMediaHTTPClient = &http.Client{Timeout: 60 * time.Second}
 
 const inboundMediaMaxDownloadBytes int64 = 64 * 1024 * 1024
 
+func PrepareInboundMedia(ctx context.Context, workspace string, msg *bus.InboundMessage, urlRewrites map[string]string) error {
+	return prepareInboundMedia(ctx, workspace, msg, urlRewrites)
+}
+
 func prepareInboundMedia(ctx context.Context, workspace string, msg *bus.InboundMessage, urlRewrites map[string]string) error {
 	if msg == nil || strings.TrimSpace(workspace) == "" || len(msg.Media) == 0 {
 		return nil
