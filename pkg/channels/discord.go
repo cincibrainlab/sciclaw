@@ -784,7 +784,7 @@ func atomicGeneTherapySlashTask(options []*discordgo.ApplicationCommandInteracti
 		if !ok {
 			return "", fmt.Errorf("the \"completed\" option is required")
 		}
-		return fmt.Sprintf("Update fixed work item %q for lab %q and therapy %q: completed=%t.", item, lab, therapy, completed) + mutationWarning, nil
+		return fmt.Sprintf("Update phase file %q for lab %q and therapy %q: completed=%t.", item, lab, therapy, completed) + mutationWarning, nil
 	case "evidence/text", "evidence/link":
 		lab, therapy, err := labTherapy()
 		if err != nil {
@@ -810,7 +810,7 @@ func atomicGeneTherapySlashTask(options []*discordgo.ApplicationCommandInteracti
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("For lab %q, therapy %q, and fixed work item %q, read the item first, then record synthetic %s evidence %q, its exact required attestation, and an evidence check with matches=%t confirmed-by=%q.", lab, therapy, item, field, proof, matches, confirmedBy) + mutationWarning, nil
+		return fmt.Sprintf("For lab %q, therapy %q, and phase file %q, read the file first, then record synthetic %s evidence %q, its exact required attestation, and an evidence check with matches=%t confirmed-by=%q.", lab, therapy, item, field, proof, matches, confirmedBy) + mutationWarning, nil
 	case "attest/record":
 		lab, therapy, err := labTherapy()
 		if err != nil {
@@ -824,7 +824,7 @@ func atomicGeneTherapySlashTask(options []*discordgo.ApplicationCommandInteracti
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("For lab %q, therapy %q, and fixed work item %q, read the item first and record its exact synthetic attestation with confirmed-by=%q.", lab, therapy, item, confirmedBy) + mutationWarning, nil
+		return fmt.Sprintf("For lab %q, therapy %q, and phase file %q, read the file first and record its exact synthetic attestation with confirmed-by=%q.", lab, therapy, item, confirmedBy) + mutationWarning, nil
 	case "gate/advance":
 		lab, therapy, err := labTherapy()
 		if err != nil {
@@ -834,7 +834,7 @@ func atomicGeneTherapySlashTask(options []*discordgo.ApplicationCommandInteracti
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("Advance the %q gate for lab %q and therapy %q, moving each completed phase work-item file into the next phase folder.", phase, lab, therapy) + mutationWarning, nil
+		return fmt.Sprintf("Advance the %q gate for lab %q and therapy %q after verifying every phase file meets its requirements.", phase, lab, therapy) + mutationWarning, nil
 	case "status/all":
 		return "/status all", nil
 	case "status/therapy":
