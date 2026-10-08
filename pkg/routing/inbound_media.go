@@ -21,7 +21,7 @@ var inboundMediaHTTPClient = &http.Client{Timeout: 60 * time.Second}
 
 const inboundMediaMaxDownloadBytes int64 = 64 * 1024 * 1024
 
-func prepareInboundMedia(ctx context.Context, workspace string, msg *bus.InboundMessage) error {
+func prepareInboundMedia(ctx context.Context, workspace string, msg *bus.InboundMessage, urlRewrites map[string]string) error {
 	if msg == nil || strings.TrimSpace(workspace) == "" || len(msg.Media) == 0 {
 		return nil
 	}
@@ -51,6 +51,7 @@ func prepareInboundMedia(ctx context.Context, workspace string, msg *bus.Inbound
 		if source == "" {
 			continue
 		}
+		source = rewriteInboundMediaURL(source, urlRewrites)
 
 		filename := uniqueInboundFilename(deriveInboundFilename(source, i+1), seenNames)
 		destPath := filepath.Join(stageDir, filename)
@@ -101,6 +102,24 @@ func prepareInboundMedia(ctx context.Context, workspace string, msg *bus.Inbound
 	}
 
 	return nil
+}
+
+func rewriteInboundMediaURL(source string, rewrites map[string]string) string {
+	sourceURL, err := url.Parse(source)
+	if err != nil || sourceURL.Scheme == "" || sourceURL.Host == "" {
+		return source
+	}
+	target, ok := rewrites[sourceURL.Scheme+"://"+sourceURL.Host]
+	if !ok {
+		return source
+	}
+	targetURL, err := url.Parse(target)
+	if err != nil || targetURL.Scheme == "" || targetURL.Host == "" || targetURL.Path != "" || targetURL.RawQuery != "" {
+		return source
+	}
+	sourceURL.Scheme = targetURL.Scheme
+	sourceURL.Host = targetURL.Host
+	return sourceURL.String()
 }
 
 func inboundMediaMessageDir(msg *bus.InboundMessage) string {
