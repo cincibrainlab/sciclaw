@@ -146,7 +146,7 @@ func (d *Dispatcher) runDispatchLane(ctx context.Context, key string, lane *disp
 
 func (d *Dispatcher) dispatchResolved(ctx context.Context, task dispatchTask) {
 	msg := task.msg
-	if err := prepareInboundMedia(ctx, task.target.Workspace, &msg); err != nil {
+	if err := prepareInboundMedia(ctx, task.target.Workspace, &msg, d.getResolver().InboundMediaURLRewrites()); err != nil {
 		logger.ErrorCF("routing", "inbound_media_stage_failed", map[string]interface{}{
 			"channel":   msg.Channel,
 			"chat_id":   msg.ChatID,

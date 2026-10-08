@@ -238,6 +238,27 @@ func TestLoadConfig_NormalizesDiscordArchive(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_LoadsInboundMediaURLRewrites(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{
+  "routing": {
+    "inbound_media_url_rewrites": {
+      "http://localhost:13001": "http://sciclaw-server:3001"
+    }
+  }
+}`), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if got := cfg.Routing.InboundMediaURLRewrites["http://localhost:13001"]; got != "http://sciclaw-server:3001" {
+		t.Fatalf("inbound media URL rewrite=%q", got)
+	}
+}
+
 func TestLoadConfig_JobsLegacyReadOnlyAliasLoadsBTWSetting(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "config.json")
