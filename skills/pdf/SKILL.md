@@ -22,6 +22,7 @@ Use this skill whenever PDF artifacts are involved.
 2. Preserve page order and metadata unless explicitly changed.
 3. Validate output page count and extraction quality after transforms.
 4. Record command-level provenance for manuscript claims.
+5. When uploading a PDF with Gitea MCP `create_or_update_file`, base64-encode the raw PDF bytes (without a `data:application/pdf` prefix) and pass the string as `content` with `encoding: "base64"`. Do not send PDF bytes as UTF-8 text.
 
 ## Quick Commands
 

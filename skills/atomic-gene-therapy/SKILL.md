@@ -78,10 +78,20 @@ Create only `.gitkeep` in each numbered phase directory, plus `evidence/.gitkeep
 6. Advance only the current sequential gate when every item in it is completed and has matching evidence, an exact attestation, and a matching `true` evidence check. Update only the gate state and `currentPhase` in `onboarding.yml`; there are no phase files to move. Mark the gate advanced and set the next phase, or `complete` after `P5`.
 7. For status, use `list_org_repos`, `get_file_contents` (`ref:"main"`) to read `onboarding.yml`, and `list_pull_requests`. Do not enumerate phase directories. Do not combine the organization and lab in one identifier.
 
-The agent, not the user, converts the user's request to compact JSON for the MCP call:
+The agent, not the user, converts the user's request to compact JSON for the MCP call. For ordinary-sized arguments:
 
 ```sh
 mcp-server-cli call TOOL_NAME '<json-arguments>'
 ```
+
+For a fixed sequence where an exact value from one MCP result feeds a later call, use one batch so intermediate results do not enter model context:
+
+```sh
+mcp-server-cli batch <<'JSON'
+{"steps":[{"id":"first","tool":"FIRST_TOOL","arguments":{}},{"id":"second","tool":"SECOND_TOOL","arguments":{"value":{"$ref":"first","pointer":"/value/result"}}}],"return":"second"}
+JSON
+```
+
+`$ref` may target only an earlier step. `pointer` is a JSON Pointer into that result; when a result is one text item containing valid JSON, its parsed value is available under `/value`. The CLI executes steps sequentially through one MCP connection, stops on the first error, and prints only the selected `return` result. Keep using `call` for ordinary one-off operations. For large arguments such as base64 file content, use a one-step batch and pass its JSON through stdin (for example, `mcp-server-cli batch < request.json`) to avoid OS command-line size limits. Never ask the user to provide this JSON.
 
 Do not invent an organization, owner, repository, branch, phase, item, classification value, or evidence type. Report errors faithfully; onboarding must be merged before direct mutations and this skill never merges it.
