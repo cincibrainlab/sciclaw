@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -88,6 +89,7 @@ func (e *webTestExec) InteractiveProcess(_ ...string) *exec.Cmd { return exec.Co
 func TestHandleChatSuppressesAgentStderr(t *testing.T) {
 	execStub := &webTestExec{output: "hello"}
 	srv := newWebServer(execStub, "")
+	srv.liteChatRunner = func(context.Context, string) (*liteChatResult, error) { return nil, errors.New("unavailable") }
 
 	req := httptest.NewRequest(http.MethodPost, "/api/chat", strings.NewReader(`{"message":"hello"}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -110,6 +112,43 @@ func TestHandleChatSuppressesAgentStderr(t *testing.T) {
 	}
 	if body["mode"] != "full" {
 		t.Fatalf("expected full mode, got %q", body["mode"])
+	}
+}
+
+func TestHandleChatReturnsStructuredSafeError(t *testing.T) {
+	execStub := &webTestExec{output: `{"response":"The AI service is busy.\n\nReference ID: ` + "`ERR-123`" + `","error":{"technical_details":"The provider rate-limited this request.\nStatus: 429","reference_id":"ERR-123"}}`, err: os.ErrDeadlineExceeded}
+	srv := newWebServer(execStub, "")
+	srv.liteChatRunner = func(context.Context, string) (*liteChatResult, error) { return nil, errors.New("unavailable") }
+
+	req := httptest.NewRequest(http.MethodPost, "/api/chat", strings.NewReader(`{"message":"hello"}`))
+	rec := httptest.NewRecorder()
+	srv.handleChat(rec, req)
+
+	var body struct {
+		Response string `json:"response"`
+		Error    struct {
+			TechnicalDetails string `json:"technical_details"`
+			ReferenceID      string `json:"reference_id"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !strings.Contains(body.Response, "ERR-123") || body.Error.ReferenceID != "ERR-123" || !strings.Contains(body.Error.TechnicalDetails, "Status: 429") {
+		t.Fatalf("unexpected response: %#v", body)
+	}
+}
+
+func TestHandleChatExcludesExecutorRawError(t *testing.T) {
+	const rawCanary = "RAW_CANARY_web_executor_91be"
+	srv := newWebServer(&webTestExec{output: rawCanary, err: errors.New(rawCanary)}, "")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/chat", strings.NewReader(`{"message":"summarize this"}`))
+	rec := httptest.NewRecorder()
+	srv.handleChat(rec, req)
+
+	if strings.Contains(rec.Body.String(), rawCanary) {
+		t.Fatalf("executor error leaked in web response: %q", rec.Body.String())
 	}
 }
 
