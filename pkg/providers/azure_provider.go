@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -91,13 +90,13 @@ func (p *AzureProvider) Chat(ctx context.Context, messages []Message, tools []To
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readProviderResponse(resp)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Azure API request failed:\n  Status: %d\n  Body:   %s", resp.StatusCode, string(body))
+		return nil, NewAPIError("Azure", resp, body)
 	}
 
 	return parseOpenAIResponse(body)

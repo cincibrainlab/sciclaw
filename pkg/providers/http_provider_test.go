@@ -1,11 +1,40 @@
 package providers
 
 import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 )
+
+func TestHTTPProviderChatPreservesAPIErrorDiagnostics(t *testing.T) {
+	const rawCanary = "RAW_CANARY_http_provider_7f3d"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		w.Header().Set("X-Request-Id", "req-http-provider")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"code":"rate_limit","message":"` + rawCanary + `"}}`))
+	}))
+	defer server.Close()
+
+	_, err := NewHTTPProvider("test-key", server.URL, "").Chat(context.Background(), nil, nil, "test-model", nil)
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Chat() error = %T, want *APIError", err)
+	}
+	if apiErr.StatusCode != http.StatusTooManyRequests || apiErr.RequestID != "req-http-provider" {
+		t.Fatalf("APIError headers/status = %#v", apiErr)
+	}
+	if !strings.Contains(apiErr.Body, rawCanary) {
+		t.Fatalf("APIError body omitted raw provider response: %q", apiErr.Body)
+	}
+}
 
 func TestCreateLocalProvider_UsesNativeOllamaProvider(t *testing.T) {
 	cfg := &config.Config{}
