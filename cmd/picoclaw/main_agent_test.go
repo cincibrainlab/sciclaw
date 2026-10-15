@@ -378,6 +378,38 @@ func TestAgentCmdJSONRetriesTransientProviderFailure(t *testing.T) {
 	}
 }
 
+func TestAgentCmdJSONDoesNotRetryAmbiguousProviderFailure(t *testing.T) {
+	const rawCanary = "RAW_CANARY_ambiguous_provider_failure"
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		calls.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error":{"code":"server_error","message":"` + rawCanary + `"}}`))
+	}))
+	defer server.Close()
+
+	home := t.TempDir()
+	if err := os.Mkdir(filepath.Join(home, ".picoclaw"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestAgentCmdRetryHelper$")
+	cmd.Env = append(os.Environ(), "GO_WANT_AGENT_CMD_RETRY_HELPER=1", "HOME="+home, "RETRY_TEST_API_BASE="+server.URL)
+	out, err := cmd.Output()
+	if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() != 1 {
+		t.Fatalf("exit error = %v, want code 1", err)
+	}
+	var result agentDirectResult
+	if err := json.Unmarshal(out, &result); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v output=%q", err, out)
+	}
+	if calls.Load() != 1 || result.Response == "" || strings.Contains(string(out), rawCanary) {
+		t.Fatalf("calls=%d result=%#v output=%q", calls.Load(), result, out)
+	}
+}
+
 func TestAgentCmdRetryHelper(t *testing.T) {
 	if os.Getenv("GO_WANT_AGENT_CMD_RETRY_HELPER") != "1" {
 		return
