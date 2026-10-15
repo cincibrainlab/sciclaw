@@ -40,6 +40,8 @@ func TestAPIErrorParsesRetryAfter(t *testing.T) {
 		{"milliseconds takes precedence", http.Header{"Retry-After-Ms": []string{"250"}, "Retry-After": []string{"3"}}, 250 * time.Millisecond},
 		{"seconds", http.Header{"Retry-After": []string{"3"}}, 3 * time.Second},
 		{"http date", http.Header{"Retry-After": []string{now.Add(10 * time.Second).Format(http.TimeFormat)}}, 10 * time.Second},
+		{"overflow seconds", http.Header{"Retry-After": []string{"9223372036854775807"}}, time.Duration(1<<63 - 1)},
+		{"overflow milliseconds", http.Header{"Retry-After-Ms": []string{"999999999999999999999"}}, time.Duration(1<<63 - 1)},
 		{"invalid", http.Header{"Retry-After": []string{"soon"}}, 0},
 	}
 	for _, test := range tests {
