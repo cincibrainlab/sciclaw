@@ -350,7 +350,7 @@ func TestAgentCmdJSONRetriesTransientProviderFailure(t *testing.T) {
 		}
 		if calls.Add(1) == 1 {
 			w.Header().Set("Retry-After-Ms", "1")
-			w.WriteHeader(http.StatusServiceUnavailable)
+			w.WriteHeader(http.StatusTooManyRequests)
 			_, _ = w.Write([]byte(`{"error":{"code":"server_error","message":"temporary outage"}}`))
 			return
 		}

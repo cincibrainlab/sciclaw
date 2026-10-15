@@ -2,7 +2,6 @@ package providers
 
 import (
 	"context"
-	"math/rand/v2"
 	"time"
 )
 
@@ -13,7 +12,6 @@ const (
 	RetryActionRetry RetryAction = "retry"
 
 	maxProviderAttempts = 2
-	retryBaseDelay      = 250 * time.Millisecond
 	retryMaxDelay       = 10 * time.Second
 )
 
@@ -30,27 +28,18 @@ type RetryAttempt struct {
 }
 
 func DecideRetry(info ProviderErrorInfo, attempt int) RetryDecision {
-	if attempt >= maxProviderAttempts {
+	if attempt >= maxProviderAttempts || info.Kind != ProviderErrorKindRateLimited || info.RetryAfter <= 0 || info.RetryAfter > retryMaxDelay {
 		return RetryDecision{Action: RetryActionFail}
 	}
-	switch info.Kind {
-	case ProviderErrorKindRateLimited:
-		if info.RetryAfter > retryMaxDelay {
-			return RetryDecision{Action: RetryActionFail}
-		}
-		if info.RetryAfter > 0 {
-			return RetryDecision{Action: RetryActionRetry, Delay: info.RetryAfter}
-		}
-	case ProviderErrorKindTimeout, ProviderErrorKindNetwork, ProviderErrorKindProviderUnavailable, ProviderErrorKindInvalidResponse:
-	default:
-		return RetryDecision{Action: RetryActionFail}
-	}
-	return RetryDecision{Action: RetryActionRetry, Delay: retryBaseDelay + time.Duration(rand.Int64N(int64(retryBaseDelay)))}
+	return RetryDecision{Action: RetryActionRetry, Delay: info.RetryAfter}
 }
 
 func RetryChat(ctx context.Context, provider LLMProvider, messages []Message, tools []ToolDefinition, model string, options map[string]interface{}, observe func(RetryAttempt)) (*LLMResponse, int, *ProviderErrorInfo, error) {
 	var recoveredFrom *ProviderErrorInfo
 	for attempt := 1; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, attempt - 1, recoveredFrom, err
+		}
 		response, err := provider.Chat(ctx, messages, tools, model, options)
 		if err == nil {
 			return response, attempt, recoveredFrom, nil
