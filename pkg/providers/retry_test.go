@@ -30,7 +30,8 @@ func TestRetryChat(t *testing.T) {
 		errors []error
 		calls  int
 	}{
-		{"retries unavailable", []error{&APIError{StatusCode: http.StatusServiceUnavailable}}, 2},
+		{"retries rate limit", []error{&APIError{StatusCode: http.StatusTooManyRequests, RetryAfter: time.Millisecond}}, 2},
+		{"does not retry unavailable", []error{&APIError{StatusCode: http.StatusServiceUnavailable}}, 1},
 		{"does not retry authentication", []error{&APIError{StatusCode: http.StatusUnauthorized}}, 1},
 	}
 	for _, test := range tests {
@@ -57,12 +58,22 @@ func TestDecideRetryHonorsBoundedRetryAfter(t *testing.T) {
 func TestRetryChatStopsOnCanceledBackoff(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	provider := &retryTestProvider{errors: []error{&APIError{StatusCode: http.StatusServiceUnavailable}}}
+	provider := &retryTestProvider{errors: []error{&APIError{StatusCode: http.StatusTooManyRequests, RetryAfter: time.Second}}}
 	_, _, _, err := RetryChat(ctx, provider, nil, nil, "test", nil, func(RetryAttempt) { cancel() })
 	if err != context.Canceled {
 		t.Fatalf("error=%v, want context.Canceled", err)
 	}
 	if provider.calls != 1 {
 		t.Fatalf("calls=%d, want 1", provider.calls)
+	}
+}
+
+func TestRetryChatDoesNotCallCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	provider := &retryTestProvider{}
+	_, attempts, _, err := RetryChat(ctx, provider, nil, nil, "test", nil, nil)
+	if err != context.Canceled || attempts != 0 || provider.calls != 0 {
+		t.Fatalf("err=%v attempts=%d calls=%d", err, attempts, provider.calls)
 	}
 }
