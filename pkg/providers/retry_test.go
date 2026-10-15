@@ -55,6 +55,30 @@ func TestDecideRetryHonorsBoundedRetryAfter(t *testing.T) {
 	}
 }
 
+func TestDecideRetryOnlyRetriesBoundedRateLimits(t *testing.T) {
+	tests := []struct {
+		name    string
+		info    ProviderErrorInfo
+		attempt int
+	}{
+		{"rate limit without retry-after", ProviderErrorInfo{Kind: ProviderErrorKindRateLimited}, 1},
+		{"rate limit over bound", ProviderErrorInfo{Kind: ProviderErrorKindRateLimited, RetryAfter: retryMaxDelay + time.Millisecond}, 1},
+		{"second attempt", ProviderErrorInfo{Kind: ProviderErrorKindRateLimited, RetryAfter: time.Millisecond}, 2},
+		{"timeout", ProviderErrorInfo{Kind: ProviderErrorKindTimeout}, 1},
+		{"network", ProviderErrorInfo{Kind: ProviderErrorKindNetwork}, 1},
+		{"provider unavailable", ProviderErrorInfo{Kind: ProviderErrorKindProviderUnavailable}, 1},
+		{"invalid response", ProviderErrorInfo{Kind: ProviderErrorKindInvalidResponse}, 1},
+		{"unknown", ProviderErrorInfo{Kind: ProviderErrorKindUnknown}, 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if decision := DecideRetry(test.info, test.attempt); decision.Action != RetryActionFail {
+				t.Fatalf("decision=%#v", decision)
+			}
+		})
+	}
+}
+
 func TestRetryChatStopsOnCanceledBackoff(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
