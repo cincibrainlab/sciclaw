@@ -66,20 +66,34 @@ func newAPIError(provider string, response *http.Response, body []byte, cause er
 }
 
 func parseRetryAfter(header http.Header, now time.Time) time.Duration {
-	if milliseconds, err := strconv.ParseInt(strings.TrimSpace(header.Get("Retry-After-Ms")), 10, 64); err == nil && milliseconds >= 0 {
-		return time.Duration(milliseconds) * time.Millisecond
+	if retryAfter, ok := parseRetryAfterDuration(strings.TrimSpace(header.Get("Retry-After-Ms")), time.Millisecond); ok {
+		return retryAfter
 	}
 	value := strings.TrimSpace(header.Get("Retry-After"))
-	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil {
-		if seconds >= 0 {
-			return time.Duration(seconds) * time.Second
-		}
-		return 0
+	if retryAfter, ok := parseRetryAfterDuration(value, time.Second); ok {
+		return retryAfter
 	}
 	if retryAt, err := http.ParseTime(value); err == nil && retryAt.After(now) {
 		return retryAt.Sub(now)
 	}
 	return 0
+}
+
+func parseRetryAfterDuration(value string, unit time.Duration) (time.Duration, bool) {
+	amount, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		if value != "" && strings.Trim(value, "0123456789") == "" {
+			return time.Duration(1<<63 - 1), true
+		}
+		return 0, false
+	}
+	if amount < 0 {
+		return 0, true
+	}
+	if amount > int64(time.Duration(1<<63-1)/unit) {
+		return time.Duration(1<<63 - 1), true
+	}
+	return time.Duration(amount) * unit, true
 }
 
 func readProviderResponse(response *http.Response) ([]byte, error) {
