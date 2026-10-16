@@ -417,9 +417,18 @@ func (s *webServer) handleChat(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	out, err := s.runCLIQuiet(120*time.Second, "agent", "-m", shellQuote(body.Message), "-s", "web:chat")
+	out, err := s.runCLIQuiet(120*time.Second, "agent", "--json", "-m", shellQuote(body.Message), "-s", "web:chat")
+	var result agentDirectResult
+	if json.Unmarshal([]byte(out), &result) == nil && strings.TrimSpace(result.Response) != "" {
+		response := map[string]interface{}{"response": result.Response, "mode": "full"}
+		if result.Error != nil {
+			response["error"] = result.Error
+		}
+		jsonResp(w, response)
+		return
+	}
 	if err != nil {
-		jsonResp(w, map[string]interface{}{"response": "Error: " + err.Error() + "\n" + out})
+		jsonResp(w, map[string]interface{}{"response": "The request could not be completed. Please try again, then contact an administrator if it continues."})
 		return
 	}
 	jsonResp(w, map[string]interface{}{"response": out, "mode": "full"})

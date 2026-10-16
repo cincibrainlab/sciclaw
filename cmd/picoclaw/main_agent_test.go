@@ -2,7 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +17,14 @@ import (
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
+
+type testUserVisibleError struct {
+	message string
+	err     error
+}
+
+func (e testUserVisibleError) Error() string       { return e.err.Error() }
+func (e testUserVisibleError) UserMessage() string { return e.message }
 
 func TestApplyAgentCLIOverrides_RePinsProviderFromModelOverride(t *testing.T) {
 	cfg := config.DefaultConfig()
@@ -225,6 +237,106 @@ func TestPrintAgentDirectResult_HardErrorWithPartialStillPrintsError(t *testing.
 	if !strings.Contains(out, "Error:") {
 		t.Fatalf("hard error should still print Error:, got %q", out)
 	}
+}
+
+func TestPrintAgentDirectResult_UsesSafeUserError(t *testing.T) {
+	out := captureStdout(t, func() {
+		printAgentDirectResult(">", "", testUserVisibleError{
+			message: "The AI service is busy.\n\nReference ID: `ERR-123`",
+			err:     errors.New("provider response exposed a secret"),
+		})
+	})
+	if !strings.Contains(out, "The AI service is busy.") || !strings.Contains(out, "ERR-123") {
+		t.Fatalf("expected safe provider message and reference, got %q", out)
+	}
+	if strings.Contains(out, "provider response exposed a secret") {
+		t.Fatalf("raw provider error leaked to stdout: %q", out)
+	}
+}
+
+func TestPrintAgentStartupFailure_JSONIsSingleSafeResult(t *testing.T) {
+	out := captureStdout(t, func() {
+		printAgentStartupFailure(true, errors.New("provider response exposed a secret"))
+	})
+	var result agentDirectResult
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("stdout must contain one JSON result: %v\n%s", err, out)
+	}
+	if result.Response == "" || strings.Contains(out, "provider response exposed a secret") {
+		t.Fatalf("startup error must be safe, got %q", out)
+	}
+}
+
+func TestAgentCmdJSONStartupFailuresAreSingleResults(t *testing.T) {
+	cases := []struct {
+		name        string
+		writeConfig func(t *testing.T, home string)
+	}{
+		{
+			name: "config",
+			writeConfig: func(t *testing.T, home string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(home, ".picoclaw", "config.json"), []byte("{invalid"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "provider",
+			writeConfig: func(t *testing.T, home string) {
+				t.Helper()
+				if err := config.SaveConfig(filepath.Join(home, ".picoclaw", "config.json"), config.DefaultConfig()); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "missing message",
+			writeConfig: func(t *testing.T, home string) {
+				t.Helper()
+				cfg := config.DefaultConfig()
+				cfg.Providers.OpenAI.APIKey = "test-key"
+				if err := config.SaveConfig(filepath.Join(home, ".picoclaw", "config.json"), cfg); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			home := t.TempDir()
+			if err := os.Mkdir(filepath.Join(home, ".picoclaw"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			testCase.writeConfig(t, home)
+
+			cmd := exec.Command(os.Args[0], "-test.run=^TestAgentCmdJSONHelper$")
+			cmd.Env = append(os.Environ(), "GO_WANT_AGENT_CMD_JSON_HELPER=1", "HOME="+home)
+			out, err := cmd.Output()
+			if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() != 1 {
+				t.Fatalf("exit error = %v, want code 1", err)
+			}
+			decoder := json.NewDecoder(strings.NewReader(string(out)))
+			var result agentDirectResult
+			if err := decoder.Decode(&result); err != nil {
+				t.Fatalf("stdout must contain JSON result: %v\n%s", err, out)
+			}
+			if err := decoder.Decode(&agentDirectResult{}); err != io.EOF {
+				t.Fatalf("stdout must contain exactly one JSON result: %q", out)
+			}
+			if result.Response == "" || strings.Contains(string(out), "Debug mode enabled") || strings.Contains(string(out), "Interactive mode") {
+				t.Fatalf("unexpected JSON output: %q", out)
+			}
+		})
+	}
+}
+
+func TestAgentCmdJSONHelper(t *testing.T) {
+	if os.Getenv("GO_WANT_AGENT_CMD_JSON_HELPER") != "1" {
+		return
+	}
+	os.Args = []string{"picoclaw", "agent", "--json", "--debug"}
+	agentCmd()
 }
 
 func TestAgentOneShotExitCode_NonZeroOnIncomplete(t *testing.T) {
