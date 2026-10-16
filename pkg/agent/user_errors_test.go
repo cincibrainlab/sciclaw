@@ -28,7 +28,7 @@ func TestProviderFailureErrorClassification(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			err := newProviderFailureError(test.apiErr, "ERR-123")
+			err := newProviderFailureError(test.apiErr, "ERR-123", providers.ClassifyProviderError(test.apiErr))
 			message, presentation, ok := UserError(err)
 			if !ok || presentation == nil || !strings.Contains(message, test.want) {
 				t.Fatalf("message=%q presentation=%#v", message, presentation)

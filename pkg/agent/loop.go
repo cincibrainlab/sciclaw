@@ -1009,6 +1009,17 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (llm
 			logFields["turn_ms"] = time.Since(turnStartedAt).Milliseconds()
 			logger.WarnCF("agent", "Local runtime summary", logFields)
 		}
+		metadata := map[string]any{"phase": "llm_iteration"}
+		if info, ok := providerFailureInfo(err); ok {
+			metadata["error_kind"] = string(info.Kind)
+			metadata["provider"] = info.Provider
+			metadata["model"] = al.model
+			metadata["status_code"] = info.StatusCode
+			metadata["provider_code"] = info.ProviderCode
+			metadata["provider_request_id"] = info.RequestID
+			metadata["retry_after_ms"] = info.RetryAfter.Milliseconds()
+			metadata["llm_call_id"] = fmt.Sprintf("%s:%d", opts.TurnID, iterResult.Iterations)
+		}
 		al.dispatchHook(ctx, hooks.EventOnError, hooks.Context{
 			Timestamp:    time.Now(),
 			TurnID:       opts.TurnID,
@@ -1018,9 +1029,7 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (llm
 			Model:        al.model,
 			UserMessage:  sanitizeHookText(opts.UserMessage),
 			ErrorMessage: sanitizeHookText(err.Error()),
-			Metadata: map[string]any{
-				"phase": "llm_iteration",
-			},
+			Metadata:     metadata,
 		})
 		return llmIterationResult{}, err
 	}
@@ -1376,6 +1385,7 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 		}
 
 		iteration++
+		llmCallID := fmt.Sprintf("%s:%d", opts.TurnID, iteration)
 		maxValue := "unbounded"
 		if al.maxIterations > 0 {
 			maxValue = fmt.Sprintf("%d", al.maxIterations)
@@ -1423,6 +1433,7 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 			UserMessage: sanitizeHookText(opts.UserMessage),
 			Metadata: map[string]any{
 				"iteration":      iteration,
+				"llm_call_id":    llmCallID,
 				"messages_count": len(messages),
 				"tools_count":    len(providerToolDefs),
 			},
@@ -1440,6 +1451,7 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 		logger.InfoCF("agent", "LLM call start",
 			map[string]interface{}{
 				"turn_id":        opts.TurnID,
+				"llm_call_id":    llmCallID,
 				"iteration":      iteration,
 				"model":          al.model,
 				"channel":        opts.Channel,
@@ -1452,22 +1464,33 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 
 		if err != nil {
 			referenceID := "ERR-" + strings.TrimPrefix(opts.TurnID, "turn-")
+			info := providers.ClassifyProviderError(err)
 			if localDiag != nil {
 				localDiag.recordFailure("provider_chat", err.Error())
 			}
 			logger.ErrorCF("agent", "LLM call failed",
 				map[string]interface{}{
-					"iteration":       iteration,
-					"turn_id":         opts.TurnID,
-					"error_reference": referenceID,
-					"error":           err.Error(),
-					"duration":        time.Since(llmCallStartedAt).String(),
-					"duration_ms":     time.Since(llmCallStartedAt).Milliseconds(),
+					"iteration":           iteration,
+					"turn_id":             opts.TurnID,
+					"llm_call_id":         llmCallID,
+					"attempt":             1,
+					"final":               true,
+					"error_kind":          string(info.Kind),
+					"provider":            info.Provider,
+					"model":               al.model,
+					"status_code":         info.StatusCode,
+					"provider_code":       info.ProviderCode,
+					"provider_request_id": info.RequestID,
+					"retry_after_ms":      info.RetryAfter.Milliseconds(),
+					"error_reference":     referenceID,
+					"error":               err.Error(),
+					"duration":            time.Since(llmCallStartedAt).String(),
+					"duration_ms":         time.Since(llmCallStartedAt).Milliseconds(),
 				})
 			return llmIterationResult{
 				Iterations: iteration,
 				Usage:      usage,
-			}, newProviderFailureError(fmt.Errorf("LLM call failed: %w", err), referenceID)
+			}, newProviderFailureError(fmt.Errorf("LLM call failed: %w", err), referenceID, info)
 		}
 		if localDiag != nil {
 			localDiag.recordLLMResponse(time.Since(llmCallStartedAt), response)
@@ -1481,6 +1504,9 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 		}
 		llmCompleteFields := map[string]interface{}{
 			"turn_id":          opts.TurnID,
+			"llm_call_id":      llmCallID,
+			"attempt":          1,
+			"final":            true,
 			"iteration":        iteration,
 			"duration":         time.Since(llmCallStartedAt).String(),
 			"duration_ms":      time.Since(llmCallStartedAt).Milliseconds(),
@@ -1509,6 +1535,7 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 			LLMResponseSummary: sanitizeHookText(response.Content),
 			Metadata: map[string]any{
 				"iteration":       iteration,
+				"llm_call_id":     llmCallID,
 				"tool_call_count": len(response.ToolCalls),
 			},
 		})
@@ -1778,8 +1805,9 @@ Either call the appropriate tool now, or give an honest present-tense status of 
 					ToolArgs:     sanitizeHookArgs(tc.Arguments),
 					ErrorMessage: sanitizeHookText(errMsg),
 					Metadata: map[string]any{
-						"iteration": iteration,
-						"phase":     "tool_execution",
+						"iteration":   iteration,
+						"llm_call_id": fmt.Sprintf("%s:%d", opts.TurnID, iteration),
+						"phase":       "tool_execution",
 					},
 				})
 			}
