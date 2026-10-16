@@ -79,6 +79,7 @@ func (m *fakeProgressMessenger) SendOrEditProgress(_ context.Context, channelNam
 type fakeJobRunner struct {
 	started chan struct{}
 	block   chan struct{}
+	err     error
 	runs    int
 	mu      sync.Mutex
 	lastMsg bus.InboundMessage
@@ -110,8 +111,16 @@ func (r *fakeJobRunner) RunJob(ctx context.Context, msg bus.InboundMessage, onPr
 			return "", ctx.Err()
 		}
 	}
-	return "done", nil
+	return "done", r.err
 }
+
+type safeJobError struct {
+	raw     string
+	message string
+}
+
+func (e safeJobError) Error() string       { return e.raw }
+func (e safeJobError) UserMessage() string { return e.message }
 
 func (r *fakeJobRunner) snapshotLastMsg() bus.InboundMessage {
 	r.mu.Lock()
@@ -509,6 +518,58 @@ func TestJobManagerWritesProgressAndFinalState(t *testing.T) {
 	if !strings.Contains(progress.calls[len(progress.calls)-1], "Done. Reply below.") {
 		t.Fatalf("expected final progress update, got %q", progress.calls[len(progress.calls)-1])
 	}
+}
+
+func TestJobManagerFailedJobKeepsSafeReferenceOnly(t *testing.T) {
+	const rawCanary = "RAW_CANARY_job_failure_2d86"
+	const reference = "ERR-job-failure"
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+
+	progress := &fakeProgressMessenger{}
+	runner := &fakeJobRunner{
+		started: make(chan struct{}),
+		block:   make(chan struct{}),
+		err: safeJobError{
+			raw:     "provider diagnostics: " + rawCanary,
+			message: "The AI service is busy.\n\nReference ID: `" + reference + "`",
+		},
+	}
+	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{
+		Enabled: true, MaxConcurrent: 1, ProgressUpdateSeconds: 1, DiscordAsyncDefault: true,
+	}, mb, progress, func(LoopTarget) (JobRunner, error) { return runner, nil })
+	if err != nil {
+		t.Fatalf("NewJobManager: %v", err)
+	}
+
+	target := LoopTarget{Workspace: "/tmp/work", Runtime: RuntimeProfile{Mode: config.ModeCloud}}
+	if err := jm.Submit(context.Background(), target, bus.InboundMessage{Channel: "discord", ChatID: "room-1", Content: "do it"}); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	<-runner.started
+	close(runner.block)
+	waitForNoActiveJobs(t, jm, target.key())
+
+	record := findJobRecordByAskSummary(t, jm, "do it")
+	if record.State != JobStateFailed || strings.Contains(record.LastError, rawCanary) || !strings.Contains(record.LastError, reference) {
+		t.Fatalf("unsafe persisted failure: %#v", record)
+	}
+
+	progress.mu.Lock()
+	defer progress.mu.Unlock()
+	for _, call := range progress.messages {
+		rendered := call.content + call.title + call.embed.Description + call.embed.Footer
+		for _, field := range call.embed.Fields {
+			rendered += field.Name + field.Value
+		}
+		if strings.Contains(rendered, rawCanary) {
+			t.Fatalf("raw diagnostics leaked into job card: %#v", call)
+		}
+		if strings.Contains(rendered, reference) {
+			return
+		}
+	}
+	t.Fatalf("failed job card omitted safe reference %q: %#v", reference, progress.messages)
 }
 
 func TestJobManagerBTWBusyMessageExplainsQueueOptions(t *testing.T) {
