@@ -267,6 +267,23 @@ func TestPrintAgentStartupFailure_JSONIsSingleSafeResult(t *testing.T) {
 	}
 }
 
+func TestPrintAgentDirectJSONIsExactlyOneResult(t *testing.T) {
+	out := captureStdout(t, func() {
+		printAgentDirectJSON("completed", nil)
+	})
+	decoder := json.NewDecoder(strings.NewReader(out))
+	var result agentDirectResult
+	if err := decoder.Decode(&result); err != nil {
+		t.Fatalf("stdout must contain JSON result: %v\n%s", err, out)
+	}
+	if err := decoder.Decode(&agentDirectResult{}); err != io.EOF {
+		t.Fatalf("stdout must contain exactly one JSON result: %q", out)
+	}
+	if result.Response != "completed" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
 func TestAgentCmdJSONStartupFailuresAreSingleResults(t *testing.T) {
 	cases := []struct {
 		name        string

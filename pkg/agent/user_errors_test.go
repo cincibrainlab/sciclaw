@@ -9,10 +9,12 @@ import (
 
 func TestProviderFailureErrorClassification(t *testing.T) {
 	tests := []struct {
-		name    string
-		apiErr  *providers.APIError
-		want    string
-		details []string
+		name      string
+		apiErr    *providers.APIError
+		want      string
+		details   []string
+		notWant   string
+		notDetail string
 	}{
 		{
 			name:    "does not expose raw body",
@@ -25,6 +27,9 @@ func TestProviderFailureErrorClassification(t *testing.T) {
 		{name: "model-specific code not found", apiErr: &providers.APIError{StatusCode: 404, Code: "model_not_found"}, want: "selected AI model"},
 		{name: "Ollama model message not found", apiErr: &providers.APIError{StatusCode: 404, Message: "model 'missing' not found"}, want: "selected AI model"},
 		{name: "generic not found", apiErr: &providers.APIError{StatusCode: 404, Code: "not_found"}, want: "could not complete"},
+		{name: "unsupported response format", apiErr: &providers.APIError{StatusCode: 400, Code: "unsupported_parameter", Message: "The response_format parameter is not supported"}, want: "could not complete", notWant: "selected AI model", notDetail: "selected model"},
+		{name: "unsupported temperature mentioning model", apiErr: &providers.APIError{StatusCode: 400, Code: "unsupported_parameter", Message: "The temperature parameter is not supported for this model"}, want: "could not complete", notWant: "selected AI model", notDetail: "selected model"},
+		{name: "invalid max tokens mentioning model", apiErr: &providers.APIError{StatusCode: 400, Code: "invalid_parameter", Message: "max_tokens is invalid for this model"}, want: "could not complete", notWant: "selected AI model", notDetail: "selected model"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -32,6 +37,12 @@ func TestProviderFailureErrorClassification(t *testing.T) {
 			message, presentation, ok := UserError(err)
 			if !ok || presentation == nil || !strings.Contains(message, test.want) {
 				t.Fatalf("message=%q presentation=%#v", message, presentation)
+			}
+			if test.notWant != "" && strings.Contains(message, test.notWant) {
+				t.Fatalf("incorrect message: %q", message)
+			}
+			if test.notDetail != "" && strings.Contains(presentation.TechnicalDetails, test.notDetail) {
+				t.Fatalf("incorrect technical details: %q", presentation.TechnicalDetails)
 			}
 			if strings.Contains(message, "private provider details") || strings.Contains(presentation.TechnicalDetails, "private provider details") {
 				t.Fatalf("raw provider content leaked: message=%q details=%q", message, presentation.TechnicalDetails)

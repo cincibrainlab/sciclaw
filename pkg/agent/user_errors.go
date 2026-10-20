@@ -60,7 +60,7 @@ func classifyProviderFailure(err error) (string, string) {
 		message, detail = "The AI service is busy. Please wait a moment and try again.", "The provider rate-limited this request."
 	case containsAny(code, "context_length", "context_window", "max_context", "too_many_tokens") || containsAny(lower, "context length", "maximum context", "too many tokens"):
 		message, detail = "This conversation is too long for the selected AI model. Start a new conversation or shorten your request.", "The provider rejected the request because it exceeds the model context limit."
-	case status == 400 && containsAny(lower, "model", "not supported", "not available") || status == 404 && isModelNotFound(code, lower):
+	case status == 400 && isModelNotFound(code, lower) || status == 404 && isModelNotFound(code, lower):
 		message, detail = "The selected AI model is not available. Choose another model or contact an administrator.", "The provider rejected the selected model."
 	case status >= 500 || containsAny(lower, "timeout", "deadline exceeded", "temporarily unavailable"):
 		message, detail = "The AI service is temporarily unavailable. Please try again shortly.", "The provider or network did not complete the request."
