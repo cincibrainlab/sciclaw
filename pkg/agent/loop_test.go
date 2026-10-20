@@ -71,6 +71,76 @@ func TestLLMHooksShareLogicalCallID(t *testing.T) {
 	}
 }
 
+func TestProviderErrorHooksAndPresentationUseClassifiedKind(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		body       string
+		wantKind   providers.ProviderErrorKind
+		wantText   string
+	}{
+		{
+			name:       "content filter",
+			statusCode: http.StatusBadRequest,
+			body:       `{"error":{"code":"content_filter","message":"Content policy rejected the request; retrying will not resolve this rate limit. RAW_CANARY_policy"}}`,
+			wantKind:   providers.ProviderErrorKindPolicyRejected,
+			wantText:   "could not complete",
+		},
+		{
+			name:       "model not found",
+			statusCode: http.StatusBadRequest,
+			body:       `{"error":{"code":"model_not_found","message":"Model unavailable for this authentication method. RAW_CANARY_model"}}`,
+			wantKind:   providers.ProviderErrorKindModelUnavailable,
+			wantText:   "selected AI model",
+		},
+		{
+			name:     "invalid HTML response",
+			body:     "<html>RAW_CANARY_html</html>",
+			wantKind: providers.ProviderErrorKindInvalidResponse,
+			wantText: "temporarily unavailable",
+		},
+		{
+			name:     "invalid response schema",
+			body:     `{"choices":"RAW_CANARY_schema"}`,
+			wantKind: providers.ProviderErrorKindInvalidResponse,
+			wantText: "temporarily unavailable",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if test.statusCode != 0 {
+					w.WriteHeader(test.statusCode)
+				}
+				_, _ = w.Write([]byte(test.body))
+			}))
+			defer server.Close()
+
+			cfg := config.DefaultConfig()
+			cfg.Agents.Defaults.Workspace = t.TempDir()
+			al := NewAgentLoop(cfg, bus.NewMessageBus(), providers.NewHTTPProvider("test-key", server.URL, ""))
+			defer al.Stop()
+			handler := &captureHookHandler{contexts: make(map[hooks.Event]hooks.Context)}
+			al.hooks.Register(hooks.EventOnError, handler)
+
+			_, err := al.ProcessDirect(context.Background(), "hello", "provider-error-kind")
+			if err == nil {
+				t.Fatal("ProcessDirect() error = nil")
+			}
+			if got := handler.contexts[hooks.EventOnError].Metadata["error_kind"]; got != string(test.wantKind) {
+				t.Fatalf("on_error error_kind = %v, want %q", got, test.wantKind)
+			}
+			message, presentation, ok := UserError(err)
+			if !ok || presentation == nil || !strings.Contains(message, test.wantText) {
+				t.Fatalf("UserError() = message %q presentation %#v", message, presentation)
+			}
+			if strings.Contains(message, "RAW_CANARY") || strings.Contains(presentation.TechnicalDetails, "RAW_CANARY") {
+				t.Fatalf("provider response leaked: message=%q details=%q", message, presentation.TechnicalDetails)
+			}
+		})
+	}
+}
+
 func (m *diagnosticMockProvider) Chat(ctx context.Context, messages []providers.Message, tools []providers.ToolDefinition, model string, opts map[string]interface{}) (*providers.LLMResponse, error) {
 	return &providers.LLMResponse{
 		Content:     m.response,

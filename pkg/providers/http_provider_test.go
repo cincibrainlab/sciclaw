@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -33,6 +34,78 @@ func TestHTTPProviderChatPreservesAPIErrorDiagnostics(t *testing.T) {
 	}
 	if !strings.Contains(apiErr.Body, rawCanary) {
 		t.Fatalf("APIError body omitted raw provider response: %q", apiErr.Body)
+	}
+}
+
+func TestHTTPProviderChatClassifiesStructuredCodesBeforeText(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want ProviderErrorKind
+	}{
+		{
+			name: "content filter mentioning rate limit",
+			body: `{"error":{"code":"content_filter","message":"Content policy rejected the request; retrying will not resolve this rate limit."}}`,
+			want: ProviderErrorKindPolicyRejected,
+		},
+		{
+			name: "model not found mentioning authentication",
+			body: `{"error":{"code":"model_not_found","message":"Model unavailable for this authentication method."}}`,
+			want: ProviderErrorKindModelUnavailable,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(test.body))
+			}))
+			defer server.Close()
+
+			_, err := NewHTTPProvider("test-key", server.URL, "").Chat(context.Background(), nil, nil, "test-model", nil)
+			if got := ClassifyProviderError(err).Kind; got != test.want {
+				t.Fatalf("ClassifyProviderError().Kind = %q, want %q", got, test.want)
+			}
+			if got := ClassifyProviderError(fmt.Errorf("wrapped: %w", err)).Kind; got != test.want {
+				t.Fatalf("ClassifyProviderError(wrapped).Kind = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestHTTPProviderChatClassifiesResponseDecodingFailures(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "HTML", body: "<html>bad upstream</html>"},
+		{name: "wrong field type", body: `{"choices":"wrong-type"}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(test.body))
+			}))
+			defer server.Close()
+
+			_, err := NewHTTPProvider("test-key", server.URL, "").Chat(context.Background(), nil, nil, "test-model", nil)
+			if got := ClassifyProviderError(err).Kind; got != ProviderErrorKindInvalidResponse {
+				t.Fatalf("ClassifyProviderError().Kind = %q, want %q", got, ProviderErrorKindInvalidResponse)
+			}
+			if got := ClassifyProviderError(fmt.Errorf("wrapped: %w", err)).Kind; got != ProviderErrorKindInvalidResponse {
+				t.Fatalf("ClassifyProviderError(wrapped).Kind = %q, want %q", got, ProviderErrorKindInvalidResponse)
+			}
+		})
+	}
+}
+
+func TestHTTPProviderChatDoesNotClassifyRequestEncodingFailureAsResponseFailure(t *testing.T) {
+	_, err := NewHTTPProvider("test-key", "http://example.invalid", "").Chat(context.Background(), nil, []ToolDefinition{{Function: ToolFunctionDefinition{Parameters: map[string]interface{}{"invalid": func() {}}}}}, "test-model", nil)
+	if err == nil {
+		t.Fatal("Chat() error = nil, want request encoding error")
+	}
+	if got := ClassifyProviderError(err).Kind; got == ProviderErrorKindInvalidResponse {
+		t.Fatalf("ClassifyProviderError().Kind = %q, must not be invalid_response", got)
 	}
 }
 

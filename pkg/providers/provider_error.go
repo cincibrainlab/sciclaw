@@ -64,6 +64,11 @@ func ClassifyProviderError(err error) ProviderErrorInfo {
 		info.Kind = ProviderErrorKindInvalidResponse
 		return info
 	}
+	var responseDecodeErr *responseDecodeError
+	if errors.As(err, &responseDecodeErr) {
+		info.Kind = ProviderErrorKindInvalidResponse
+		return info
+	}
 	if isNetworkSyscall(err) {
 		info.Kind = ProviderErrorKindNetwork
 		return info
@@ -79,21 +84,26 @@ func ClassifyProviderError(err error) ProviderErrorInfo {
 	}
 
 	code := strings.ToLower(info.ProviderCode)
+	if kind, ok := providerErrorKindForCode(code); ok {
+		info.Kind = kind
+		return info
+	}
+
 	message := strings.ToLower(err.Error())
 	switch {
 	case info.StatusCode == 401 || containsProviderErrorText(message, "invalid api key", "invalid bearer token", "unauthorized", "authentication"):
 		info.Kind = ProviderErrorKindAuthentication
-	case info.StatusCode == 403 || containsProviderErrorText(code, "permission", "access_denied", "forbidden"):
+	case info.StatusCode == 403:
 		info.Kind = ProviderErrorKindPermission
-	case containsProviderErrorText(code, "insufficient_quota", "billing", "quota") || containsProviderErrorText(message, "insufficient quota", "billing", "quota exceeded", "token usage"):
+	case containsProviderErrorText(message, "insufficient quota", "billing", "quota exceeded", "token usage"):
 		info.Kind = ProviderErrorKindQuota
-	case info.StatusCode == 429 || containsProviderErrorText(code, "rate_limit") || containsProviderErrorText(message, "rate limit", "rate_limit"):
+	case info.StatusCode == 429 || containsProviderErrorText(message, "rate limit", "rate_limit"):
 		info.Kind = ProviderErrorKindRateLimited
-	case containsProviderErrorText(code, "context_length", "context_window", "max_context", "too_many_tokens") || containsProviderErrorText(message, "context length", "context_length", "context window", "context_window", "maximum context", "too many tokens"):
+	case containsProviderErrorText(message, "context length", "context_length", "context window", "context_window", "maximum context", "too many tokens"):
 		info.Kind = ProviderErrorKindContextLimit
-	case isModelUnavailable(code, message):
+	case isModelUnavailable("", message):
 		info.Kind = ProviderErrorKindModelUnavailable
-	case containsProviderErrorText(code, "policy", "moderation", "content_filter") || containsProviderErrorText(message, "content policy", "moderation", "content_filter"):
+	case containsProviderErrorText(message, "content policy", "moderation", "content_filter"):
 		info.Kind = ProviderErrorKindPolicyRejected
 	case info.StatusCode == 408 || containsProviderErrorText(message, "timeout", "deadline exceeded"):
 		info.Kind = ProviderErrorKindTimeout
@@ -105,6 +115,34 @@ func ClassifyProviderError(err error) ProviderErrorInfo {
 		info.Kind = ProviderErrorKindInvalidResponse
 	}
 	return info
+}
+
+func providerErrorKindForCode(code string) (ProviderErrorKind, bool) {
+	switch {
+	case containsProviderErrorText(code, "invalid_api_key", "invalid_bearer_token", "authentication"):
+		return ProviderErrorKindAuthentication, true
+	case containsProviderErrorText(code, "permission", "access_denied", "forbidden"):
+		return ProviderErrorKindPermission, true
+	case containsProviderErrorText(code, "insufficient_quota", "billing", "quota"):
+		return ProviderErrorKindQuota, true
+	case containsProviderErrorText(code, "rate_limit"):
+		return ProviderErrorKindRateLimited, true
+	case containsProviderErrorText(code, "context_length", "context_window", "max_context", "too_many_tokens"):
+		return ProviderErrorKindContextLimit, true
+	case isModelUnavailable(code, ""):
+		return ProviderErrorKindModelUnavailable, true
+	case containsProviderErrorText(code, "policy", "moderation", "content_filter"):
+		return ProviderErrorKindPolicyRejected, true
+	case containsProviderErrorText(code, "timeout", "deadline_exceeded"):
+		return ProviderErrorKindTimeout, true
+	case containsProviderErrorText(code, "invalid_request", "unsupported_parameter"):
+		return ProviderErrorKindInvalidRequest, true
+	case containsProviderErrorText(code, "invalid_response"):
+		return ProviderErrorKindInvalidResponse, true
+	case containsProviderErrorText(code, "server_error", "service_unavailable", "temporarily_unavailable"):
+		return ProviderErrorKindProviderUnavailable, true
+	}
+	return ProviderErrorKindUnknown, false
 }
 
 func isNetworkSyscall(err error) bool {
