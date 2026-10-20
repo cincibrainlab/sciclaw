@@ -8,6 +8,11 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/anthropics/anthropic-sdk-go"
+	anthropicoption "github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/openai/openai-go/v3"
+	openaioption "github.com/openai/openai-go/v3/option"
 )
 
 type retryTestProvider struct {
@@ -144,19 +149,23 @@ func TestRetryChatSDKRequestBudget(t *testing.T) {
 		{"eligible rate limit", http.StatusTooManyRequests, "1", false, 2},
 		{"rate limit without delay", http.StatusTooManyRequests, "", false, 1},
 		{"server error", http.StatusServiceUnavailable, "1", false, 1},
+		{"rate limit over delay bound", http.StatusTooManyRequests, "10001", false, 1},
 		{"cancellation", http.StatusTooManyRequests, "1", true, 1},
 	}
 	providers := []struct {
 		name  string
-		new   func(string) LLMProvider
+		new   func(*httptest.Server) LLMProvider
 		model string
 		body  string
 	}{
 		{
 			name: "claude",
-			new: func(baseURL string) LLMProvider {
+			new: func(server *httptest.Server) LLMProvider {
 				p := NewClaudeProvider("test-token")
-				p.client = createAnthropicTestClient(baseURL, "test-token")
+				opts := append([]anthropicoption.RequestOption{}, p.client.Options...)
+				opts = append(opts, anthropicoption.WithBaseURL(server.URL))
+				client := anthropic.NewClient(opts...)
+				p.client = &client
 				return p
 			},
 			model: "test",
@@ -164,9 +173,12 @@ func TestRetryChatSDKRequestBudget(t *testing.T) {
 		},
 		{
 			name: "codex",
-			new: func(baseURL string) LLMProvider {
+			new: func(server *httptest.Server) LLMProvider {
 				p := NewCodexProvider("test-token", "")
-				p.client = createOpenAITestClient(baseURL, "test-token", "")
+				opts := append([]openaioption.RequestOption{}, p.client.Options...)
+				opts = append(opts, openaioption.WithBaseURL(server.URL), openaioption.WithHTTPClient(server.Client()))
+				client := openai.NewClient(opts...)
+				p.client = &client
 				return p
 			},
 			model: "gpt-5.6-sol",
@@ -190,7 +202,7 @@ func TestRetryChatSDKRequestBudget(t *testing.T) {
 
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
-				_, _, _, err := RetryChat(ctx, providerTest.new(server.URL), []Message{{Role: "user", Content: "hello"}}, nil, providerTest.model, map[string]interface{}{}, func(RetryAttempt) {
+				_, _, _, err := RetryChat(ctx, providerTest.new(server), []Message{{Role: "user", Content: "hello"}}, nil, providerTest.model, map[string]interface{}{}, func(RetryAttempt) {
 					if test.cancel {
 						cancel()
 					}
