@@ -411,6 +411,10 @@ func (s *webServer) handleChat(w http.ResponseWriter, r *http.Request) {
 			jsonResp(w, map[string]interface{}{"response": result.Response, "mode": "lite"})
 			return
 		}
+		if err != nil && providers.ClassifyProviderError(err).Kind == providers.ProviderErrorKindRateLimited {
+			jsonResp(w, map[string]interface{}{"response": "The AI service is busy. Please wait a moment and try again."})
+			return
+		}
 		logger.WarnCF("web", "Lightweight web chat failed; falling back to full agent", map[string]interface{}{
 			"error":   fmt.Sprint(err),
 			"message": strings.TrimSpace(body.Message),
