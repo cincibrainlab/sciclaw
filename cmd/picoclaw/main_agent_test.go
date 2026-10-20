@@ -368,7 +368,7 @@ func TestAgentCmdJSONRetriesTransientProviderFailure(t *testing.T) {
 		if calls.Add(1) == 1 {
 			w.Header().Set("Retry-After-Ms", "1")
 			w.WriteHeader(http.StatusTooManyRequests)
-			_, _ = w.Write([]byte(`{"error":{"code":"server_error","message":"temporary outage"}}`))
+			_, _ = w.Write([]byte(`{"error":{"code":"rate_limit_error","message":"slow down"}}`))
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -390,8 +390,8 @@ func TestAgentCmdJSONRetriesTransientProviderFailure(t *testing.T) {
 	if err := json.Unmarshal(out, &result); err != nil {
 		t.Fatalf("json.Unmarshal() error = %v output=%q", err, out)
 	}
-	if result.Response != "recovered" || calls.Load() != 2 {
-		t.Fatalf("response=%q calls=%d", result.Response, calls.Load())
+	if result.Response != "recovered" || result.Error != nil || calls.Load() != 2 {
+		t.Fatalf("result=%#v calls=%d", result, calls.Load())
 	}
 }
 
