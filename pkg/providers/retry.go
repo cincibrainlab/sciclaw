@@ -28,7 +28,7 @@ type RetryAttempt struct {
 }
 
 func DecideRetry(info ProviderErrorInfo, attempt int) RetryDecision {
-	if attempt >= maxProviderAttempts || info.Kind != ProviderErrorKindRateLimited || info.RetryAfter <= 0 || info.RetryAfter > retryMaxDelay {
+	if attempt >= maxProviderAttempts || info.StatusCode != 429 || info.Kind != ProviderErrorKindRateLimited || info.RetryAfter <= 0 || info.RetryAfter > retryMaxDelay {
 		return RetryDecision{Action: RetryActionFail}
 	}
 	return RetryDecision{Action: RetryActionRetry, Delay: info.RetryAfter}

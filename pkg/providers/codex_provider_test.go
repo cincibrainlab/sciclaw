@@ -636,6 +636,7 @@ func createOpenAITestClient(baseURL, token, accountID string) *openai.Client {
 	opts := []openaiopt.RequestOption{
 		openaiopt.WithBaseURL(baseURL),
 		openaiopt.WithAPIKey(token),
+		openaiopt.WithMaxRetries(0),
 	}
 	if accountID != "" {
 		opts = append(opts, openaiopt.WithHeader("Chatgpt-Account-Id", accountID))
