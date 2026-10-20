@@ -156,7 +156,7 @@ func isNetworkSyscall(err error) bool {
 
 func isModelUnavailable(code, message string) bool {
 	return containsProviderErrorText(code, "model_not_found", "model_not_available", "model_not_supported", "unknown_model") ||
-		strings.Contains(message, "model") && containsProviderErrorText(message, "not found", "does not exist", "not available", "not supported")
+		strings.Contains(message, "model") && containsProviderErrorText(message, "not found", "does not exist")
 }
 
 func containsProviderErrorText(value string, candidates ...string) bool {

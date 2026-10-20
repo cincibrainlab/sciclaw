@@ -50,6 +50,23 @@ func TestClassifyProviderError(t *testing.T) {
 	}
 }
 
+func TestClassifyProviderErrorNarrowModelMessageFallback(t *testing.T) {
+	for _, code := range []string{"", "invalid_parameter"} {
+		t.Run("parameter code="+code, func(t *testing.T) {
+			err := &APIError{StatusCode: http.StatusBadRequest, Code: code, Message: "The temperature parameter is not supported for this model"}
+			for _, wrapped := range []error{err, fmt.Errorf("wrapped: %w", err)} {
+				if got := ClassifyProviderError(wrapped).Kind; got != ProviderErrorKindInvalidRequest {
+					t.Fatalf("ClassifyProviderError().Kind = %q, want %q", got, ProviderErrorKindInvalidRequest)
+				}
+			}
+		})
+	}
+
+	if got := ClassifyProviderError(&APIError{StatusCode: http.StatusBadRequest, Message: "model 'missing' not found"}).Kind; got != ProviderErrorKindModelUnavailable {
+		t.Fatalf("ClassifyProviderError().Kind = %q, want %q", got, ProviderErrorKindModelUnavailable)
+	}
+}
+
 func TestClassifyProviderErrorHandlesEOF(t *testing.T) {
 	if info := ClassifyProviderError(errors.New("wrapped: " + io.EOF.Error())); info.Kind != ProviderErrorKindUnknown {
 		t.Fatalf("unwrapped EOF kind = %q, want %q", info.Kind, ProviderErrorKindUnknown)
