@@ -45,6 +45,7 @@ func NewCodexProvider(token, accountID string) *CodexProvider {
 		option.WithBaseURL("https://chatgpt.com/backend-api/codex"),
 		option.WithAPIKey(token),
 		option.WithHTTPClient(transport.NewCloudflareClient()),
+		option.WithMaxRetries(0),
 	}
 	opts = appendCodexIdentityHeaders(opts)
 	if accountID != "" {

@@ -24,6 +24,7 @@ func NewClaudeProvider(token string) *ClaudeProvider {
 	client := anthropic.NewClient(
 		option.WithAuthToken(token),
 		option.WithBaseURL("https://api.anthropic.com"),
+		option.WithMaxRetries(0),
 	)
 	return &ClaudeProvider{
 		client:     &client,
