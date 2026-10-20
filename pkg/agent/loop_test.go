@@ -78,6 +78,7 @@ func TestProviderErrorHooksAndPresentationUseClassifiedKind(t *testing.T) {
 		body       string
 		wantKind   providers.ProviderErrorKind
 		wantText   string
+		provider   func(string) providers.LLMProvider
 	}{
 		{
 			name:       "content filter",
@@ -119,6 +120,24 @@ func TestProviderErrorHooksAndPresentationUseClassifiedKind(t *testing.T) {
 			wantKind: providers.ProviderErrorKindInvalidResponse,
 			wantText: "temporarily unavailable",
 		},
+		{
+			name:     "Azure invalid HTML response",
+			body:     "<html>RAW_CANARY_azure</html>",
+			wantKind: providers.ProviderErrorKindInvalidResponse,
+			wantText: "temporarily unavailable",
+			provider: func(endpoint string) providers.LLMProvider {
+				return providers.NewAzureProvider("test-key", endpoint, "")
+			},
+		},
+		{
+			name:     "Ollama invalid HTML response",
+			body:     "<html>RAW_CANARY_ollama</html>",
+			wantKind: providers.ProviderErrorKindInvalidResponse,
+			wantText: "temporarily unavailable",
+			provider: func(endpoint string) providers.LLMProvider {
+				return providers.NewOllamaProvider(endpoint, time.Second)
+			},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -130,9 +149,13 @@ func TestProviderErrorHooksAndPresentationUseClassifiedKind(t *testing.T) {
 			}))
 			defer server.Close()
 
+			var provider providers.LLMProvider = providers.NewHTTPProvider("test-key", server.URL, "")
+			if test.provider != nil {
+				provider = test.provider(server.URL)
+			}
 			cfg := config.DefaultConfig()
 			cfg.Agents.Defaults.Workspace = t.TempDir()
-			al := NewAgentLoop(cfg, bus.NewMessageBus(), providers.NewHTTPProvider("test-key", server.URL, ""))
+			al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
 			defer al.Stop()
 			handler := &captureHookHandler{contexts: make(map[hooks.Event]hooks.Context)}
 			al.hooks.Register(hooks.EventOnError, handler)

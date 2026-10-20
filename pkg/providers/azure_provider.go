@@ -128,7 +128,7 @@ func parseOpenAIResponse(body []byte) (*LLMResponse, error) {
 	}
 
 	if err := json.Unmarshal(body, &apiResponse); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal response: %w", &responseDecodeError{err: err})
 	}
 
 	if len(apiResponse.Choices) == 0 {
