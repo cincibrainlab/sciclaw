@@ -94,6 +94,20 @@ func TestProviderErrorHooksAndPresentationUseClassifiedKind(t *testing.T) {
 			wantText:   "selected AI model",
 		},
 		{
+			name:       "parameter without code",
+			statusCode: http.StatusBadRequest,
+			body:       `{"error":{"message":"The temperature parameter is not supported for this model. RAW_CANARY_parameter"}}`,
+			wantKind:   providers.ProviderErrorKindInvalidRequest,
+			wantText:   "could not complete",
+		},
+		{
+			name:       "invalid parameter",
+			statusCode: http.StatusBadRequest,
+			body:       `{"error":{"code":"invalid_parameter","message":"The temperature parameter is not supported for this model. RAW_CANARY_invalid_parameter"}}`,
+			wantKind:   providers.ProviderErrorKindInvalidRequest,
+			wantText:   "could not complete",
+		},
+		{
 			name:     "invalid HTML response",
 			body:     "<html>RAW_CANARY_html</html>",
 			wantKind: providers.ProviderErrorKindInvalidResponse,
