@@ -3,6 +3,7 @@ package routing
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
 type fakeProgressMessenger struct {
@@ -517,6 +519,75 @@ func TestJobManagerWritesProgressAndFinalState(t *testing.T) {
 	}
 	if !strings.Contains(progress.calls[len(progress.calls)-1], "Done. Reply below.") {
 		t.Fatalf("expected final progress update, got %q", progress.calls[len(progress.calls)-1])
+	}
+}
+
+func TestJobManagerResolverFailureLogsDiagnosticWithoutLeakingIt(t *testing.T) {
+	const rawCanary = "RAW_CANARY_resolver_failure_4d4c"
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+
+	logPath := filepathJoin(t.TempDir(), "server.log")
+	if err := logger.EnableFileLogging(logPath); err != nil {
+		t.Fatalf("EnableFileLogging: %v", err)
+	}
+	defer logger.DisableFileLogging()
+
+	progress := &fakeProgressMessenger{}
+	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{
+		Enabled: true, MaxConcurrent: 1, ProgressUpdateSeconds: 1, DiscordAsyncDefault: true,
+	}, mb, progress, func(LoopTarget) (JobRunner, error) {
+		return &fakeJobRunner{}, nil
+	})
+	if err != nil {
+		t.Fatalf("NewJobManager: %v", err)
+	}
+	jm.SetSideLaneResolver(func(LoopTarget) (JobRunner, error) {
+		return nil, fmt.Errorf("provider creation failed: %s", rawCanary)
+	})
+
+	target := LoopTarget{Workspace: "/tmp/work", Runtime: RuntimeProfile{Mode: config.ModeCloud}}
+	if err := jm.Submit(context.Background(), target, bus.InboundMessage{
+		Channel: "discord", ChatID: "room-1", Content: "/btw inspect this",
+	}); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	waitForNoActiveJobs(t, jm, target.key())
+
+	record := findJobRecordByAskSummary(t, jm, "inspect this")
+	if record.State != JobStateFailed {
+		t.Fatalf("state = %q, want failed", record.State)
+	}
+	if strings.Contains(record.LastError, rawCanary) {
+		t.Fatalf("raw diagnostics leaked into persisted error: %q", record.LastError)
+	}
+	for _, message := range []bus.OutboundMessage{
+		formatProgressOutbound(record),
+		formatControlRecordOutbound(parsedJobControl{Kind: jobControlStatus}, record, ""),
+	} {
+		if strings.Contains(fmt.Sprintf("%#v", message), rawCanary) {
+			t.Fatalf("raw diagnostics leaked into rendered job output: %#v", message)
+		}
+	}
+	progress.mu.Lock()
+	for _, message := range progress.messages {
+		if strings.Contains(fmt.Sprintf("%#v", message), rawCanary) {
+			progress.mu.Unlock()
+			t.Fatalf("raw diagnostics leaked into progress output: %#v", message)
+		}
+	}
+	progress.mu.Unlock()
+
+	logger.DisableFileLogging()
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	logOutput := string(logData)
+	for _, want := range []string{rawCanary, record.ID, record.Phase} {
+		if !strings.Contains(logOutput, want) {
+			t.Fatalf("server log missing %q: %s", want, logOutput)
+		}
 	}
 }
 

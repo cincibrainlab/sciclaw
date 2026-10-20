@@ -1186,6 +1186,9 @@ func (p *progressReporter) complete(state JobState, phase, detail string, err er
 			}
 		}
 	})
+	if err != nil {
+		logger.ErrorCF("jobs", "Job failed", map[string]interface{}{"job_id": record.ID, "phase": record.Phase, "error": err.Error()})
+	}
 	if saveErr := p.manager.store.Save(record); saveErr != nil {
 		logger.WarnCF("jobs", "Failed to persist final job state", map[string]interface{}{"job_id": record.ID, "error": saveErr.Error()})
 	}
