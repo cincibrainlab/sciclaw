@@ -16,6 +16,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/archive/discordarchive"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/hooks"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/tools"
@@ -38,6 +39,143 @@ func (m *mockProvider) GetDefaultModel() string {
 type diagnosticMockProvider struct {
 	response    string
 	diagnostics *providers.ResponseDiagnostics
+}
+
+type captureHookHandler struct {
+	contexts map[hooks.Event]hooks.Context
+}
+
+func (h *captureHookHandler) Name() string { return "capture" }
+
+func (h *captureHookHandler) Handle(_ context.Context, event hooks.Event, data hooks.Context) hooks.Result {
+	h.contexts[event] = data
+	return hooks.Result{}
+}
+
+func TestLLMHooksShareLogicalCallID(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{})
+	defer al.Stop()
+	handler := &captureHookHandler{contexts: make(map[hooks.Event]hooks.Context)}
+	al.hooks.Register(hooks.EventBeforeLLM, handler)
+	al.hooks.Register(hooks.EventAfterLLM, handler)
+
+	if _, err := al.ProcessDirect(context.Background(), "hello", "hook-call-id"); err != nil {
+		t.Fatalf("ProcessDirect() error = %v", err)
+	}
+	before := handler.contexts[hooks.EventBeforeLLM].Metadata["llm_call_id"]
+	after := handler.contexts[hooks.EventAfterLLM].Metadata["llm_call_id"]
+	if before == "" || before != after {
+		t.Fatalf("before=%v after=%v", before, after)
+	}
+}
+
+func TestProviderErrorHooksAndPresentationUseClassifiedKind(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		body       string
+		wantKind   providers.ProviderErrorKind
+		wantText   string
+		provider   func(string) providers.LLMProvider
+	}{
+		{
+			name:       "content filter",
+			statusCode: http.StatusBadRequest,
+			body:       `{"error":{"code":"content_filter","message":"Content policy rejected the request; retrying will not resolve this rate limit. RAW_CANARY_policy"}}`,
+			wantKind:   providers.ProviderErrorKindPolicyRejected,
+			wantText:   "could not complete",
+		},
+		{
+			name:       "model not found",
+			statusCode: http.StatusBadRequest,
+			body:       `{"error":{"code":"model_not_found","message":"Model unavailable for this authentication method. RAW_CANARY_model"}}`,
+			wantKind:   providers.ProviderErrorKindModelUnavailable,
+			wantText:   "selected AI model",
+		},
+		{
+			name:       "parameter without code",
+			statusCode: http.StatusBadRequest,
+			body:       `{"error":{"message":"The temperature parameter is not supported for this model. RAW_CANARY_parameter"}}`,
+			wantKind:   providers.ProviderErrorKindInvalidRequest,
+			wantText:   "could not complete",
+		},
+		{
+			name:       "invalid parameter",
+			statusCode: http.StatusBadRequest,
+			body:       `{"error":{"code":"invalid_parameter","message":"The temperature parameter is not supported for this model. RAW_CANARY_invalid_parameter"}}`,
+			wantKind:   providers.ProviderErrorKindInvalidRequest,
+			wantText:   "could not complete",
+		},
+		{
+			name:     "invalid HTML response",
+			body:     "<html>RAW_CANARY_html</html>",
+			wantKind: providers.ProviderErrorKindInvalidResponse,
+			wantText: "temporarily unavailable",
+		},
+		{
+			name:     "invalid response schema",
+			body:     `{"choices":"RAW_CANARY_schema"}`,
+			wantKind: providers.ProviderErrorKindInvalidResponse,
+			wantText: "temporarily unavailable",
+		},
+		{
+			name:     "Azure invalid HTML response",
+			body:     "<html>RAW_CANARY_azure</html>",
+			wantKind: providers.ProviderErrorKindInvalidResponse,
+			wantText: "temporarily unavailable",
+			provider: func(endpoint string) providers.LLMProvider {
+				return providers.NewAzureProvider("test-key", endpoint, "")
+			},
+		},
+		{
+			name:     "Ollama invalid HTML response",
+			body:     "<html>RAW_CANARY_ollama</html>",
+			wantKind: providers.ProviderErrorKindInvalidResponse,
+			wantText: "temporarily unavailable",
+			provider: func(endpoint string) providers.LLMProvider {
+				return providers.NewOllamaProvider(endpoint, time.Second)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if test.statusCode != 0 {
+					w.WriteHeader(test.statusCode)
+				}
+				_, _ = w.Write([]byte(test.body))
+			}))
+			defer server.Close()
+
+			var provider providers.LLMProvider = providers.NewHTTPProvider("test-key", server.URL, "")
+			if test.provider != nil {
+				provider = test.provider(server.URL)
+			}
+			cfg := config.DefaultConfig()
+			cfg.Agents.Defaults.Workspace = t.TempDir()
+			al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+			defer al.Stop()
+			handler := &captureHookHandler{contexts: make(map[hooks.Event]hooks.Context)}
+			al.hooks.Register(hooks.EventOnError, handler)
+
+			_, err := al.ProcessDirect(context.Background(), "hello", "provider-error-kind")
+			if err == nil {
+				t.Fatal("ProcessDirect() error = nil")
+			}
+			if got := handler.contexts[hooks.EventOnError].Metadata["error_kind"]; got != string(test.wantKind) {
+				t.Fatalf("on_error error_kind = %v, want %q", got, test.wantKind)
+			}
+			message, presentation, ok := UserError(err)
+			if !ok || presentation == nil || !strings.Contains(message, test.wantText) {
+				t.Fatalf("UserError() = message %q presentation %#v", message, presentation)
+			}
+			if strings.Contains(message, "RAW_CANARY") || strings.Contains(presentation.TechnicalDetails, "RAW_CANARY") {
+				t.Fatalf("provider response leaked: message=%q details=%q", message, presentation.TechnicalDetails)
+			}
+		})
+	}
 }
 
 func (m *diagnosticMockProvider) Chat(ctx context.Context, messages []providers.Message, tools []providers.ToolDefinition, model string, opts map[string]interface{}) (*providers.LLMResponse, error) {
@@ -731,6 +869,12 @@ func TestHandleInboundHidesProviderDiagnosticsButLogsThem(t *testing.T) {
 			continue
 		}
 		if entry.Fields["error_reference"] == outbound.Error.ReferenceID && strings.Contains(entry.Fields["error"].(string), rawCanary) {
+			if entry.Fields["error_kind"] != "rate_limited" || entry.Fields["provider"] != "HTTP" || entry.Fields["model"] == "" || entry.Fields["attempt"] != float64(1) || entry.Fields["final"] != true {
+				t.Fatalf("missing stable failure fields: %#v", entry.Fields)
+			}
+			if entry.Fields["llm_call_id"] != entry.Fields["turn_id"].(string)+":1" || entry.Fields["status_code"] != float64(http.StatusTooManyRequests) || entry.Fields["provider_code"] != "rate_limit" || entry.Fields["provider_request_id"] != "req-agent-inbound" {
+				t.Fatalf("incorrect failure facts: %#v", entry.Fields)
+			}
 			found = true
 			break
 		}
