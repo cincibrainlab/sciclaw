@@ -4,18 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/sipeed/picoclaw/cmd/picoclaw/tui"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/routing"
 )
 
@@ -237,6 +240,153 @@ func TestHandleChatFallsBackWhenLiteChatFails(t *testing.T) {
 	}
 	if body["mode"] != "full" {
 		t.Fatalf("expected full mode after lite fallback, got %q", body["mode"])
+	}
+}
+
+type webActualAgentExec struct {
+	webTestExec
+	binaryPath string
+	home       string
+	executions int
+}
+
+func (e *webActualAgentExec) HomePath() string   { return e.home }
+func (e *webActualAgentExec) BinaryPath() string { return e.binaryPath }
+func (e *webActualAgentExec) ExecShell(_ time.Duration, command string) (string, error) {
+	e.executions++
+	out, err := exec.Command("/bin/sh", "-c", command).Output()
+	return string(out), err
+}
+
+func TestHandleChatRateLimitDoesNotStartFullAgent(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "sciclaw")
+	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build production CLI: %v\n%s", err, out)
+	}
+
+	for _, test := range []struct {
+		name       string
+		retryAfter string
+		wantCalls  int32
+	}{
+		{name: "short bounded delay", retryAfter: "1", wantCalls: 2},
+		{name: "absent delay", wantCalls: 1},
+		{name: "unusable delay", retryAfter: "invalid", wantCalls: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			const rawCanary = "RAW_CANARY_web_rate_limit"
+			var calls atomic.Int32
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				if test.retryAfter != "" {
+					w.Header().Set("Retry-After-Ms", test.retryAfter)
+				}
+				w.WriteHeader(http.StatusTooManyRequests)
+				_, _ = w.Write([]byte(`{"error":{"code":"rate_limit_error","message":"` + rawCanary + `"}}`))
+			}))
+			defer upstream.Close()
+
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			if err := os.Mkdir(filepath.Join(home, ".picoclaw"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			cfg := config.DefaultConfig()
+			cfg.Agents.Defaults.Workspace = filepath.Join(home, "workspace")
+			cfg.Agents.Defaults.Provider = "openai"
+			cfg.Agents.Defaults.Model = "gpt-5.6-luna"
+			cfg.Providers.OpenAI.APIKey = "test-key"
+			cfg.Providers.OpenAI.APIBase = upstream.URL
+			if err := config.SaveConfig(filepath.Join(home, ".picoclaw", "config.json"), cfg); err != nil {
+				t.Fatal(err)
+			}
+
+			srv := newWebServer(&webActualAgentExec{binaryPath: binary, home: home}, "")
+			rec := httptest.NewRecorder()
+			srv.handleChat(rec, httptest.NewRequest(http.MethodPost, "/api/chat", strings.NewReader(`{"message":"hello"}`)))
+
+			if calls.Load() != test.wantCalls {
+				t.Fatalf("provider calls = %d, want %d", calls.Load(), test.wantCalls)
+			}
+			if strings.Contains(rec.Body.String(), rawCanary) {
+				t.Fatalf("provider diagnostic leaked in response: %q", rec.Body.String())
+			}
+			var body map[string]string
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if body["response"] != "The AI service is busy. Please wait a moment and try again." || body["mode"] != "" {
+				t.Fatalf("unexpected response: %#v", body)
+			}
+		})
+	}
+}
+
+func TestHandleChatRateLimitRetainsTerminalDiagnostic(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		retryAfter string
+		wantCalls  int32
+	}{
+		{name: "no delay", wantCalls: 1},
+		{name: "exhausted retry", retryAfter: "1", wantCalls: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var calls atomic.Int32
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				attempt := calls.Add(1)
+				if test.retryAfter != "" {
+					w.Header().Set("Retry-After-Ms", test.retryAfter)
+				}
+				w.WriteHeader(http.StatusTooManyRequests)
+				_, _ = fmt.Fprintf(w, `{"error":{"code":"rate_limit_error","message":"RAW_CANARY_web_rate_limit_%d"}}`, attempt)
+			}))
+			defer upstream.Close()
+
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			if err := os.Mkdir(filepath.Join(home, ".picoclaw"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			cfg := config.DefaultConfig()
+			cfg.Agents.Defaults.Workspace = filepath.Join(home, "workspace")
+			cfg.Agents.Defaults.Provider = "openai"
+			cfg.Agents.Defaults.Model = "gpt-5.6-luna"
+			cfg.Providers.OpenAI.APIKey = "test-key"
+			cfg.Providers.OpenAI.APIBase = upstream.URL
+			if err := config.SaveConfig(filepath.Join(home, ".picoclaw", "config.json"), cfg); err != nil {
+				t.Fatal(err)
+			}
+
+			logPath := filepath.Join(home, "web.log")
+			previousLevel := logger.GetLevel()
+			logger.SetLevel(logger.INFO)
+			defer logger.SetLevel(previousLevel)
+			if err := logger.EnableFileLogging(logPath); err != nil {
+				t.Fatal(err)
+			}
+			defer logger.DisableFileLogging()
+
+			executor := &webActualAgentExec{home: home}
+			srv := newWebServer(executor, "")
+			rec := httptest.NewRecorder()
+			srv.handleChat(rec, httptest.NewRequest(http.MethodPost, "/api/chat", strings.NewReader(`{"message":"hello"}`)))
+
+			terminalCanary := fmt.Sprintf("RAW_CANARY_web_rate_limit_%d", test.wantCalls)
+			if calls.Load() != test.wantCalls || executor.executions != 0 {
+				t.Fatalf("provider calls/fallback executions = %d/%d, want %d/0", calls.Load(), executor.executions, test.wantCalls)
+			}
+			if strings.Contains(rec.Body.String(), "RAW_CANARY_web_rate_limit") {
+				t.Fatalf("provider diagnostic leaked in response: %q", rec.Body.String())
+			}
+			logData, err := os.ReadFile(logPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(logData), terminalCanary) {
+				t.Fatalf("terminal diagnostic %q missing from log: %s", terminalCanary, logData)
+			}
+		})
 	}
 }
 

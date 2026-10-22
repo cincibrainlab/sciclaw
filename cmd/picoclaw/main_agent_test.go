@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/agent"
@@ -354,6 +357,92 @@ func TestAgentCmdJSONHelper(t *testing.T) {
 	}
 	os.Args = []string{"picoclaw", "agent", "--json", "--debug"}
 	agentCmd()
+}
+
+func TestAgentCmdJSONRetriesTransientProviderFailure(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		if calls.Add(1) == 1 {
+			w.Header().Set("Retry-After-Ms", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"error":{"code":"rate_limit_error","message":"slow down"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"recovered"},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+
+	home := t.TempDir()
+	if err := os.Mkdir(filepath.Join(home, ".picoclaw"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestAgentCmdRetryHelper$")
+	cmd.Env = append(os.Environ(), "GO_WANT_AGENT_CMD_RETRY_HELPER=1", "HOME="+home, "RETRY_TEST_API_BASE="+server.URL)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("agent command error = %v", err)
+	}
+	var result agentDirectResult
+	if err := json.Unmarshal(out, &result); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v output=%q", err, out)
+	}
+	if result.Response != "recovered" || result.Error != nil || calls.Load() != 2 {
+		t.Fatalf("result=%#v calls=%d", result, calls.Load())
+	}
+}
+
+func TestAgentCmdJSONDoesNotRetryAmbiguousProviderFailure(t *testing.T) {
+	const rawCanary = "RAW_CANARY_ambiguous_provider_failure"
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		calls.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error":{"code":"server_error","message":"` + rawCanary + `"}}`))
+	}))
+	defer server.Close()
+
+	home := t.TempDir()
+	if err := os.Mkdir(filepath.Join(home, ".picoclaw"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestAgentCmdRetryHelper$")
+	cmd.Env = append(os.Environ(), "GO_WANT_AGENT_CMD_RETRY_HELPER=1", "HOME="+home, "RETRY_TEST_API_BASE="+server.URL)
+	out, err := cmd.Output()
+	if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() != 1 {
+		t.Fatalf("exit error = %v, want code 1", err)
+	}
+	var result agentDirectResult
+	if err := json.Unmarshal(out, &result); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v output=%q", err, out)
+	}
+	if calls.Load() != 1 || result.Response == "" || strings.Contains(string(out), rawCanary) {
+		t.Fatalf("calls=%d result=%#v output=%q", calls.Load(), result, out)
+	}
+}
+
+func TestAgentCmdRetryHelper(t *testing.T) {
+	if os.Getenv("GO_WANT_AGENT_CMD_RETRY_HELPER") != "1" {
+		return
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Provider = "openai"
+	cfg.Agents.Defaults.Model = "gpt-5.6-luna"
+	cfg.Providers.OpenAI.APIKey = "test-key"
+	cfg.Providers.OpenAI.APIBase = os.Getenv("RETRY_TEST_API_BASE")
+	home, _ := os.UserHomeDir()
+	if err := config.SaveConfig(filepath.Join(home, ".picoclaw", "config.json"), cfg); err != nil {
+		panic(err)
+	}
+	os.Args = []string{"picoclaw", "agent", "--json", "-m", "retry"}
+	agentCmd()
+	os.Exit(0)
 }
 
 func TestAgentOneShotExitCode_NonZeroOnIncomplete(t *testing.T) {
