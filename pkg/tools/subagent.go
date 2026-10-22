@@ -13,6 +13,8 @@ import (
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
+const subagentExecutionFailureMessage = "Subagent execution failed because the AI service could not complete the request. Please try again."
+
 func defaultSubagentLLMOptions() map[string]any {
 	return map[string]any{
 		"max_tokens":       4096,
@@ -211,20 +213,13 @@ func (sm *SubagentManager) runTask(ctx context.Context, task *SubagentTask, call
 
 	if err != nil {
 		task.Status = "failed"
-		task.Result = fmt.Sprintf("Error: %v", err)
+		task.Result = subagentExecutionFailureMessage
 		// Check if it was cancelled
 		if ctx.Err() != nil {
 			task.Status = "cancelled"
 			task.Result = "Task cancelled during execution"
 		}
-		result = &ToolResult{
-			ForLLM:  task.Result,
-			ForUser: "",
-			Silent:  false,
-			IsError: true,
-			Async:   false,
-			Err:     err,
-		}
+		result = ErrorResult(task.Result).WithError(err)
 	} else {
 		task.Status = "completed"
 		task.Result = loopResult.Content
@@ -357,7 +352,7 @@ func (t *SubagentTool) Execute(ctx context.Context, args map[string]interface{})
 	}, messages, t.originChannel, t.originChatID)
 
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("Subagent execution failed: %v", err)).WithError(err)
+		return ErrorResult(subagentExecutionFailureMessage).WithError(err)
 	}
 
 	// ForUser: Brief summary for user (truncated if too long)
