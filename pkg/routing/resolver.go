@@ -75,11 +75,12 @@ func (p RuntimeProfile) Key() string {
 }
 
 type Resolver struct {
-	enabled          bool
-	unmappedBehavior string
-	defaultWorkspace string
-	defaultRuntime   RuntimeProfile
-	mappings         map[string]config.RoutingMapping
+	enabled                 bool
+	unmappedBehavior        string
+	defaultWorkspace        string
+	defaultRuntime          RuntimeProfile
+	mappings                map[string]config.RoutingMapping
+	inboundMediaURLRewrites map[string]string
 }
 
 func NewResolver(cfg *config.Config) (*Resolver, error) {
@@ -100,7 +101,8 @@ func NewResolver(cfg *config.Config) (*Resolver, error) {
 			LocalModel:   cfg.Agents.Defaults.LocalModel,
 			LocalPreset:  cfg.Agents.Defaults.LocalPreset,
 		}.normalized(),
-		mappings: make(map[string]config.RoutingMapping, len(cfg.Routing.Mappings)),
+		mappings:                make(map[string]config.RoutingMapping, len(cfg.Routing.Mappings)),
+		inboundMediaURLRewrites: cfg.Routing.InboundMediaURLRewrites,
 	}
 	if r.unmappedBehavior == "" {
 		r.unmappedBehavior = config.RoutingUnmappedBehaviorMentionOnly
@@ -109,6 +111,13 @@ func NewResolver(cfg *config.Config) (*Resolver, error) {
 		r.mappings[mappingKey(m.Channel, m.ChatID)] = m
 	}
 	return r, nil
+}
+
+func (r *Resolver) InboundMediaURLRewrites() map[string]string {
+	if r == nil {
+		return nil
+	}
+	return r.inboundMediaURLRewrites
 }
 
 func (r *Resolver) Resolve(msg bus.InboundMessage) Decision {

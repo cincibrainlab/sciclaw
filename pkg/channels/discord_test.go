@@ -445,7 +445,7 @@ func TestDiscordProcessIncomingMessage_AttachmentsUseFilenamesInContent(t *testi
 				ID:          "att-1",
 				Filename:    "draft.docx",
 				ContentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-				URL:         "https://cdn.discordapp.com/attachments/x/draft.docx",
+				ProxyURL:    "https://cdn.discordapp.com/attachments/x/draft.docx",
 			},
 		},
 	}
