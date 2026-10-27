@@ -140,7 +140,7 @@ See [Authentication docs](https://sciclaw.dev/docs.html#authentication) for all 
 sciClaw's default posture is **local, private, and locked down**. Here's what that means in practice:
 
 - **Runs on your machine.** sciClaw is a program on your computer, not a cloud service. There's no account to create with us, no server to connect to, nothing hosted anywhere.
-- **Your work stays visible.** Editable configuration, profile files, skills, templates, backups, and workspace content live under `~/sciclaw`. Machine-managed credentials, logs, sessions, caches, and runtime coordination live separately under `~/.sciclaw`.
+- **Your work stays visible.** Profile files, skills, templates, backups, and workspace content live under `~/sciclaw`. Private configuration, credentials, logs, sessions, caches, and runtime coordination live separately under `~/.sciclaw`.
 - **Nothing is exposed to the internet.** sciClaw doesn't open any ports or listen for incoming connections. It reaches out only when you send a message, and only to the AI provider you chose (OpenAI, Anthropic, etc.) and any tools you explicitly enable (like PubMed).
 - **Messages go through your private bot.** When you chat via Telegram or Discord, messages travel through a bot that only you control. Nobody else can talk to it unless you explicitly allow them.
 - **No telemetry, no analytics, no tracking.** sciClaw sends nothing back to us. No usage data, no error reports, no phone-home behavior. We don't know you're running it.
@@ -322,7 +322,6 @@ Every IRL command is recorded in the active visible workspace, under `irl/comman
 
 ```
 ~/sciclaw/                         # User-facing
-├── config.json
 ├── profile/{AGENTS,HOOKS,IDENTITY,SOUL,TOOLS,USER}.md
 ├── skills/                        # Global user-installed skills
 ├── templates/
@@ -335,7 +334,8 @@ Every IRL command is recorded in the active visible workspace, under `irl/comman
     ├── irl/
     └── ... documents and outputs
 
-~/.sciclaw/                        # Machine-managed
+~/.sciclaw/                        # Private application state
+├── config.json                     # Provider, channel, tool, and runtime settings
 ├── auth.json
 ├── logs/                          # gateway/web stdout and stderr
 ├── runtime/                       # gateway status, routing reload, async jobs, history
@@ -348,7 +348,20 @@ Every IRL command is recorded in the active visible workspace, under `irl/comman
 
 `SCICLAW_HOME` overrides the visible root and `SCICLAW_STATE_HOME` overrides the machine-state root. `~/.picoclaw` remains PicoClaw-owned and is never used as a SciClaw runtime fallback.
 
-Legacy SciClaw layouts are migrated manually only. SciClaw does not import, merge, remove, or symlink `~/.picoclaw`; update active config/workspace paths yourself after reviewing the files you intend to move.
+### PicoClaw config import
+
+Run `sciclaw migrate --picoclaw-home ~/.picoclaw` to explicitly import a compatible PicoClaw configuration. The command never runs at startup, overwrites an existing SciClaw config, or modifies, removes, or symlinks the PicoClaw source.
+
+| PicoClaw source | SciClaw destination | Import behavior |
+| --- | --- | --- |
+| `~/.picoclaw/config.json` | `~/.sciclaw/config.json` | Reads and saves all compatible typed configuration fields. |
+| `agents.defaults.workspace` equal to `~/.picoclaw/workspace` | `agents.defaults.workspace` | Rewritten to `~/sciclaw/workspaces/default`. |
+| `agents.defaults.shared_workspace` equal to `~/.picoclaw/workspace` | `agents.defaults.shared_workspace` | Rewritten to `~/sciclaw/workspaces/default`. |
+| Other valid config fields | Same field in `~/.sciclaw/config.json` | Preserved unchanged. |
+| Unknown or unsupported config fields | — | Not imported. |
+| `~/.picoclaw/auth.json`, logs, sessions, skills, templates, and workspace files | — | Not imported; they remain PicoClaw-owned. |
+
+Legacy SciClaw layouts are migrated manually only.
 
 ## Docker
 
