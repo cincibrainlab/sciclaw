@@ -1009,6 +1009,7 @@ func TestRunConfigOnly(t *testing.T) {
 	openclawHome := t.TempDir()
 	picoClawHome := t.TempDir()
 	t.Setenv("SCICLAW_HOME", picoClawHome)
+	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(t.TempDir(), "state"))
 
 	wsDir := filepath.Join(openclawHome, "workspace")
 	os.MkdirAll(wsDir, 0755)
