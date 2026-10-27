@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/paths"
 )
 
 func doctorCheckByName(checks []doctorCheck, name string) (doctorCheck, bool) {
@@ -66,7 +67,7 @@ func TestCheckConfigHealthAppliesFixesWithDoctorFix(t *testing.T) {
 		t.Fatalf("mkdir workspace: %v", err)
 	}
 
-	configPath := filepath.Join(home, ".picoclaw", "config.json")
+	configPath := filepath.Join(home, "sciclaw", "config.json")
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		t.Fatalf("mkdir config dir: %v", err)
 	}
@@ -137,7 +138,7 @@ func TestCheckConfigHealthAppliesFixesWithDoctorFix(t *testing.T) {
 		t.Fatalf("persisted allow_from len=%d want 2", len(reloaded.Channels.Discord.AllowFrom))
 	}
 
-	if _, err := os.Stat(filepath.Join(filepath.Dir(configPath), "routing.reload")); err != nil {
+	if _, err := os.Stat(paths.RoutingReloadPath()); err != nil {
 		t.Fatalf("routing.reload missing: %v", err)
 	}
 }

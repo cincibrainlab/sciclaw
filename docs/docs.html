@@ -698,7 +698,7 @@
           <li>Search PubMed using the built-in <code>pubmed-cli</code> tool</li>
           <li>Retrieve and analyze relevant papers</li>
           <li>Draft a structured abstract with citations</li>
-          <li>Save it as a Word document at <code>~/sciclaw/abstract.docx</code></li>
+          <li>Save it as a Word document at <code>~/sciclaw/workspaces/default/abstract.docx</code></li>
         </ol>
         <p>Open the <code>.docx</code> file in Word or Google Docs to review. That's it &mdash; you have a working paired-scientist assistant.</p>
 
@@ -737,7 +737,7 @@
 
 <span class="hl-comment"># CLI alternative</span>
 <span class="hl-cmd">sciclaw</span> onboard</code></pre>
-        <p>Both commands run the same first-time setup flow. It creates your config (<code>~/sciclaw/config.json</code>), workspace directories (<code>~/sciclaw/</code> with <code>memory/</code>, <code>skills/</code>, <code>sessions/</code>, <code>cron/</code>), starter template files, and the baseline science skill pack. On Linux it also bootstraps a managed workspace Python venv at <code>~/sciclaw/.venv</code> (prefers <code>uv</code>, falls back to <code>python3 -m venv</code>) and installs required packages used by scientific workflows. Then it asks optional questions:</p>
+        <p>Both commands create <code>~/sciclaw/config.json</code>, profile files under <code>~/sciclaw/profile/</code>, and the visible default workspace at <code>~/sciclaw/workspaces/default/</code>. On Linux, the managed workspace Python venv lives in per-workspace runtime state under <code>~/.sciclaw/workspaces/</code>.</p>
         <ol>
           <li><strong>OpenAI login</strong> &mdash; Uses device-code login for ChatGPT Plus, Team, or Enterprise (a link opens in your browser). Skip this if you plan to use a different provider.</li>
           <li><strong>Chat smoke test</strong> &mdash; If authentication succeeds, a single test message is sent automatically to confirm your AI provider is connected and responding.</li>
@@ -817,11 +817,11 @@
         <p>This rebuilds and reinstalls to <code>~/.local/bin</code>. For IRL, pull and rebuild its repo separately.</p>
 
         <h3>Updating skills</h3>
-        <p>Baseline scientific skills are installed during <code>sciclaw onboard</code> and live in <code>~/sciclaw/skills/</code> by default. They are <strong>not</strong> automatically updated when you upgrade the binary. To refresh them to the latest built-in versions:</p>
+        <p>Baseline scientific skills are installed during <code>sciclaw onboard</code> and live in <code>~/sciclaw/workspaces/default/skills/</code> by default. User-global skills live separately in <code>~/sciclaw/skills/</code>.</p>
         <pre><code><span class="hl-comment"># Re-install all built-in skills (overwrites existing)</span>
 <span class="hl-cmd">sciclaw</span> skills install-builtin
 
-<span class="hl-comment"># Or re-run onboard to refresh workspace templates + skills</span>
+<span class="hl-comment"># Or re-run onboard to refresh profile files + workspace skills</span>
 <span class="hl-cmd">sciclaw</span> onboard</code></pre>
 
         <p>Third-party skills installed from GitHub can be updated by re-installing them:</p>
@@ -860,9 +860,9 @@
               <tr><td><code>sciclaw</code> binary</td><td><code>brew upgrade sciclaw</code></td><td><code>$(brew --prefix)/bin/sciclaw</code></td></tr>
               <tr><td><code>irl</code> runtime</td><td><code>brew upgrade sciclaw</code> (dependency)</td><td><code>$(brew --prefix)/bin/irl</code></td></tr>
               <tr><td><code>quarto</code> (optional)</td><td>macOS: <code>brew upgrade --cask quarto</code> / Linux: <code>brew upgrade sciclaw</code> (dependency)</td><td><code>$(brew --prefix)/bin/quarto</code></td></tr>
-              <tr><td>Baseline skills</td><td><code>sciclaw skills install-builtin</code></td><td><code>~/sciclaw/skills/</code></td></tr>
+              <tr><td>Baseline skills</td><td><code>sciclaw skills install-builtin</code></td><td><code>~/sciclaw/workspaces/default/skills/</code></td></tr>
               <tr><td>Config file</td><td>Manual or <code>sciclaw models set</code></td><td><code>~/sciclaw/config.json</code></td></tr>
-              <tr><td>Workspace templates</td><td><code>sciclaw onboard</code></td><td><code>~/sciclaw/</code></td></tr>
+              <tr><td>Profile templates</td><td><code>sciclaw onboard</code></td><td><code>~/sciclaw/profile/</code></td></tr>
             </tbody>
           </table>
         </div>
@@ -1117,7 +1117,7 @@ http://localhost:4142</code></pre>
 
       <div class="section" id="web-system-tab">
         <h3>System Tab</h3>
-        <p>The System tab provides a transparent view of all workspace personality files that shape how your sciClaw agent behaves. These are the markdown files in your workspace root: <code>AGENTS.md</code>, <code>SOUL.md</code>, <code>USER.md</code>, <code>IDENTITY.md</code>, <code>TOOLS.md</code>, <code>HOOKS.md</code>, and <code>memory/MEMORY.md</code>.</p>
+        <p>The System tab provides a transparent view of the profile files under <code>~/sciclaw/profile/</code> that shape agent behavior: <code>AGENTS.md</code>, <code>SOUL.md</code>, <code>USER.md</code>, <code>IDENTITY.md</code>, <code>TOOLS.md</code>, and <code>HOOKS.md</code>. Workspace memory remains visible at <code>memory/MEMORY.md</code> in the selected workspace.</p>
 
         <h4>What you can do</h4>
         <ul>
@@ -1171,8 +1171,8 @@ http://localhost:4142</code></pre>
 
         <div class="callout">
           <div class="callout-title">Where your work lives</div>
-          <p><strong>Workspace (visible):</strong> <code>~/sciclaw/</code> (sessions, evidence, skills, hooks, IRL audit logs).</p>
-          <p><strong>Config + auth (hidden):</strong> <code>~/sciclaw/config.json</code> and <code>~/sciclaw/auth.json</code> (secrets and provider credentials).</p>
+          <p><strong>User-facing:</strong> <code>~/sciclaw/</code> contains config, profile/global assets, backups, addon source, and visible workspace content.</p>
+          <p><strong>Machine-managed:</strong> <code>~/.sciclaw/</code> contains OAuth credentials, logs, gateway coordination, jobs, caches, and per-workspace runtime state. <code>~/.picoclaw</code> remains PicoClaw-owned.</p>
         </div>
 
         <div class="callout callout-warn">
@@ -1205,7 +1205,7 @@ http://localhost:4142</code></pre>
         <pre><code>{
   <span class="hl-key">"agents"</span>: {
     <span class="hl-key">"defaults"</span>: {
-      <span class="hl-key">"workspace"</span>: <span class="hl-string">"~/sciclaw"</span>,
+      <span class="hl-key">"workspace"</span>: <span class="hl-string">"~/sciclaw/workspaces/default"</span>,
       <span class="hl-key">"model"</span>: <span class="hl-string">"gpt-5.2"</span>,
       <span class="hl-key">"reasoning_effort"</span>: <span class="hl-string">"high"</span>,
       <span class="hl-key">"max_tokens"</span>: 8192,
@@ -1326,32 +1326,36 @@ http://localhost:4142</code></pre>
 <span class="hl-comment"># Remove stored credential</span>
 <span class="hl-cmd">sciclaw</span> auth logout <span class="hl-flag">--provider</span> openai</code></pre>
 
-        <p>Credentials are stored in <code>~/sciclaw/auth.json</code> with user-only file permissions. A successful login sets <code>providers.&lt;name&gt;.auth_method</code> in the config (<code>oauth</code> or <code>token</code>). On current Anthropic dev builds, oat-token credentials can be routed through the companion Claude bridge automatically when available.</p>
+        <p>OAuth and token credentials are stored in <code>~/.sciclaw/auth.json</code> with user-only file permissions. Provider settings remain visible in <code>~/sciclaw/config.json</code>.</p>
       </div>
 
       <!-- ─── Workspace ─── -->
       <div class="section" id="workspace">
         <h3>Workspace Layout</h3>
-        <p>The workspace lives at the path configured in <code>agents.defaults.workspace</code> (default <code>~/sciclaw</code>).</p>
+        <p>The visible workspace lives at the path configured in <code>agents.defaults.workspace</code> (default <code>~/sciclaw/workspaces/default</code>).</p>
 
-        <pre><code>~/sciclaw/
-├── sessions/          <span class="hl-comment"># Conversation history</span>
-├── memory/            <span class="hl-comment"># Long-term memory (MEMORY.md)</span>
-├── state/             <span class="hl-comment"># Persistent state</span>
-├── cron/              <span class="hl-comment"># Scheduled jobs database</span>
-├── skills/            <span class="hl-comment"># Installed skills</span>
-├── hooks/             <span class="hl-comment"># Hook audit log (hook-events.jsonl)</span>
-├── irl/
-│   └── commands/      <span class="hl-comment"># IRL command execution audit records</span>
-├── AGENTS.md          <span class="hl-comment"># Agent behavior guide</span>
-├── HEARTBEAT.md       <span class="hl-comment"># Periodic task prompts</span>
-├── HOOKS.md           <span class="hl-comment"># Hook policy (plain-language)</span>
-├── IDENTITY.md        <span class="hl-comment"># sciClaw identity</span>
-├── SOUL.md            <span class="hl-comment"># Agent values &amp; guardrails</span>
-├── TOOLS.md           <span class="hl-comment"># Tool descriptions</span>
-└── USER.md            <span class="hl-comment"># User preferences</span></code></pre>
+        <pre><code>~/sciclaw/                         <span class="hl-comment"># User-facing</span>
+├── config.json
+├── profile/{AGENTS,HOOKS,IDENTITY,SOUL,TOOLS,USER}.md
+├── skills/
+├── templates/
+├── backups/
+├── addons/
+└── workspaces/default/            <span class="hl-comment"># memory, skills, cron, IRL, documents, outputs</span>
 
-        <p>Bootstrap templates are versioned at <code>pkg/workspacetpl/templates/workspace/</code> and also installed to <code>~/sciclaw/templates/workspace/</code> for review and customization.</p>
+~/.sciclaw/                        <span class="hl-comment"># Machine-managed</span>
+├── auth.json
+├── logs/                          <span class="hl-comment"># gateway/web logs</span>
+├── runtime/                       <span class="hl-comment"># status, reload, async jobs, history</span>
+├── cache/
+├── tmp/
+└── workspaces/
+    ├── default/                    <span class="hl-comment"># default workspace runtime state</span>
+    └── &lt;hash&gt;/                     <span class="hl-comment"># routed/external runtime state</span></code></pre>
+
+        <p>Legacy SciClaw relocation is manual-only. The runtime never imports, merges, removes, or symlinks <code>~/.picoclaw</code>.</p>
+
+        <p>Bootstrap templates are versioned at <code>pkg/workspacetpl/templates/workspace/</code>. Onboarding writes the profile files to <code>~/sciclaw/profile/</code> and workspace memory to the active workspace; it does not populate <code>~/sciclaw/templates/workspace/</code>.</p>
       </div>
 
       <hr />
@@ -1545,7 +1549,7 @@ http://localhost:4142</code></pre>
       <div class="section" id="service">
         <h3>Service</h3>
         <p>Use <code>service</code> to run the gateway in the background and control lifecycle from one command.</p>
-        <p>On Linux, <code>service install</code> writes an explicit <code>PATH</code> into the systemd user unit so Homebrew tools (for example <code>pubmed</code> and <code>docx-review</code>) and the managed workspace venv (<code>~/sciclaw/.venv/bin</code>) are available when the gateway runs in the background.</p>
+        <p>On Linux, <code>service install</code> writes an explicit <code>PATH</code> into the systemd user unit so Homebrew tools and the managed venv under <code>~/.sciclaw</code> are available when the gateway runs in the background.</p>
 
         <pre><code><span class="hl-comment"># Install + start background gateway</span>
 <span class="hl-cmd">sciclaw</span> service install
@@ -1627,7 +1631,7 @@ http://localhost:4142</code></pre>
           <li>Syncs baseline skills from the bundled Homebrew share directory to your workspace</li>
           <li>Removes legacy skill directories (<code>docx</code>, <code>pubmed-database</code>) that were replaced by <code>docx-review</code> and <code>pubmed-cli</code></li>
           <li>Creates a <code>pubmed-cli</code> symlink if only <code>pubmed</code> is found on PATH</li>
-          <li>Bootstraps or repairs the workspace Python venv (<code>~/sciclaw/.venv</code>) on Linux</li>
+          <li>Bootstraps or repairs the managed workspace Python venv under <code>~/.sciclaw/workspaces/</code> on Linux</li>
         </ul>
 
         <p>Exit code 0 = all checks pass. Exit code 1 = at least one error.</p>
@@ -1683,7 +1687,7 @@ http://localhost:4142</code></pre>
       <!-- ─── Skills ─── -->
       <div class="section" id="skills">
         <h3>Baseline Scientific Skills</h3>
-        <p>During <code>sciclaw onboard</code>, bundled skills are installed into <code>~/sciclaw/skills/</code> by default:</p>
+        <p>During <code>sciclaw onboard</code>, bundled skills are installed into <code>~/sciclaw/workspaces/default/skills/</code> by default:</p>
 
         <h4>Research &amp; Literature</h4>
         <ul>
@@ -1823,7 +1827,7 @@ http://localhost:4142</code></pre>
       <!-- ─── IRL Provenance ─── -->
       <div class="section" id="irl-provenance">
         <h3>Provenance</h3>
-        <p>Every IRL command the agent executes is recorded as a timestamped JSON entry in <code>~/sciclaw/irl/commands/</code> by default. Each record captures:</p>
+        <p>Every IRL command the agent executes is recorded as a timestamped JSON entry under <code>irl/commands/</code> in the configured visible workspace. Each record captures:</p>
 
         <ul>
           <li>Full command argv and working directory</li>
@@ -1835,7 +1839,7 @@ http://localhost:4142</code></pre>
         </ul>
 
         <pre><code><span class="hl-comment"># View recent IRL command records</span>
-<span class="hl-cmd">ls</span> ~/sciclaw/irl/commands/</code></pre>
+<span class="hl-cmd">ls</span> ~/sciclaw/workspaces/default/irl/commands/</code></pre>
 
         <p>The command store is append-only audit material &mdash; no in-place mutation. This gives you a complete trail of every project created, adopted, or discovered through the agent.</p>
       </div>
@@ -1939,7 +1943,7 @@ http://localhost:4142</code></pre>
       <!-- ─── Collaborative Routing ─── -->
       <div class="section" id="routing">
         <h3>Collaborative Routing</h3>
-        <p>Give each project its own chat room. Routing maps a Discord or Telegram channel to a specific data folder so the agent only sees that project's files &mdash; while still having access to your shared personality, skills, and memory from <code>~/sciclaw</code>.</p>
+        <p>Give each project its own chat room. Routing maps a channel to a visible workspace while retaining profile files from <code>~/sciclaw/profile</code>, global skills from <code>~/sciclaw/skills</code>, and shared memory from the default workspace.</p>
 
         <div class="callout" style="background:#f0f7ff;border-left:4px solid #3b82f6;padding:0.8em 1em;margin:1em 0;border-radius:4px;">
           <strong>Mention to activate.</strong> In routed channels the bot stays quiet unless someone <code>@mention</code>s it, so collaborators can discuss freely without triggering responses. DMs always work without a mention.
@@ -1976,7 +1980,7 @@ http://localhost:4142</code></pre>
         <p><strong>What the routed agent can access:</strong></p>
         <ul>
           <li><strong>Project workspace</strong> &mdash; the data folder you mapped (read/write)</li>
-          <li><strong>Shared workspace</strong> (<code>~/sciclaw</code>) &mdash; your personality files (<code>AGENTS.md</code>, <code>SOUL.md</code>, etc.) and all installed skills</li>
+          <li><strong>Shared workspace</strong> (<code>~/sciclaw/workspaces/default</code>) &mdash; visible shared memory and workspace skills; profile files remain in <code>~/sciclaw/profile</code></li>
           <li><strong>Isolated sessions</strong> &mdash; conversation history, memory, and state are kept per-workspace so projects never cross-contaminate</li>
         </ul>
 
@@ -2199,7 +2203,7 @@ Top contributors
 
         <p>Two built-in handlers ship by default:</p>
         <ul>
-          <li><strong>policy</strong> &mdash; Reads <code>HOOKS.md</code> and <code>hooks.yaml</code> from your workspace, enables/disables events, and injects per-event instructions.</li>
+          <li><strong>policy</strong> &mdash; Loads global instructions from <code>~/sciclaw/profile/HOOKS.md</code>, then workspace <code>HOOKS.md</code>, then workspace <code>hooks.yaml</code> overrides.</li>
           <li><strong>provenance</strong> &mdash; Records normalized event metadata (turn ID, session, tool name) for reproducibility.</li>
         </ul>
       </div>
@@ -2229,11 +2233,12 @@ Top contributors
       <!-- ─── Hook Policy ─── -->
       <div class="section" id="hook-policy">
         <h3>Policy</h3>
-        <p>Hook behavior is configured through workspace files. The policy loader checks two sources in order:</p>
+        <p>Hook behavior has explicit global-to-workspace precedence. The policy loader checks three sources in order:</p>
 
         <ol>
-          <li><strong><code>HOOKS.md</code></strong> &mdash; Plain-language instructions per event, written so non-technical users can maintain them.</li>
-          <li><strong><code>hooks.yaml</code></strong> &mdash; Structured policy with per-event enable/disable, verbosity levels, capture fields, and redaction keys.</li>
+          <li><strong><code>~/sciclaw/profile/HOOKS.md</code></strong> &mdash; Global plain-language instructions.</li>
+          <li><strong><code>&lt;workspace&gt;/HOOKS.md</code></strong> &mdash; Workspace instructions that extend the global profile.</li>
+          <li><strong><code>&lt;workspace&gt;/hooks.yaml</code></strong> &mdash; Structured workspace overrides for enablement, verbosity, capture fields, instructions, and redaction.</li>
         </ol>
 
         <p>Example <code>HOOKS.md</code> (installed during <code>sciclaw onboard</code>):</p>
@@ -2258,14 +2263,14 @@ Top contributors
 
         <div class="callout">
           <div class="callout-title">Tip</div>
-          <p>Edit <code>HOOKS.md</code> in your workspace to customize what the agent captures at each lifecycle event. Changes take effect on the next turn &mdash; no restart required.</p>
+          <p>Edit <code>~/sciclaw/profile/HOOKS.md</code> for global behavior. Add workspace <code>HOOKS.md</code> or <code>hooks.yaml</code> for project-specific extensions or overrides.</p>
         </div>
       </div>
 
       <!-- ─── Hook Audit ─── -->
       <div class="section" id="hook-audit">
         <h3>Audit Log</h3>
-        <p>Every hook execution is appended to a JSONL audit log at <code>hooks/hook-events.jsonl</code> inside your workspace. Each entry records:</p>
+        <p>Every hook execution is appended to <code>hooks/hook-events.jsonl</code> inside that workspace's private state directory. The configured default uses <code>~/.sciclaw/workspaces/default/</code>; routed and external workspaces use <code>~/.sciclaw/workspaces/&lt;hash&gt;/</code>.</p>
 
         <ul>
           <li>Turn ID, event name, and handler name</li>
@@ -2275,7 +2280,7 @@ Top contributors
         </ul>
 
         <pre><code><span class="hl-comment"># View recent hook events</span>
-<span class="hl-cmd">tail</span> <span class="hl-flag">-5</span> ~/sciclaw/hooks/hook-events.jsonl | <span class="hl-cmd">jq</span> .</code></pre>
+<span class="hl-cmd">sciclaw</span> doctor <span class="hl-comment"># reports the active hook event log under ~/.sciclaw/workspaces/</span></code></pre>
 
         <p>The audit log is designed for reproducibility &mdash; every claim the agent makes can be traced back to the tool calls and LLM responses that produced it.</p>
       </div>
@@ -2325,7 +2330,7 @@ Top contributors
         <pre><code><span class="hl-cmd">sciclaw</span> cron list
 <span class="hl-cmd">sciclaw</span> cron add <span class="hl-string">"Check email"</span> <span class="hl-flag">--every</span> 2h</code></pre>
 
-        <p>Jobs are stored in <code>~/sciclaw/cron/</code> by default and processed automatically by the gateway.</p>
+        <p>User cron schedules are stored in <code>~/sciclaw/workspaces/default/cron/</code> by default and processed automatically by the gateway.</p>
       </div>
 
       <!-- ─── Docker ─── -->

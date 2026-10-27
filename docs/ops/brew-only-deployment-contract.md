@@ -94,7 +94,7 @@ If `sciclaw` is missing after cleanup, install via Brew first, then run the play
 ## Data1 Cleanup Rule (Requested)
 
 When asked to "clean up sciclaw except config":
-- Preserve only `~/.picoclaw/config.json`.
-- Remove service/plists/logs/workspace/auth/cache/binaries.
+- Preserve `~/sciclaw/config.json` and all user-facing workspace/profile content unless the owner explicitly authorizes deletion.
+- Remove only explicitly approved service registrations, machine-managed state under `~/.sciclaw`, and binaries.
+- Never remove or alter `~/.picoclaw`; it belongs to PicoClaw.
 - Reinstall from Brew and rebind service afterward.
-

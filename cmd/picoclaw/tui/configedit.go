@@ -29,7 +29,7 @@ func writeConfigMap(exec Executor, m map[string]interface{}) error {
 		return err
 	}
 	data = append(data, '\n')
-	return exec.WriteFile(exec.ConfigPath(), data, 0644)
+	return exec.WriteFile(exec.ConfigPath(), data, 0600)
 }
 
 // updateConfigMap serializes a read-modify-write cycle in-process so concurrent

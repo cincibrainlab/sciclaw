@@ -8,16 +8,17 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/agent"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/paths"
 )
 
 func TestResolvePromptInspectWorkspaceFindsRoutingWorkspace(t *testing.T) {
 	workspace := t.TempDir()
 	other := t.TempDir()
 	sessionKey := "discord:channel@session"
-	if err := os.MkdirAll(filepath.Join(other, "sessions"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(paths.WorkspaceStateDir(other), "sessions"), 0755); err != nil {
 		t.Fatalf("mkdir sessions: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(other, "sessions", sessionKey+".json"), []byte(`{"key":"`+sessionKey+`"}`), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(paths.WorkspaceStateDir(other), "sessions", sessionKey+".json"), []byte(`{"key":"`+sessionKey+`"}`), 0644); err != nil {
 		t.Fatalf("write session: %v", err)
 	}
 
@@ -42,10 +43,10 @@ func TestResolvePromptInspectWorkspaceErrorsOnMultipleMatches(t *testing.T) {
 	shared := t.TempDir()
 	sessionKey := "discord:channel@session"
 	for _, dir := range []string{workspace, shared} {
-		if err := os.MkdirAll(filepath.Join(dir, "sessions"), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Join(paths.WorkspaceStateDir(dir), "sessions"), 0755); err != nil {
 			t.Fatalf("mkdir sessions in %s: %v", dir, err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, "sessions", sessionKey+".json"), []byte(`{"key":"`+sessionKey+`"}`), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(paths.WorkspaceStateDir(dir), "sessions", sessionKey+".json"), []byte(`{"key":"`+sessionKey+`"}`), 0644); err != nil {
 			t.Fatalf("write session in %s: %v", dir, err)
 		}
 	}

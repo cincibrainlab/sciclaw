@@ -4,12 +4,15 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/sipeed/picoclaw/pkg/paths"
 )
 
 func TestCheckGatewayLogSkipsTelegramConflictWhenDisabled(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	logPath := filepath.Join(home, ".picoclaw", "gateway.log")
+	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(home, ".sciclaw"))
+	logPath := paths.GatewayLogPath()
 	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -31,7 +34,8 @@ func TestCheckGatewayLogSkipsTelegramConflictWhenDisabled(t *testing.T) {
 func TestCheckGatewayLogFlagsConflictWhenTelegramEnabled(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	logPath := filepath.Join(home, ".picoclaw", "gateway.log")
+	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(home, ".sciclaw"))
+	logPath := paths.GatewayLogPath()
 	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -49,4 +53,3 @@ func TestCheckGatewayLogFlagsConflictWhenTelegramEnabled(t *testing.T) {
 		t.Fatalf("name = %q, want gateway.telegram", got.Name)
 	}
 }
-

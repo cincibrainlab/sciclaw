@@ -1,10 +1,12 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
-	"strings"
 	"time"
+
+	"github.com/sipeed/picoclaw/pkg/paths"
 )
 
 // VMExecutor runs commands inside the multipass VM.
@@ -25,15 +27,17 @@ func (e *VMExecutor) ReadFile(path string) (string, error) {
 }
 
 func (e *VMExecutor) WriteFile(path string, data []byte, perm os.FileMode) error {
-	// Write via stdin pipe to avoid shell escaping issues.
-	escaped := shellEscape(string(data))
-	cmd := "printf '%s' " + escaped + " > " + shellEscape(path)
+	cmd := vmWriteFileCommand(path, data, perm)
 	_, err := VMExecShell(10*time.Second, cmd)
 	return err
 }
 
-func (e *VMExecutor) ConfigPath() string { return "/home/ubuntu/.picoclaw/config.json" }
-func (e *VMExecutor) AuthPath() string   { return "/home/ubuntu/.picoclaw/auth.json" }
+func vmWriteFileCommand(path string, data []byte, perm os.FileMode) string {
+	return "umask 077; printf '%s' " + shellEscape(string(data)) + " > " + shellEscape(path) + "; chmod " + fmt.Sprintf("%04o", perm.Perm()) + " " + shellEscape(path)
+}
+
+func (e *VMExecutor) ConfigPath() string { return "/home/ubuntu/sciclaw/config.json" }
+func (e *VMExecutor) AuthPath() string   { return "/home/ubuntu/.sciclaw/auth.json" }
 func (e *VMExecutor) HomePath() string   { return "/home/ubuntu" }
 func (e *VMExecutor) BinaryPath() string { return "sciclaw" } // VM always uses PATH
 
@@ -67,13 +71,12 @@ func (e *VMExecutor) VMInfoSnapshot() VMInfo {
 
 // HostConfigRaw reads the host-side config for drift detection.
 func (e *VMExecutor) HostConfigRaw() (string, error) {
-	home, err := os.UserHomeDir()
+	if err := paths.ValidateHomes(); err != nil {
+		return "", err
+	}
+	b, err := os.ReadFile(paths.ConfigPath())
 	if err != nil {
 		return "", err
 	}
-	b, err := os.ReadFile(home + "/.picoclaw/config.json")
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(b)), nil
+	return string(b), nil
 }

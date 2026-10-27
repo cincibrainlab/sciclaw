@@ -110,10 +110,20 @@ RUN ln -sf sciclaw /usr/local/bin/picoclaw
 
 # Copy builtin skills
 COPY --from=builder /src/skills /opt/sciclaw/skills
+COPY --from=builder /src/pkg/workspacetpl/templates/workspace /opt/sciclaw/templates/workspace
 
-# Create default workspace with baseline skills
-RUN mkdir -p /root/sciclaw/skills && \
-    cp -r /opt/sciclaw/skills/* /root/sciclaw/skills/ 2>/dev/null || true
+# Create separate user-visible and machine-managed roots.
+RUN mkdir -p /root/sciclaw/profile /root/sciclaw/skills \
+      /root/sciclaw/templates /root/sciclaw/backups /root/sciclaw/addons \
+      /root/sciclaw/workspaces/default/skills /root/sciclaw/workspaces/default/memory && \
+    install -d -m 0700 /root/.sciclaw /root/.sciclaw/logs /root/.sciclaw/runtime \
+      /root/.sciclaw/cache /root/.sciclaw/tmp /root/.sciclaw/workspaces && \
+    cp -r /opt/sciclaw/skills/* /root/sciclaw/workspaces/default/skills/ 2>/dev/null && \
+    cp /opt/sciclaw/templates/workspace/AGENTS.md /opt/sciclaw/templates/workspace/HOOKS.md \
+      /opt/sciclaw/templates/workspace/IDENTITY.md /opt/sciclaw/templates/workspace/SOUL.md \
+      /opt/sciclaw/templates/workspace/TOOLS.md /opt/sciclaw/templates/workspace/USER.md \
+      /root/sciclaw/profile/ && \
+    cp /opt/sciclaw/templates/workspace/memory/MEMORY.md /root/sciclaw/workspaces/default/memory/MEMORY.md
 
 ENTRYPOINT ["sciclaw"]
 CMD ["gateway"]

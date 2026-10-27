@@ -91,24 +91,34 @@ func dockerCmd() {
 		if len(args) > 1 {
 			image = args[1]
 		}
-		home, _ := os.UserHomeDir()
-		workspace := filepath.Join(home, "sciclaw")
-		configHome := paths.AppHome()
-		_ = os.MkdirAll(workspace, 0755)
-		_ = os.MkdirAll(configHome, 0755)
-
-		dockerArgs := []string{
-			"run", "--rm", "-it",
-			"-v", workspace + ":/root/sciclaw",
-			"-v", configHome + ":/root/.picoclaw",
-			"-p", "8080:8080",
-			image,
-			"gateway",
+		if err := paths.ValidateHomes(); err != nil {
+			fmt.Printf("Error: %v\n", err)
+			return
 		}
+		userHome := paths.UserHome()
+		stateHome := paths.StateHome()
+		_ = os.MkdirAll(paths.DefaultWorkspace(), 0755)
+		if err := paths.EnsureStateLayout(); err != nil {
+			fmt.Printf("Error preparing machine state: %v\n", err)
+			return
+		}
+
+		dockerArgs := dockerGatewayArgs(image, userHome, stateHome)
 		runAndExit("docker", dockerArgs...)
 	default:
 		// passthrough mode: `sciclaw docker <docker-args...>`
 		runAndExit("docker", args...)
+	}
+}
+
+func dockerGatewayArgs(image, userHome, stateHome string) []string {
+	return []string{
+		"run", "--rm", "-it",
+		"-v", userHome + ":/root/sciclaw",
+		"-v", stateHome + ":/root/.sciclaw",
+		"-p", "8080:8080",
+		image,
+		"gateway",
 	}
 }
 
@@ -119,7 +129,7 @@ func printDockerHelp() {
 	fmt.Println("Subcommands:")
 	fmt.Println("  pull [image]      Pull sciClaw container image")
 	fmt.Println("  doctor [image]    Run doctor in a disposable container")
-	fmt.Println("  gateway [image]   Run gateway with ~/sciclaw and ~/.picoclaw mounted")
+	fmt.Println("  gateway [image]   Run gateway with ~/sciclaw and ~/.sciclaw mounted")
 	fmt.Println("")
 	fmt.Println("Passthrough:")
 	fmt.Println("  sciclaw docker <any docker args...>")
@@ -160,17 +170,18 @@ func resolveVMHelperFiles() (vmHelperFiles, error) {
 
 	// 3) Use packaged Homebrew share helper if present.
 	if exe, err := os.Executable(); err == nil {
-		exeDir := filepath.Dir(exe)
-		if hf, ok := helperFromRoot(filepath.Clean(filepath.Join(exeDir, "..", "share", "sciclaw", "deploy"))); ok {
-			return hf, nil
-		}
-		if hf, ok := helperFromRoot(filepath.Clean(filepath.Join(exeDir, "..", "share", "picoclaw", "deploy"))); ok {
-			return hf, nil
+		for _, root := range packagedVMHelperRoots(exe) {
+			if hf, ok := helperFromRoot(root); ok {
+				return hf, nil
+			}
 		}
 	}
 
 	// 4) Fallback: download helper artifacts from GitHub for this version.
-	tmpDir, err := os.MkdirTemp("", "sciclaw-vm-helper-*")
+	if err := os.MkdirAll(paths.TempDir(), 0700); err != nil {
+		return vmHelperFiles{}, err
+	}
+	tmpDir, err := os.MkdirTemp(paths.TempDir(), "vm-helper-*")
 	if err != nil {
 		return vmHelperFiles{}, err
 	}
@@ -209,6 +220,10 @@ func resolveVMHelperFiles() (vmHelperFiles, error) {
 	}
 	_ = os.RemoveAll(tmpDir)
 	return vmHelperFiles{}, lastErr
+}
+
+func packagedVMHelperRoots(executable string) []string {
+	return []string{filepath.Clean(filepath.Join(filepath.Dir(executable), "..", "share", "sciclaw", "deploy"))}
 }
 
 func helperFromRoot(root string) (vmHelperFiles, bool) {

@@ -1,10 +1,31 @@
 package tui
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestLocalExecutorWriteFileHonorsPermissions(t *testing.T) {
+	t.Setenv("SCICLAW_HOME", filepath.Join(t.TempDir(), "sciclaw"))
+	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(t.TempDir(), ".sciclaw"))
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte("old"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	executor := NewLocalExecutor()
+	if err := executor.WriteFile(path, []byte("new"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("mode=%#o want 0600", info.Mode().Perm())
+	}
+}
 
 func TestParseServiceStatusFlag(t *testing.T) {
 	out := `

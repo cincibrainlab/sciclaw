@@ -196,9 +196,9 @@
         <p>There's no account to create with us. No login. No server to connect to. sciClaw is software that runs on your Mac or Linux machine, same as any other program you've installed. We don't host anything, and we don't know you're running it.</p>
         <p>That's a deliberate choice. Research data is sensitive. Institutional review boards exist for a reason. We didn't want to build something that asks you to trust a startup with your participants' information. So we didn't.</p>
 
-        <h2>Your data stays in one folder</h2>
-        <p>Everything sciClaw produces lives in <code>~/sciclaw</code>. Conversations, documents, logs, memory. One folder on your machine that you own and control. You can open it in Finder, back it up to an encrypted drive, version it with git, or delete the whole thing if you want.</p>
-        <p>There's no hidden cache somewhere else on your system. No data stashed in a temp directory. It's all right there.</p>
+        <h2>Your work and runtime state stay separate</h2>
+        <p>Editable settings, profiles, skills, backups, documents, memory, schedules, and user-facing IRL audit records live under <code>~/sciclaw</code>. Machine-managed credentials, logs, sessions, hook event audits, caches, and runtime coordination live under <code>~/.sciclaw</code>.</p>
+        <p>This separation keeps internal state out of visible research workspaces. <code>~/.picoclaw</code> is never used by SciClaw and remains available to an independent PicoClaw installation.</p>
 
         <h2>Nothing is exposed to the internet</h2>
         <p>sciClaw doesn't open any ports. It doesn't listen for incoming connections. It doesn't run a web server. When you send a message, it reaches out to your AI provider (OpenAI, Anthropic, whoever you chose) and to any tools you explicitly told it to use (like PubMed). That's it.</p>
@@ -209,7 +209,7 @@
         <p>The gateway (the part that connects to Telegram or Discord) runs on your machine too. It's not a relay service we operate. Your messages don't pass through our infrastructure at any point.</p>
 
         <h2>API keys stay local</h2>
-        <p>Your credentials are stored in a config file on your computer (<code>~/.picoclaw/config.json</code>). They're never transmitted to anyone except the provider they belong to. We can't see your keys because we never receive them.</p>
+        <p>Provider settings are stored in <code>~/sciclaw/config.json</code>, while OAuth and token credentials are stored in <code>~/.sciclaw/auth.json</code>. They're never transmitted to anyone except the provider they belong to.</p>
         <p>If you use the OAuth device-code flow for OpenAI, the token exchange happens directly between your machine and OpenAI's servers. We're not in that loop.</p>
 
         <h2>No telemetry</h2>
@@ -241,7 +241,7 @@
         <h2>The short version</h2>
         <ul>
           <li>Runs on your machine. Not ours.</li>
-          <li>All data stays in <code>~/sciclaw</code>. One folder, your control.</li>
+          <li>User-facing work stays under <code>~/sciclaw</code>; machine state stays under <code>~/.sciclaw</code>.</li>
           <li>No open ports. No incoming connections. Outbound HTTPS only.</li>
           <li>Chat goes through your private bot. We don't operate a relay.</li>
           <li>API keys stored locally. Never sent to us.</li>

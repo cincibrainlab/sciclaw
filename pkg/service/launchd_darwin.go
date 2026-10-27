@@ -42,8 +42,8 @@ func newLaunchdManagerForSpec(exePath string, runner commandRunner, spec Spec) M
 		domainTarget:  domain,
 		serviceTarget: serviceTarget,
 		plistPath:     filepath.Join(home, "Library", "LaunchAgents", label+".plist"),
-		stdoutPath:    filepath.Join(paths.AppHome(), spec.StdoutFile),
-		stderrPath:    filepath.Join(paths.AppHome(), spec.StderrFile),
+		stdoutPath:    filepath.Join(paths.LogsDir(), spec.StdoutFile),
+		stderrPath:    filepath.Join(paths.LogsDir(), spec.StderrFile),
 	}
 }
 
@@ -54,6 +54,9 @@ func (m *launchdManager) Install() error {
 	// clean slate. This is idempotent — Uninstall is a no-op when the
 	// service was never installed.
 	_ = m.Uninstall()
+	if err := paths.EnsureStateLayout(); err != nil {
+		return err
+	}
 
 	if err := os.MkdirAll(filepath.Dir(m.plistPath), 0755); err != nil {
 		return err
@@ -61,9 +64,22 @@ func (m *launchdManager) Install() error {
 	if err := os.MkdirAll(filepath.Dir(m.stdoutPath), 0700); err != nil {
 		return err
 	}
+	if err := os.Chmod(filepath.Dir(m.stdoutPath), 0700); err != nil {
+		return err
+	}
+	for _, logPath := range []string{m.stdoutPath, m.stderrPath} {
+		file, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+		if err != nil {
+			return err
+		}
+		_ = file.Close()
+		if err := os.Chmod(logPath, 0600); err != nil {
+			return err
+		}
+	}
 
 	pathEnv := buildSystemdPath(os.Getenv("PATH"), m.detectBrewPrefix())
-	plist := renderLaunchdPlist(m.label, m.exePath, m.spec.Args, m.stdoutPath, m.stderrPath, pathEnv)
+	plist := renderLaunchdPlist(m.label, m.exePath, m.spec.Args, m.stdoutPath, m.stderrPath, pathEnv, paths.UserHome(), paths.StateHome())
 	if err := os.WriteFile(m.plistPath, []byte(plist), 0644); err != nil {
 		return err
 	}

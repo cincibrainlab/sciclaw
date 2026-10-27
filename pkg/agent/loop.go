@@ -27,6 +27,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/hooks"
 	"github.com/sipeed/picoclaw/pkg/hooks/builtin"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/paths"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/session"
 	"github.com/sipeed/picoclaw/pkg/state"
@@ -203,6 +204,9 @@ func createToolRegistry(workspace string, restrict bool, cfg *config.Config, msg
 	// Shell execution
 	execTool := tools.NewExecTool(workspace, restrict)
 	execTool.SetSharedWorkspacePolicy(sharedWorkspace, sharedReadOnly)
+	execEnv := map[string]string{
+		"PATH": paths.WorkspaceVenvBinDir(workspace) + string(os.PathListSeparator) + os.Getenv("PATH"),
+	}
 	if cfg.Agents.Defaults.ExecTimeout > 0 {
 		execTool.SetTimeout(time.Duration(cfg.Agents.Defaults.ExecTimeout) * time.Second)
 	}
@@ -211,12 +215,13 @@ func createToolRegistry(workspace string, restrict bool, cfg *config.Config, msg
 	pubmedFetchTool := tools.NewPubMedFetchTool(workspace)
 	pubmedExportTool.SetSharedWorkspacePolicy(sharedWorkspace, sharedReadOnly)
 	if strings.TrimSpace(cfg.Tools.PubMed.APIKey) != "" {
-		env := map[string]string{"NCBI_API_KEY": cfg.Tools.PubMed.APIKey}
-		execTool.SetExtraEnv(env)
-		pubmedExportTool.SetExtraEnv(env)
-		pubmedSearchTool.SetExtraEnv(env)
-		pubmedFetchTool.SetExtraEnv(env)
+		execEnv["NCBI_API_KEY"] = cfg.Tools.PubMed.APIKey
+		pubmedEnv := map[string]string{"NCBI_API_KEY": cfg.Tools.PubMed.APIKey}
+		pubmedExportTool.SetExtraEnv(pubmedEnv)
+		pubmedSearchTool.SetExtraEnv(pubmedEnv)
+		pubmedFetchTool.SetExtraEnv(pubmedEnv)
 	}
+	execTool.SetExtraEnv(execEnv)
 	docxReviewReadTool := tools.NewDOCXReviewReadTool(workspace, restrict)
 	docxReviewReadTool.SetSharedWorkspacePolicy(sharedWorkspace, sharedReadOnly)
 	docxReviewDiffTool := tools.NewDOCXReviewDiffTool(workspace, restrict)
@@ -339,7 +344,13 @@ func NewAgentLoopWithOptions(cfg *config.Config, msgBus *bus.MessageBus, provide
 		toolsRegistry.Register(subagentTool)
 	}
 
-	sessionsManager := session.NewSessionManager(filepath.Join(workspace, "sessions"))
+	workspaceState := paths.WorkspaceStateDir(workspace)
+	if securedState, err := paths.EnsureWorkspaceStateDir(workspace); err != nil {
+		logger.WarnCF("state", "Failed to secure workspace runtime directory", map[string]interface{}{"error": err.Error()})
+	} else {
+		workspaceState = securedState
+	}
+	sessionsManager := session.NewSessionManager(filepath.Join(workspaceState, "sessions"))
 	discordArchiveMgr := discordarchive.NewManager(workspace, sessionsManager, cfg.Channels.Discord.Archive)
 
 	// Create state manager for atomic state persistence
@@ -353,7 +364,7 @@ func NewAgentLoopWithOptions(cfg *config.Config, msgBus *bus.MessageBus, provide
 
 	var hookDispatcher *hooks.Dispatcher
 	hookAuditPath := ""
-	hookPolicy, hookDiag, hookPolicyErr := hookpolicy.LoadPolicy(workspace)
+	hookPolicy, hookDiag, hookPolicyErr := hookpolicy.LoadPolicy(paths.ProfileDir(), workspace)
 	if hookPolicyErr != nil {
 		logger.WarnCF("hooks", "Failed to load hook policy, using defaults", map[string]interface{}{"error": hookPolicyErr.Error()})
 	}
@@ -363,13 +374,11 @@ func NewAgentLoopWithOptions(cfg *config.Config, msgBus *bus.MessageBus, provide
 
 	var auditSink hooks.AuditSink
 	if hookPolicy.AuditEnabled || hookPolicyErr != nil {
-		auditPath := filepath.Join(workspace, "hooks", "hook-events.jsonl")
-		if hookPolicyErr == nil && hookPolicy.AuditPath != "" {
-			auditPath = hookPolicy.AuditPath
-		}
-		sink, err := hooks.NewJSONLAuditSinkAt(auditPath)
-		if err != nil {
-			logger.WarnCF("hooks", "Hook audit sink disabled: %v", map[string]interface{}{"error": err.Error()})
+		auditPath, pathErr := hookpolicy.ResolveAuditPath(workspaceState, hookPolicy.AuditPath)
+		if pathErr != nil {
+			logger.WarnCF("hooks", "Hook audit sink disabled", map[string]interface{}{"error": pathErr.Error()})
+		} else if sink, err := hooks.NewJSONLAuditSinkAt(auditPath); err != nil {
+			logger.WarnCF("hooks", "Hook audit sink disabled", map[string]interface{}{"error": err.Error()})
 		} else {
 			auditSink = sink
 			hookAuditPath = sink.Path()
