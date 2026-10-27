@@ -142,7 +142,7 @@ runcmd:
 import json
 import os
 
-cfg_path = os.path.expanduser("~/sciclaw/config.json")
+cfg_path = os.path.expanduser("~/.sciclaw/config.json")
 cfg = {
     "agents": {
         "defaults": {

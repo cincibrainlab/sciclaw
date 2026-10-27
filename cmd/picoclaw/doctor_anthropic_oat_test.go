@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/paths"
 )
 
 func TestRunDoctorReportsAnthropicOATBridge(t *testing.T) {
@@ -17,11 +18,12 @@ func TestRunDoctorReportsAnthropicOATBridge(t *testing.T) {
 
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(home, ".sciclaw"))
 
 	cfg := config.DefaultConfig()
 	cfg.Providers.Anthropic.APIKey = "sk-ant-oat-test"
 
-	configPath := filepath.Join(home, "sciclaw", "config.json")
+	configPath := paths.ConfigPath()
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		t.Fatalf("mkdir config dir: %v", err)
 	}

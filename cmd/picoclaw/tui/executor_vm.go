@@ -36,7 +36,7 @@ func vmWriteFileCommand(path string, data []byte, perm os.FileMode) string {
 	return "umask 077; printf '%s' " + shellEscape(string(data)) + " > " + shellEscape(path) + "; chmod " + fmt.Sprintf("%04o", perm.Perm()) + " " + shellEscape(path)
 }
 
-func (e *VMExecutor) ConfigPath() string { return "/home/ubuntu/sciclaw/config.json" }
+func (e *VMExecutor) ConfigPath() string { return "/home/ubuntu/.sciclaw/config.json" }
 func (e *VMExecutor) AuthPath() string   { return "/home/ubuntu/.sciclaw/auth.json" }
 func (e *VMExecutor) HomePath() string   { return "/home/ubuntu" }
 func (e *VMExecutor) BinaryPath() string { return "sciclaw" } // VM always uses PATH

@@ -367,7 +367,7 @@ func TestHandleSkillsReadsResolvedSkillSources(t *testing.T) {
 
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = workspace
-	if err := config.SaveConfig(filepath.Join(cfgDir, "config.json"), cfg); err != nil {
+	if err := config.SaveConfig(paths.ConfigPath(), cfg); err != nil {
 		t.Fatalf("save config: %v", err)
 	}
 
@@ -473,7 +473,7 @@ func TestHandleSkillsDeleteOnlyRemovesWorkspaceSkill(t *testing.T) {
 	}
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = workspace
-	if err := config.SaveConfig(filepath.Join(cfgDir, "config.json"), cfg); err != nil {
+	if err := config.SaveConfig(paths.ConfigPath(), cfg); err != nil {
 		t.Fatalf("save config: %v", err)
 	}
 
@@ -520,7 +520,7 @@ func TestHandleRoutingReadsRealConfigMappings(t *testing.T) {
 			Label:          "Alpha",
 		},
 	}
-	if err := config.SaveConfig(filepath.Join(cfgDir, "config.json"), cfg); err != nil {
+	if err := config.SaveConfig(paths.ConfigPath(), cfg); err != nil {
 		t.Fatalf("save config: %v", err)
 	}
 
@@ -582,7 +582,7 @@ func TestHandleModelsPutPersistsResolvedProvider(t *testing.T) {
 	cfg.Agents.Defaults.Model = "claude-sonnet-4.6"
 	cfg.Agents.Defaults.Provider = "anthropic"
 	cfg.Providers.OpenAI.AuthMethod = "oauth"
-	if err := config.SaveConfig(filepath.Join(cfgDir, "config.json"), cfg); err != nil {
+	if err := config.SaveConfig(paths.ConfigPath(), cfg); err != nil {
 		t.Fatalf("save config: %v", err)
 	}
 
@@ -608,7 +608,7 @@ func TestHandleModelsPutPersistsResolvedProvider(t *testing.T) {
 		t.Fatalf("unexpected response: %#v", body)
 	}
 
-	reloaded, err := config.LoadConfig(filepath.Join(cfgDir, "config.json"))
+	reloaded, err := config.LoadConfig(paths.ConfigPath())
 	if err != nil {
 		t.Fatalf("reload config: %v", err)
 	}
@@ -643,7 +643,7 @@ func TestHandleJobsReadsPersistedLedger(t *testing.T) {
 		AllowedSenders: config.FlexibleStringSlice{"u-1"},
 		Label:          "Alpha room",
 	}}
-	if err := config.SaveConfig(filepath.Join(cfgDir, "config.json"), cfg); err != nil {
+	if err := config.SaveConfig(paths.ConfigPath(), cfg); err != nil {
 		t.Fatalf("save config: %v", err)
 	}
 

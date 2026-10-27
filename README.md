@@ -144,7 +144,7 @@ sciClaw's default posture is **local, private, and locked down**. Here's what th
 - **Nothing is exposed to the internet.** sciClaw doesn't open any ports or listen for incoming connections. It reaches out only when you send a message, and only to the AI provider you chose (OpenAI, Anthropic, etc.) and any tools you explicitly enable (like PubMed).
 - **Messages go through your private bot.** When you chat via Telegram or Discord, messages travel through a bot that only you control. Nobody else can talk to it unless you explicitly allow them.
 - **No telemetry, no analytics, no tracking.** sciClaw sends nothing back to us. No usage data, no error reports, no phone-home behavior. We don't know you're running it.
-- **Credentials stay local.** Provider settings remain in `~/sciclaw/config.json`; OAuth tokens remain in the machine-managed `~/.sciclaw/auth.json`. They're never transmitted to anyone except the selected provider.
+- **Credentials stay local.** Provider settings remain in `~/.sciclaw/config.json`; OAuth tokens remain in the machine-managed `~/.sciclaw/auth.json`. They're never transmitted to anyone except the selected provider.
 - **Skills are validated before install.** Every skill goes through size limits, binary rejection, frontmatter validation, and SHA-256 provenance logging. Catalog fetches use pinned commit refs for supply-chain hardening.
 
 For the full security model, see [Security](https://sciclaw.dev/security.html).
@@ -218,7 +218,7 @@ Discord-specific features on current `main`/dev builds:
 2. Run `sciclaw channels setup telegram` (pairs your account and writes config)
 3. Start the gateway: `sciclaw service install && sciclaw service start`
 
-Manual config (advanced) in `~/sciclaw/config.json`:
+Manual config (advanced) in `~/.sciclaw/config.json`:
 
 ```json
 {

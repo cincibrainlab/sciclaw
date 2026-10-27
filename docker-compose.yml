@@ -11,7 +11,7 @@ services:
     profiles:
       - agent
     volumes:
-      - ./config/config.json:/root/sciclaw/config.json:ro
+      - ./config/config.json:/root/.sciclaw/config.json:ro
       - sciclaw-profile:/root/sciclaw/profile
       - sciclaw-global-skills:/root/sciclaw/skills
       - sciclaw-templates:/root/sciclaw/templates
@@ -37,7 +37,7 @@ services:
       - gateway
     volumes:
       # Configuration file
-      - ./config/config.json:/root/sciclaw/config.json:ro
+      - ./config/config.json:/root/.sciclaw/config.json:ro
       - sciclaw-profile:/root/sciclaw/profile
       - sciclaw-global-skills:/root/sciclaw/skills
       - sciclaw-templates:/root/sciclaw/templates

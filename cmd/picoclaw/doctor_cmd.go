@@ -714,7 +714,7 @@ func checkHostVMChannelConflict(hostCfg *config.Config) doctorCheck {
 	}
 
 	// Read VM config to check which channels are enabled.
-	vmCfgRaw, err := tui.VMCatFile("/home/ubuntu/sciclaw/config.json")
+	vmCfgRaw, err := tui.VMCatFile("/home/ubuntu/.sciclaw/config.json")
 	if err != nil {
 		return doctorCheck{Name: name, Status: doctorSkip, Message: "cannot read VM config"}
 	}

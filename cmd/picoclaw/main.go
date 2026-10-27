@@ -1200,6 +1200,11 @@ func migrateCmd() {
 				opts.OpenClawHome = args[i+1]
 				i++
 			}
+		case "--picoclaw-home":
+			if i+1 < len(args) {
+				opts.PicoClawHome = args[i+1]
+				i++
+			}
 		default:
 			fmt.Printf("Unknown flag: %s\n", args[i])
 			migrateHelp()
@@ -1231,6 +1236,7 @@ func migrateHelp() {
 	fmt.Println("  --workspace-only   Only migrate workspace files, skip config")
 	fmt.Println("  --force            Skip confirmation prompts")
 	fmt.Println("  --openclaw-home    Override OpenClaw home directory (default: ~/.openclaw)")
+	fmt.Println("  --picoclaw-home    Import compatible PicoClaw config from ~/.picoclaw explicitly")
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Printf("  %s migrate              Detect and migrate from OpenClaw\n", commandName)

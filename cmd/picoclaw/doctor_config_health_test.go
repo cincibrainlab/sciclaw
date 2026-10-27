@@ -61,13 +61,14 @@ func TestCheckConfigHealthReportsIssuesWithoutFix(t *testing.T) {
 func TestCheckConfigHealthAppliesFixesWithDoctorFix(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(home, ".sciclaw"))
 
 	workspace := filepath.Join(home, "ws")
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
 		t.Fatalf("mkdir workspace: %v", err)
 	}
 
-	configPath := filepath.Join(home, "sciclaw", "config.json")
+	configPath := paths.ConfigPath()
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		t.Fatalf("mkdir config dir: %v", err)
 	}

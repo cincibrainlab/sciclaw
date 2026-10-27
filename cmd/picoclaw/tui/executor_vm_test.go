@@ -7,7 +7,7 @@ import (
 
 func TestVMExecutorUsesSplitSciClawRoots(t *testing.T) {
 	executor := &VMExecutor{}
-	if got, want := executor.ConfigPath(), "/home/ubuntu/sciclaw/config.json"; got != want {
+	if got, want := executor.ConfigPath(), "/home/ubuntu/.sciclaw/config.json"; got != want {
 		t.Fatalf("ConfigPath()=%q want %q", got, want)
 	}
 	if got, want := executor.AuthPath(), "/home/ubuntu/.sciclaw/auth.json"; got != want {
@@ -16,7 +16,7 @@ func TestVMExecutorUsesSplitSciClawRoots(t *testing.T) {
 }
 
 func TestVMWriteFileCommandHonorsPermissions(t *testing.T) {
-	command := vmWriteFileCommand("/home/ubuntu/sciclaw/config.json", []byte("{}"), 0600)
+	command := vmWriteFileCommand("/home/ubuntu/.sciclaw/config.json", []byte("{}"), 0600)
 	if !strings.Contains(command, "chmod 0600") || !strings.Contains(command, "umask 077") {
 		t.Fatalf("write command does not enforce permissions: %s", command)
 	}

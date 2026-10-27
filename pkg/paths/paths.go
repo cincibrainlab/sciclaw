@@ -18,7 +18,7 @@ func StateHome() string {
 }
 
 func ConfigPath() string {
-	return filepath.Join(UserHome(), "config.json")
+	return filepath.Join(StateHome(), "config.json")
 }
 
 func ProfileDir() string {
