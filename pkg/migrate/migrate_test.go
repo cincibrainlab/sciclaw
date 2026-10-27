@@ -615,6 +615,88 @@ func TestRewriteWorkspacePath(t *testing.T) {
 	}
 }
 
+func TestRunUnifyRejectsExistingDestination(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	oldDir := filepath.Join(home, ".picoclaw")
+	newDir := filepath.Join(home, "sciclaw")
+	if err := os.MkdirAll(oldDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(newDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(oldDir, "config.json"), []byte("legacy config"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(oldDir, "auth.json"), []byte("legacy credentials"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(newDir, "auth.json"), []byte("target credentials"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := runUnify(Options{Force: true})
+	if err != nil {
+		t.Fatalf("runUnify: %v", err)
+	}
+	if len(result.Errors) == 0 {
+		t.Fatal("expected destination collision error")
+	}
+	if data, err := os.ReadFile(filepath.Join(oldDir, "auth.json")); err != nil || string(data) != "legacy credentials" {
+		t.Errorf("legacy auth = %q, %v", data, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(newDir, "auth.json")); err != nil || string(data) != "target credentials" {
+		t.Errorf("target auth = %q, %v", data, err)
+	}
+	if info, err := os.Lstat(oldDir); err != nil || info.Mode()&os.ModeSymlink != 0 {
+		t.Errorf("legacy directory should remain a real directory: %v", err)
+	}
+}
+
+func TestRunUnifyStopsBeforeCleanupAfterCopyFailure(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	oldDir := filepath.Join(home, ".picoclaw")
+	newDir := filepath.Join(home, "sciclaw")
+	if err := os.MkdirAll(oldDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(newDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(oldDir, "config.json"), []byte("legacy config"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(oldDir, "auth.json"), []byte("legacy credentials"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(newDir, "keep.txt"), []byte("target content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(newDir, 0500); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(newDir, 0755)
+
+	result, err := runUnify(Options{Force: true})
+	if err != nil {
+		t.Fatalf("runUnify: %v", err)
+	}
+	if len(result.Errors) == 0 {
+		t.Fatal("expected copy error")
+	}
+	if data, err := os.ReadFile(filepath.Join(oldDir, "auth.json")); err != nil || string(data) != "legacy credentials" {
+		t.Errorf("legacy auth = %q, %v", data, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(newDir, "keep.txt")); err != nil || string(data) != "target content" {
+		t.Errorf("target file = %q, %v", data, err)
+	}
+	if info, err := os.Lstat(oldDir); err != nil || info.Mode()&os.ModeSymlink != 0 {
+		t.Errorf("legacy directory should remain a real directory: %v", err)
+	}
+}
+
 func TestRunDryRun(t *testing.T) {
 	openclawHome := t.TempDir()
 	picoClawHome := t.TempDir()

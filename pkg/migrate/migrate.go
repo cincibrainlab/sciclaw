@@ -157,6 +157,9 @@ func runUnify(opts Options) (*Result, error) {
 	if _, err := os.Stat(newCfg); err == nil {
 		actions = append(actions, Action{Type: ActionRewriteConfig, Source: newCfg, Destination: newCfg})
 	}
+	if err := validateUnifyDestinations(actions); err != nil {
+		return &Result{Errors: []error{err}}, nil
+	}
 	actions = append(actions,
 		Action{Type: ActionRemoveDir, Source: oldDir, Destination: oldDir},
 		Action{Type: ActionSymlink, Source: newDir, Destination: oldDir},
@@ -184,21 +187,22 @@ func runUnify(opts Options) (*Result, error) {
 		case ActionMoveFile:
 			if err := os.MkdirAll(filepath.Dir(action.Destination), 0o755); err != nil {
 				result.Errors = append(result.Errors, err)
-				continue
+				return result, nil
 			}
-			if err := copyFile(action.Source, action.Destination); err != nil {
+			if err := copyFileNoReplace(action.Source, action.Destination); err != nil {
 				result.Errors = append(result.Errors, err)
-				continue
+				return result, nil
 			}
 			result.FilesCopied++
 		case ActionMoveDir:
-			if err := copyDir(action.Source, action.Destination); err != nil {
+			if err := copyDirNoReplace(action.Source, action.Destination); err != nil {
 				result.Errors = append(result.Errors, err)
-				continue
+				return result, nil
 			}
 		case ActionRewriteConfig:
 			if err := rewriteUnifiedConfigPath(action.Source); err != nil {
 				result.Errors = append(result.Errors, err)
+				return result, nil
 			}
 		case ActionRemoveDir:
 			if err := os.RemoveAll(action.Source); err != nil {
@@ -504,7 +508,43 @@ func copyFile(src, dst string) error {
 	return err
 }
 
-func copyDir(src, dst string) error {
+func validateUnifyDestinations(actions []Action) error {
+	for _, action := range actions {
+		if action.Type != ActionMoveFile && action.Type != ActionMoveDir {
+			continue
+		}
+		if _, err := os.Lstat(action.Destination); err == nil {
+			return fmt.Errorf("unify destination already exists: %s", action.Destination)
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyFileNoReplace(src, dst string) error {
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	info, err := srcFile.Stat()
+	if err != nil {
+		return err
+	}
+
+	dstFile, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode())
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+
+	_, err = io.Copy(dstFile, srcFile)
+	return err
+}
+
+func copyDirNoReplace(src, dst string) error {
 	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -517,7 +557,7 @@ func copyDir(src, dst string) error {
 		if info.IsDir() {
 			return os.MkdirAll(target, info.Mode())
 		}
-		return copyFile(path, target)
+		return copyFileNoReplace(path, target)
 	})
 }
 
