@@ -29,6 +29,7 @@ type Options struct {
 	Force         bool
 	Refresh       bool
 	OpenClawHome  string
+	PicoClawHome  string
 }
 
 type Action struct {
@@ -55,6 +56,12 @@ func Run(opts Options) (*Result, error) {
 	if opts.ConfigOnly && opts.WorkspaceOnly {
 		return nil, fmt.Errorf("--config-only and --workspace-only are mutually exclusive")
 	}
+	if opts.PicoClawHome != "" {
+		if opts.OpenClawHome != "" {
+			return nil, fmt.Errorf("--openclaw-home and --picoclaw-home are mutually exclusive")
+		}
+		return runPicoClawConfigMigration(opts, expandHome(opts.PicoClawHome))
+	}
 
 	if opts.Refresh {
 		opts.WorkspaceOnly = true
@@ -65,7 +72,7 @@ func Run(opts Options) (*Result, error) {
 		return nil, err
 	}
 	if paths.IsPicoClawPath(openclawHome) {
-		return nil, fmt.Errorf("refusing OpenClaw source %s: ~/.picoclaw is PicoClaw-owned and legacy SciClaw migration is manual-only", openclawHome)
+		return runPicoClawConfigMigration(opts, openclawHome)
 	}
 
 	sciClawHome := paths.UserHome()
@@ -106,6 +113,59 @@ func Run(opts Options) (*Result, error) {
 	return result, nil
 }
 
+func runPicoClawConfigMigration(opts Options, picoClawHome string) (*Result, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("resolving home directory: %w", err)
+	}
+	legacyHome := filepath.Join(home, ".picoclaw")
+	if filepath.Clean(picoClawHome) != filepath.Clean(legacyHome) {
+		return nil, fmt.Errorf("PicoClaw source must be %s", legacyHome)
+	}
+	if opts.WorkspaceOnly {
+		return &Result{Warnings: []string{"PicoClaw migration imports compatible config only"}}, nil
+	}
+
+	source := filepath.Join(legacyHome, "config.json")
+	if _, err := os.Stat(source); err != nil {
+		return nil, fmt.Errorf("PicoClaw config not found at %s: %w", source, err)
+	}
+	destination := paths.ConfigPath()
+	if _, err := os.Stat(destination); err == nil {
+		return nil, fmt.Errorf("active SciClaw config already exists at %s; PicoClaw import will not overwrite it", destination)
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	if opts.DryRun {
+		PrintPlan([]Action{{Type: ActionConvertConfig, Source: source, Destination: destination, Description: "import compatible PicoClaw config"}}, nil)
+		return &Result{}, nil
+	}
+	if !opts.Force {
+		PrintPlan([]Action{{Type: ActionConvertConfig, Source: source, Destination: destination, Description: "import compatible PicoClaw config"}}, nil)
+		if !Confirm() {
+			return &Result{}, nil
+		}
+	}
+
+	cfg, err := config.LoadConfig(source)
+	if err != nil {
+		return nil, fmt.Errorf("loading PicoClaw config: %w", err)
+	}
+	legacyWorkspace := filepath.Join(legacyHome, "workspace")
+	for _, workspace := range []*string{&cfg.Agents.Defaults.Workspace, &cfg.Agents.Defaults.SharedWorkspace} {
+		if filepath.Clean(*workspace) == legacyWorkspace || *workspace == "~/.picoclaw/workspace" {
+			*workspace = paths.DefaultWorkspace()
+		}
+	}
+	if err := paths.EnsureStateLayout(); err != nil {
+		return nil, err
+	}
+	if err := config.SaveConfig(destination, cfg); err != nil {
+		return nil, fmt.Errorf("saving SciClaw config: %w", err)
+	}
+	return &Result{ConfigMigrated: true}, nil
+}
+
 func ResultError(result *Result) error {
 	if result == nil || len(result.Errors) == 0 {
 		return nil
@@ -125,7 +185,7 @@ func Plan(opts Options, openclawHome, sciClawHome string) ([]Action, []string, e
 			}
 			warnings = append(warnings, fmt.Sprintf("Config migration skipped: %v", err))
 		} else {
-			destination := filepath.Join(sciClawHome, "config.json")
+			destination := paths.ConfigPath()
 			if _, statErr := os.Stat(destination); statErr == nil {
 				return nil, nil, fmt.Errorf("active SciClaw config already exists at %s; OpenClaw import will not overwrite it", destination)
 			} else if !os.IsNotExist(statErr) {
@@ -284,11 +344,11 @@ func executeConfigMigration(srcConfigPath, dstConfigPath string) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	workspace := filepath.Join(filepath.Dir(dstConfigPath), "workspaces", "default")
+	workspace := paths.DefaultWorkspace()
 	incoming.Agents.Defaults.Workspace = workspace
 	incoming.Agents.Defaults.SharedWorkspace = workspace
 
-	if err := os.MkdirAll(filepath.Dir(dstConfigPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dstConfigPath), 0700); err != nil {
 		return err
 	}
 	return config.SaveConfig(dstConfigPath, incoming)

@@ -6,11 +6,13 @@ import (
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/paths"
 )
 
 func TestRunDoctorReportsEmailConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(home, ".sciclaw"))
 
 	cfg := config.DefaultConfig()
 	cfg.Channels.Email.Enabled = true
@@ -20,7 +22,7 @@ func TestRunDoctorReportsEmailConfig(t *testing.T) {
 	cfg.Channels.Email.BaseURL = "not a url"
 	cfg.Channels.Email.ReceiveEnabled = true
 
-	configPath := filepath.Join(home, "sciclaw", "config.json")
+	configPath := paths.ConfigPath()
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		t.Fatalf("mkdir config dir: %v", err)
 	}

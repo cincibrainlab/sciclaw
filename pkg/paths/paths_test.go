@@ -26,7 +26,7 @@ func TestRootDefaultsIgnorePicoClaw(t *testing.T) {
 	if got, want := StateHome(), filepath.Join(home, ".sciclaw"); got != want {
 		t.Fatalf("StateHome()=%q want %q", got, want)
 	}
-	if got, want := ConfigPath(), filepath.Join(home, "sciclaw", "config.json"); got != want {
+	if got, want := ConfigPath(), filepath.Join(home, ".sciclaw", "config.json"); got != want {
 		t.Fatalf("ConfigPath()=%q want %q", got, want)
 	}
 }
@@ -55,7 +55,7 @@ func TestVisibleAndStateHelpers(t *testing.T) {
 		got  string
 		want string
 	}{
-		"config":            {ConfigPath(), filepath.Join(visible, "config.json")},
+		"config":            {ConfigPath(), filepath.Join(state, "config.json")},
 		"profile":           {ProfileDir(), filepath.Join(visible, "profile")},
 		"global skills":     {GlobalSkillsDir(), filepath.Join(visible, "skills")},
 		"templates":         {TemplatesDir(), filepath.Join(visible, "templates")},
