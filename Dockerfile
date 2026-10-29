@@ -24,13 +24,9 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build \
     -o /out/sciclaw \
     ./cmd/picoclaw
 
-FROM oven/bun:1.4.2 AS mcp-cli-builder
-
-WORKDIR /src
-COPY tools/mcp-server-cli/package.json tools/mcp-server-cli/bun.lock ./
-RUN bun install --frozen-lockfile
-COPY tools/mcp-server-cli/src ./src
-RUN bun build --compile --outfile /out/mcp-server-cli src/index.ts
+RUN rm -rf /src/skills/gitea-create-change-request \
+    /src/skills/gitea-move-work-item \
+    /src/skills/gitea-move-file-phase-0-to-1
 
 # ============================================================
 # Stage 2: Full runtime image
@@ -114,7 +110,6 @@ RUN set -eux; \
 
 # Copy binary
 COPY --from=builder /out/sciclaw /usr/local/bin/sciclaw
-COPY --from=mcp-cli-builder /out/mcp-server-cli /usr/local/bin/mcp-server-cli
 COPY --chmod=0755 deploy/docker-entrypoint.sh /usr/local/bin/sciclaw-docker-entrypoint
 RUN ln -sf sciclaw /usr/local/bin/picoclaw
 
