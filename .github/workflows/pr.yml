@@ -49,3 +49,6 @@ jobs:
 
       - name: Run go test
         run: go test ./...
+
+      - name: Run entrypoint tests
+        run: python3 -m unittest deploy.test_docker_entrypoint
