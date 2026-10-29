@@ -230,6 +230,7 @@ func createToolRegistry(workspace string, restrict bool, cfg *config.Config, msg
 	registry.Register(appendFileTool)
 
 	registry.Register(tools.NewRememberTool(workspace, restrict))
+	registry.Register(&tools.GiteaMCPTool{})
 
 	// Shell execution
 	execTool := tools.NewExecTool(workspace, restrict)
