@@ -375,10 +375,6 @@ docker compose run --rm sciclaw-agent -m "Hello"    # one-shot
 The Docker image is a full runtime and includes:
 `python3`, `uv`, `ripgrep`, `imagemagick`, `pandoc`, `quarto`, `docx-review`, `xlsx-review`, `pptx-review`, `pubmed-cli`, and `irl`.
 
-The standalone image excludes the Gitea skills and `mcp-server-cli`. The `docker-compose.mcp.yml` overlay starts the Gitea MCP server but does not supply those skills or the CLI, so the overlay alone is not a supported Gitea workflow. Stack deployments must include the skills from source and provide a compatible CLI from the [standalone CLI repository](https://github.com/cincibrainlab/sciclaw-mcp-cli) on the gateway's PATH; stack packaging and compatibility are tracked in [sciclaw-stack#12](https://github.com/cincibrainlab/sciclaw-stack/issues/12).
-
-Existing standalone workspace volumes retain skills from earlier images. Before upgrading, back up any customized skills, then remove `gitea-create-change-request`, `gitea-move-work-item`, `gitea-move-file-phase-0-to-1`, and the legacy `move-task-phase-0-to-1` from the workspace's `skills/` directory if those Gitea workflows are no longer wanted. The image does not remove them automatically. If you still need the workflows, provision compatible skills and the CLI separately instead.
-
 ## Troubleshooting
 
 Run `sciclaw doctor` to diagnose issues — it checks config, auth, tools, skills, gateway, and service health.
