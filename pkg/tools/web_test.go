@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -171,6 +173,47 @@ func TestWebTool_WebFetch_Truncation(t *testing.T) {
 	// Should be marked as truncated
 	if truncated, ok := resultMap["truncated"].(bool); !ok || !truncated {
 		t.Errorf("Expected 'truncated' to be true in result")
+	}
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func TestBraveSearchParseErrorDoesNotWriteResponse(t *testing.T) {
+	const canary = "BRAVE_PARSE_CANARY_4b92"
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusBadGateway, Body: io.NopCloser(strings.NewReader(canary)), Header: make(http.Header)}, nil
+	})
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	originalStdout := os.Stdout
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = write
+	t.Cleanup(func() {
+		os.Stdout = originalStdout
+		read.Close()
+		write.Close()
+	})
+
+	_, err = (&BraveSearchProvider{apiKey: "test-key"}).Search(context.Background(), "test", 1)
+	write.Close()
+	os.Stdout = originalStdout
+	stdout, readErr := io.ReadAll(read)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if err == nil {
+		t.Fatal("expected parse error")
+	}
+	if strings.Contains(string(stdout), canary) {
+		t.Fatalf("Brave response leaked to stdout: %q", stdout)
 	}
 }
 

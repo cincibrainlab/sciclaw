@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -85,9 +86,10 @@ func (e *webTestExec) ServiceInstalled() bool                   { return e.insta
 func (e *webTestExec) ServiceActive() bool                      { return e.running }
 func (e *webTestExec) InteractiveProcess(_ ...string) *exec.Cmd { return exec.Command("true") }
 
-func TestHandleChatSuppressesAgentStderr(t *testing.T) {
+func TestHandleChatRejectsUnstructuredOutput(t *testing.T) {
 	execStub := &webTestExec{output: "hello"}
 	srv := newWebServer(execStub, "")
+	srv.liteChatRunner = func(context.Context, string) (*liteChatResult, error) { return nil, errors.New("unavailable") }
 
 	req := httptest.NewRequest(http.MethodPost, "/api/chat", strings.NewReader(`{"message":"hello"}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -105,11 +107,66 @@ func TestHandleChatSuppressesAgentStderr(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if body["response"] != "hello" {
+	if body["response"] != "The request could not be completed. Please try again, then contact an administrator if it continues." {
 		t.Fatalf("unexpected response body: %q", body["response"])
 	}
-	if body["mode"] != "full" {
-		t.Fatalf("expected full mode, got %q", body["mode"])
+	if body["mode"] != "" {
+		t.Fatalf("expected no full mode, got %q", body["mode"])
+	}
+}
+
+func TestHandleChatRejectsContaminatedSuccessfulOutput(t *testing.T) {
+	const rawCanary = "RAW_CANARY_web_executor_91be"
+	execStub := &webTestExec{output: rawCanary + `{"response":"safe result"}`}
+	srv := newWebServer(execStub, "")
+	srv.liteChatRunner = func(context.Context, string) (*liteChatResult, error) { return nil, errors.New("unavailable") }
+
+	req := httptest.NewRequest(http.MethodPost, "/api/chat", strings.NewReader(`{"message":"summarize this"}`))
+	rec := httptest.NewRecorder()
+	srv.handleChat(rec, req)
+
+	if strings.Contains(rec.Body.String(), rawCanary) {
+		t.Fatalf("raw executor output leaked in web response: %q", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "could not be completed") {
+		t.Fatalf("expected safe failure response, got %q", rec.Body.String())
+	}
+}
+
+func TestHandleChatReturnsStructuredSafeError(t *testing.T) {
+	execStub := &webTestExec{output: `{"response":"The AI service is busy.\n\nReference ID: ` + "`ERR-123`" + `","error":{"technical_details":"The provider rate-limited this request.\nStatus: 429","reference_id":"ERR-123"}}`, err: os.ErrDeadlineExceeded}
+	srv := newWebServer(execStub, "")
+	srv.liteChatRunner = func(context.Context, string) (*liteChatResult, error) { return nil, errors.New("unavailable") }
+
+	req := httptest.NewRequest(http.MethodPost, "/api/chat", strings.NewReader(`{"message":"hello"}`))
+	rec := httptest.NewRecorder()
+	srv.handleChat(rec, req)
+
+	var body struct {
+		Response string `json:"response"`
+		Error    struct {
+			TechnicalDetails string `json:"technical_details"`
+			ReferenceID      string `json:"reference_id"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !strings.Contains(body.Response, "ERR-123") || body.Error.ReferenceID != "ERR-123" || !strings.Contains(body.Error.TechnicalDetails, "Status: 429") {
+		t.Fatalf("unexpected response: %#v", body)
+	}
+}
+
+func TestHandleChatExcludesExecutorRawError(t *testing.T) {
+	const rawCanary = "RAW_CANARY_web_executor_91be"
+	srv := newWebServer(&webTestExec{output: rawCanary, err: errors.New(rawCanary)}, "")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/chat", strings.NewReader(`{"message":"summarize this"}`))
+	rec := httptest.NewRecorder()
+	srv.handleChat(rec, req)
+
+	if strings.Contains(rec.Body.String(), rawCanary) {
+		t.Fatalf("executor error leaked in web response: %q", rec.Body.String())
 	}
 }
 
@@ -153,7 +210,7 @@ func TestHandleChatUsesLitePathForGreeting(t *testing.T) {
 }
 
 func TestHandleChatFallsBackWhenLiteChatFails(t *testing.T) {
-	execStub := &webTestExec{output: "fallback"}
+	execStub := &webTestExec{output: `{"response":"fallback"}`}
 	srv := newWebServer(execStub, "")
 	srv.liteChatRunner = func(_ context.Context, _ string) (*liteChatResult, error) {
 		return nil, os.ErrPermission

@@ -30,6 +30,11 @@ type OutboundEmbed struct {
 	Fields        []OutboundEmbedField `json:"fields,omitempty"`
 }
 
+type OutboundError struct {
+	TechnicalDetails string `json:"technical_details,omitempty"`
+	ReferenceID      string `json:"reference_id,omitempty"`
+}
+
 type OutboundMessage struct {
 	Channel     string               `json:"channel"`
 	ChatID      string               `json:"chat_id"`
@@ -37,4 +42,5 @@ type OutboundMessage struct {
 	Content     string               `json:"content"`
 	Embeds      []OutboundEmbed      `json:"embeds,omitempty"`
 	Attachments []OutboundAttachment `json:"attachments,omitempty"`
+	Error       *OutboundError       `json:"error,omitempty"`
 }
