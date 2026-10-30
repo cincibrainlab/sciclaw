@@ -69,6 +69,14 @@ func (r *ToolRegistry) Execute(ctx context.Context, name string, args map[string
 	return r.ExecuteWithContext(ctx, name, args, "", "", nil)
 }
 
+// ToolLogArgs excludes Gitea arguments from logs and audit hooks.
+func ToolLogArgs(name string, args map[string]interface{}) map[string]interface{} {
+	if name == "gitea_mcp" {
+		return map[string]interface{}{"arguments": "[REDACTED]"}
+	}
+	return args
+}
+
 // ExecuteWithContext executes a tool with channel/chatID context and optional async callback.
 // If the tool implements AsyncTool and a non-nil callback is provided,
 // the callback will be set on the tool before execution.
@@ -76,7 +84,7 @@ func (r *ToolRegistry) ExecuteWithContext(ctx context.Context, name string, args
 	logger.InfoCF("tool", "Tool execution started",
 		map[string]interface{}{
 			"tool": name,
-			"args": args,
+			"args": ToolLogArgs(name, args),
 		})
 
 	tool, ok := r.Get(name)
@@ -108,11 +116,15 @@ func (r *ToolRegistry) ExecuteWithContext(ctx context.Context, name string, args
 
 	// Log based on result type
 	if result.IsError {
+		errorDetail := result.ForLLM
+		if name == "gitea_mcp" {
+			errorDetail = "[REDACTED]"
+		}
 		logger.ErrorCF("tool", "Tool execution failed",
 			map[string]interface{}{
 				"tool":     name,
 				"duration": duration.Milliseconds(),
-				"error":    result.ForLLM,
+				"error":    errorDetail,
 			})
 	} else if result.Async {
 		logger.InfoCF("tool", "Tool started (async)",

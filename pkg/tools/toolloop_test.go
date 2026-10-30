@@ -216,3 +216,56 @@ func TestRunToolLoop_TruncatesErrorFallbackWhenConfigured(t *testing.T) {
 		t.Fatalf("expected truncation notice for error fallback, got %q", result.Content)
 	}
 }
+
+func TestGiteaArgumentsRedactedFromToolLoopAndRegistryLogs(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "tool.log")
+	previousLevel := logger.GetLevel()
+	logger.SetLevel(logger.INFO)
+	defer logger.SetLevel(previousLevel)
+	if err := logger.EnableFileLogging(logPath); err != nil {
+		t.Fatal(err)
+	}
+	defer logger.DisableFileLogging()
+	const secret = "gitea-argument-canary"
+	provider := &toolLoopEchoProvider{toolCall: &providers.ToolCall{ID: "1", Name: "gitea_mcp", Arguments: map[string]interface{}{"tool": "issue_read", "arguments": map[string]interface{}{"body": secret}}}}
+	registry := NewToolRegistry()
+	registry.Register(&fixedToolResultTool{name: "gitea_mcp", result: NewToolResult("ok")})
+	if _, err := RunToolLoop(context.Background(), ToolLoopConfig{Provider: provider, Model: "test", Tools: registry}, []providers.Message{{Role: "user", Content: "test"}}, "cli", "direct"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), secret) || !strings.Contains(string(data), "[REDACTED]") {
+		t.Fatalf("unexpected logs: %s", data)
+	}
+	if provider.seen[1][1].ToolCalls[0].Arguments["arguments"].(map[string]interface{})["body"] != secret {
+		t.Fatal("execution arguments changed")
+	}
+}
+
+func TestGiteaErrorDetailsRedactedFromRegistryLogs(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "tool.log")
+	previousLevel := logger.GetLevel()
+	logger.SetLevel(logger.INFO)
+	defer logger.SetLevel(previousLevel)
+	if err := logger.EnableFileLogging(logPath); err != nil {
+		t.Fatal(err)
+	}
+	defer logger.DisableFileLogging()
+	const secret = "echoed-argument-canary"
+	registry := NewToolRegistry()
+	registry.Register(&fixedToolResultTool{name: "gitea_mcp", result: ErrorResult("server echoed " + secret)})
+	result := registry.Execute(context.Background(), "gitea_mcp", map[string]interface{}{"arguments": map[string]interface{}{"body": secret}})
+	if !result.IsError || !strings.Contains(result.ForLLM, secret) {
+		t.Fatal("tool result must remain available to caller")
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), secret) || !strings.Contains(string(data), "[REDACTED]") {
+		t.Fatalf("unexpected logs: %s", data)
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Inventory from gitea-mcp operation/domainTools and its unfiltered registration contract.
@@ -223,5 +224,43 @@ print(json.dumps({'content': [{'type': 'text', 'text': json.dumps(items)}]}))
 				t.Fatalf("expected %q error, got %#v", tc.message, result)
 			}
 		})
+	}
+}
+
+func TestGiteaMCPWriteFailures(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	tool := &GiteaMCPTool{}
+	args := map[string]interface{}{"tool": "pull_request_write", "arguments": map[string]interface{}{}}
+	result := tool.Execute(context.Background(), args)
+	if !result.IsError || strings.Contains(result.ForLLM, "outcome is unknown") {
+		t.Fatalf("missing executable is a definite pre-launch failure: %#v", result)
+	}
+	path := filepath.Join(dir, "mcp-server-cli")
+	for _, tc := range []struct {
+		script, name string
+		unknown      bool
+		reconcile    bool
+	}{
+		{"#!/bin/sh\necho transport-failed >&2\nexit 1\n", "pull_request_write", true, true},
+		{"#!/bin/sh\necho transport-failed >&2\nexit 1\n", "issue_read", false, false},
+		{"#!/bin/sh\necho '{\"isError\":true,\"content\":[]}'\nexit 1\n", "pull_request_write", false, true},
+	} {
+		if err := os.WriteFile(path, []byte(tc.script), 0755); err != nil {
+			t.Fatal(err)
+		}
+		result = tool.Execute(context.Background(), map[string]interface{}{"tool": tc.name, "arguments": map[string]interface{}{}})
+		if !result.IsError || (strings.Contains(result.ForLLM, "Reconcile remote state before retrying") != tc.reconcile || strings.Contains(result.ForLLM, "outcome is unknown") != tc.unknown) {
+			t.Fatalf("%s: %#v", tc.name, result)
+		}
+	}
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexec /bin/sleep 10\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	result = tool.Execute(ctx, args)
+	if !result.IsError || !strings.Contains(result.ForLLM, "Reconcile remote state before retrying") {
+		t.Fatalf("timed-out write: %#v", result)
 	}
 }

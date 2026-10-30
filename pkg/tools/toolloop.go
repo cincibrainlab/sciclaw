@@ -137,7 +137,7 @@ func RunToolLoop(ctx context.Context, config ToolLoopConfig, messages []provider
 
 		// 7. Execute tool calls
 		for _, tc := range response.ToolCalls {
-			argsJSON, _ := json.Marshal(tc.Arguments)
+			argsJSON, _ := json.Marshal(ToolLogArgs(tc.Name, tc.Arguments))
 			argsPreview := utils.Truncate(string(argsJSON), 200)
 			logger.InfoCF("toolloop", fmt.Sprintf("Tool call: %s(%s)", tc.Name, argsPreview),
 				map[string]any{

@@ -149,10 +149,25 @@ func (t *GiteaMCPTool) Execute(ctx context.Context, args map[string]interface{})
 		cmd.Stdin = bytes.NewReader(input)
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr
-		if err := cmd.Run(); err != nil {
+		if err := cmd.Start(); err != nil {
+			return ErrorResult(fmt.Sprintf("Gitea MCP call could not start: %v", err))
+		}
+		if err := cmd.Wait(); err != nil {
 			detail := strings.TrimSpace(stderr.String())
 			if detail == "" {
 				detail = strings.TrimSpace(stdout.String())
+			}
+			var response struct {
+				IsError bool `json:"isError"`
+			}
+			explicitError := json.Unmarshal(stdout.Bytes(), &response) == nil && response.IsError
+			if strings.HasSuffix(name, "_write") || slices.Contains([]string{
+				"create_repo", "fork_repo", "create_or_update_file", "delete_file", "create_branch", "delete_branch", "rename_branch", "create_tag", "delete_tag", "create_release", "delete_release",
+			}, name) {
+				if explicitError {
+					return ErrorResult(fmt.Sprintf("Gitea MCP write reported an error: %v\n%s\nReconcile remote state before retrying; the write may have caused side effects.", err, detail))
+				}
+				return ErrorResult(fmt.Sprintf("Gitea MCP write outcome is unknown: %v\n%s\nReconcile remote state before retrying; the write may have succeeded.", err, detail))
 			}
 			return ErrorResult(fmt.Sprintf("Gitea MCP call failed: %v\n%s", err, detail))
 		}

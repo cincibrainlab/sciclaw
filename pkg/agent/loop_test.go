@@ -1911,3 +1911,12 @@ func TestToolResult_UserFacingToolDoesSendMessage(t *testing.T) {
 		t.Errorf("Expected 'Command output: hello world', got: %s", response)
 	}
 }
+
+func TestGiteaArgumentsRedactedFromDebugMessages(t *testing.T) {
+	const secret = "gitea-debug-canary"
+	messages := []providers.Message{{Role: "assistant", ToolCalls: []providers.ToolCall{{Name: "gitea_mcp", Function: &providers.FunctionCall{Name: "gitea_mcp", Arguments: secret}}}}}
+	got := formatMessagesForLog(messages)
+	if strings.Contains(got, secret) || !strings.Contains(got, "[REDACTED]") {
+		t.Fatalf("unexpected log: %s", got)
+	}
+}
