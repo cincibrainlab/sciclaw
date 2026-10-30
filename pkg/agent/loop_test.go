@@ -672,6 +672,74 @@ func TestProcessDirect_LocalModeEmitsRuntimeSummaryLog(t *testing.T) {
 	}
 }
 
+func TestHandleInboundHidesProviderDiagnosticsButLogsThem(t *testing.T) {
+	const rawCanary = "RAW_CANARY_agent_inbound_4c19"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Request-Id", "req-agent-inbound")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"code":"rate_limit","message":"` + rawCanary + `"}}`))
+	}))
+	defer server.Close()
+
+	logPath := filepath.Join(t.TempDir(), "agent.log")
+	previousLevel := logger.GetLevel()
+	logger.SetLevel(logger.INFO)
+	defer logger.SetLevel(previousLevel)
+	if err := logger.EnableFileLogging(logPath); err != nil {
+		t.Fatalf("EnableFileLogging: %v", err)
+	}
+	defer logger.DisableFileLogging()
+
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	msgBus := bus.NewMessageBus()
+	al := NewAgentLoop(cfg, msgBus, providers.NewHTTPProvider("test-key", server.URL, ""))
+	defer al.Stop()
+
+	al.HandleInbound(context.Background(), bus.InboundMessage{
+		Channel:    "discord",
+		ChatID:     "room-1",
+		SenderID:   "user-1",
+		SessionKey: "discord:room-1",
+		Content:    "trigger provider failure",
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	outbound, ok := msgBus.SubscribeOutbound(ctx)
+	if !ok {
+		t.Fatal("expected outbound provider error")
+	}
+	if outbound.Error == nil || outbound.Error.ReferenceID == "" {
+		t.Fatalf("expected outbound error reference, got %#v", outbound)
+	}
+	if strings.Contains(outbound.Content, rawCanary) || strings.Contains(outbound.Error.TechnicalDetails, rawCanary) {
+		t.Fatalf("raw provider diagnostics leaked outbound: %#v", outbound)
+	}
+	if !strings.Contains(outbound.Content, outbound.Error.ReferenceID) {
+		t.Fatalf("outbound content omitted error reference %q: %q", outbound.Error.ReferenceID, outbound.Content)
+	}
+
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	found := false
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var entry logger.LogEntry
+		if err := json.Unmarshal([]byte(line), &entry); err != nil || entry.Message != "LLM call failed" {
+			continue
+		}
+		if entry.Fields["error_reference"] == outbound.Error.ReferenceID && strings.Contains(entry.Fields["error"].(string), rawCanary) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected structured log with raw diagnostics and reference:\n%s", data)
+	}
+}
+
 func TestRecordLastChannel(t *testing.T) {
 	// Create temp workspace
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
