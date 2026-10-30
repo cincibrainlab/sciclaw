@@ -6,11 +6,72 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 )
 
 type GiteaMCPTool struct{}
+
+var giteaMCPTools = []string{
+	"get_me",
+	"get_user_orgs",
+	"actions_config_read",
+	"actions_run_read",
+	"actions_config_write",
+	"actions_run_write",
+	"list_my_repos",
+	"list_org_repos",
+	"get_repository_tree",
+	"create_repo",
+	"fork_repo",
+	"notification_read",
+	"notification_write",
+	"attachment_read",
+	"list_issues",
+	"issue_read",
+	"issue_write",
+	"label_read",
+	"label_write",
+	"milestone_read",
+	"milestone_write",
+	"package_read",
+	"package_write",
+	"list_pull_requests",
+	"pull_request_read",
+	"pull_request_write",
+	"pull_request_review_write",
+	"search_users",
+	"search_org_teams",
+	"search_repos",
+	"search_issues",
+	"project_read",
+	"project_write",
+	"get_gitea_mcp_server_version",
+	"wiki_read",
+	"wiki_write",
+	"timetracking_read",
+	"timetracking_write",
+	"get_file_contents",
+	"get_dir_contents",
+	"create_or_update_file",
+	"delete_file",
+	"list_branches",
+	"create_branch",
+	"delete_branch",
+	"rename_branch",
+	"get_tag",
+	"list_tags",
+	"create_tag",
+	"delete_tag",
+	"list_commits",
+	"get_commit",
+	"get_release",
+	"get_latest_release",
+	"list_releases",
+	"create_release",
+	"delete_release",
+}
 
 // LimitGiteaProjectListResult prevents partial project lists from reaching an agent.
 func LimitGiteaProjectListResult(name string, args map[string]interface{}, result *ToolResult, limit int) *ToolResult {
@@ -38,14 +99,7 @@ func (t *GiteaMCPTool) Parameters() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"tool": map[string]interface{}{
 				"type": "string",
-				"enum": []string{
-					"issue_read",
-					"project_read",
-					"project_write",
-					"get_file_contents",
-					"create_or_update_file",
-					"pull_request_write",
-				},
+				"enum": giteaMCPTools,
 			},
 			"arguments": map[string]interface{}{
 				"type":                 "object",
@@ -58,10 +112,7 @@ func (t *GiteaMCPTool) Parameters() map[string]interface{} {
 
 func (t *GiteaMCPTool) Execute(ctx context.Context, args map[string]interface{}) *ToolResult {
 	name, _ := args["tool"].(string)
-	switch name {
-	case "issue_read", "project_read", "project_write",
-		"get_file_contents", "create_or_update_file", "pull_request_write":
-	default:
+	if !slices.Contains(giteaMCPTools, name) {
 		return ErrorResult("unsupported Gitea MCP tool")
 	}
 

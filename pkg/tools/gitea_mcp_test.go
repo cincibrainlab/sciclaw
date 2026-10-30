@@ -9,6 +9,34 @@ import (
 	"testing"
 )
 
+// Inventory from gitea-mcp operation/domainTools and its unfiltered registration contract.
+func TestGiteaMCPToolInventory(t *testing.T) {
+	want := strings.Fields(`get_me get_user_orgs actions_config_read actions_run_read actions_config_write actions_run_write list_my_repos list_org_repos get_repository_tree create_repo fork_repo notification_read notification_write attachment_read list_issues issue_read issue_write label_read label_write milestone_read milestone_write package_read package_write list_pull_requests pull_request_read pull_request_write pull_request_review_write search_users search_org_teams search_repos search_issues project_read project_write get_gitea_mcp_server_version wiki_read wiki_write timetracking_read timetracking_write get_file_contents get_dir_contents create_or_update_file delete_file list_branches create_branch delete_branch rename_branch get_tag list_tags create_tag delete_tag list_commits get_commit get_release get_latest_release list_releases create_release delete_release`)
+	tool := &GiteaMCPTool{}
+	properties := tool.Parameters()["properties"].(map[string]interface{})
+	got := properties["tool"].(map[string]interface{})["enum"].([]string)
+	if len(got) != len(want) {
+		t.Fatalf("enum has %d tools, want %d", len(got), len(want))
+	}
+	dir := t.TempDir()
+	script := "#!/usr/bin/python3\nimport sys\nassert len(sys.argv) == 4 and sys.argv[1] == 'call' and sys.argv[3] == '--stdin'\nsys.stdout.write(sys.argv[2])\n"
+	if err := os.WriteFile(filepath.Join(dir, "mcp-server-cli"), []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	seen := map[string]bool{}
+	for i, name := range want {
+		if got[i] != name || seen[name] {
+			t.Fatalf("enum[%d] = %q, want unique %q", i, got[i], name)
+		}
+		seen[name] = true
+		result := tool.Execute(context.Background(), map[string]interface{}{"tool": name, "arguments": map[string]interface{}{}})
+		if result.IsError || result.ForLLM != name {
+			t.Errorf("%s: %#v", name, result)
+		}
+	}
+}
+
 func TestGiteaMCPInvocation(t *testing.T) {
 	dir := t.TempDir()
 	script := "#!/usr/bin/python3\nimport sys, os\nif sys.argv[1:] != ['call', 'pull_request_write', '--stdin'] or os.environ.get('SCICLAW_MCP_URL') != 'http://example.test/mcp':\n sys.exit(2)\nsys.stdout.write(sys.stdin.read())\n"
