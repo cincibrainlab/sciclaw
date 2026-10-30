@@ -2225,6 +2225,15 @@ func formatMessagesForLog(messages []providers.Message) string {
 		return "[]"
 	}
 
+	giteaCallIDs := make(map[string]bool)
+	for _, msg := range messages {
+		for _, tc := range msg.ToolCalls {
+			if tc.Name == "gitea_mcp" || (tc.Function != nil && tc.Function.Name == "gitea_mcp") {
+				giteaCallIDs[tc.ID] = true
+			}
+		}
+	}
+
 	var result string
 	result += "[\n"
 	for i, msg := range messages {
@@ -2244,6 +2253,9 @@ func formatMessagesForLog(messages []providers.Message) string {
 		}
 		if msg.Content != "" {
 			content := utils.Truncate(msg.Content, 200)
+			if msg.Role == "tool" && (msg.ToolName == "gitea_mcp" || (msg.ToolCallID != "" && giteaCallIDs[msg.ToolCallID])) {
+				content = "[REDACTED]"
+			}
 			result += fmt.Sprintf("  Content: %s\n", content)
 		}
 		if msg.ToolCallID != "" {

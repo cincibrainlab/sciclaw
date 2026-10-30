@@ -1920,3 +1920,17 @@ func TestGiteaArgumentsRedactedFromDebugMessages(t *testing.T) {
 		t.Fatalf("unexpected log: %s", got)
 	}
 }
+
+func TestGiteaToolResultsRedactedFromDebugMessages(t *testing.T) {
+	const secret = "echoed-gitea-error-canary"
+	messages := []providers.Message{
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-1", Name: "gitea_mcp"}}},
+		{Role: "tool", ToolName: "gitea_mcp", ToolCallID: "call-1", Content: secret},
+		{Role: "tool", ToolCallID: "call-1", Content: secret},
+		{Role: "tool", ToolName: "other", ToolCallID: "call-2", Content: "other-result"},
+	}
+	got := formatMessagesForLog(messages)
+	if strings.Contains(got, secret) || !strings.Contains(got, "[REDACTED]") || !strings.Contains(got, "other-result") {
+		t.Fatalf("unexpected log: %s", got)
+	}
+}

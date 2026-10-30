@@ -165,9 +165,9 @@ func (t *GiteaMCPTool) Execute(ctx context.Context, args map[string]interface{})
 				"create_repo", "fork_repo", "create_or_update_file", "delete_file", "create_branch", "delete_branch", "rename_branch", "create_tag", "delete_tag", "create_release", "delete_release",
 			}, name) {
 				if explicitError {
-					return ErrorResult(fmt.Sprintf("Gitea MCP write reported an error: %v\n%s\nReconcile remote state before retrying; the write may have caused side effects.", err, detail))
+					return ErrorResult(fmt.Sprintf("Gitea MCP write reported an error. Reconcile remote state before retrying; the write may have caused side effects.\n%v\n%s", err, detail))
 				}
-				return ErrorResult(fmt.Sprintf("Gitea MCP write outcome is unknown: %v\n%s\nReconcile remote state before retrying; the write may have succeeded.", err, detail))
+				return ErrorResult(fmt.Sprintf("Gitea MCP write outcome is unknown. Reconcile remote state before retrying; the write may have succeeded.\n%v\n%s", err, detail))
 			}
 			return ErrorResult(fmt.Sprintf("Gitea MCP call failed: %v\n%s", err, detail))
 		}

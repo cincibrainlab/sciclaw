@@ -264,3 +264,26 @@ func TestGiteaMCPWriteFailures(t *testing.T) {
 		t.Fatalf("timed-out write: %#v", result)
 	}
 }
+
+func TestGiteaWriteReconciliationPrecedesLongErrors(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	path := filepath.Join(dir, "mcp-server-cli")
+	for _, explicit := range []bool{false, true} {
+		script := "#!/usr/bin/python3\nimport sys, json\n"
+		if explicit {
+			script += "print(json.dumps({'isError': True, 'content': [{'type': 'text', 'text': 'x' * 12000}]}))\n"
+		} else {
+			script += "sys.stderr.write('x' * 12000)\n"
+		}
+		script += "sys.exit(1)\n"
+		if err := os.WriteFile(path, []byte(script), 0755); err != nil {
+			t.Fatal(err)
+		}
+		result := (&GiteaMCPTool{}).Execute(context.Background(), map[string]interface{}{"tool": "pull_request_write", "arguments": map[string]interface{}{}})
+		truncated := truncateToolLoopContent(result.ForLLM, 200, "tool output")
+		if !result.IsError || !strings.Contains(truncated, "Reconcile remote state before retrying") || !strings.Contains(truncated, "truncated") {
+			t.Fatalf("explicit=%v result=%s", explicit, truncated)
+		}
+	}
+}
