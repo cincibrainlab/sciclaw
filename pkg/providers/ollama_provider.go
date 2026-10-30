@@ -166,7 +166,7 @@ func parseOllamaChatResponse(body []byte) (*LLMResponse, error) {
 	}
 
 	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal ollama response: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal ollama response: %w", &responseDecodeError{err: err})
 	}
 
 	toolCalls := make([]ToolCall, 0, len(raw.Message.ToolCalls))
