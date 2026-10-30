@@ -41,6 +41,18 @@ test("calls a Streamable HTTP MCP tool", async () => {
       SCICLAW_MCP_API_KEY: "legacy-key",
     });
     expect(result.content).toEqual([{ type: "text", text: "connected" }]);
+
+    const cli = Bun.spawn([process.execPath, "run", import.meta.dir + "/index.ts", "call", "echo", "--stdin"], {
+      env: { ...process.env, SCICLAW_MCP_URL: `http://127.0.0.1:${address.port}/mcp` },
+      stdin: new Blob([JSON.stringify({ value: "from stdin" })]),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const output = await new Response(cli.stdout).text();
+    const error = await new Response(cli.stderr).text();
+    expect(await cli.exited).toBe(0);
+    expect(error).toBe("");
+    expect(JSON.parse(output).content).toEqual([{ type: "text", text: "from stdin" }]);
   } finally {
     await new Promise<void>((resolve, reject) =>
       httpServer.close((error) => (error ? reject(error) : resolve())),

@@ -3,14 +3,14 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
-export function parseCallArguments(argv: string[]): { tool: string; arguments: Record<string, unknown> } {
+export function parseCallArguments(argv: string[], stdin?: string): { tool: string; arguments: Record<string, unknown> } {
   if (argv.length !== 3 || argv[0] !== "call") {
-    throw new Error("usage: mcp-server-cli call <tool-name> '<json-arguments>'");
+    throw new Error("usage: mcp-server-cli call <tool-name> '<json-arguments>'|--stdin");
   }
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(argv[2]);
+    parsed = JSON.parse(argv[2] === "--stdin" ? stdin ?? "" : argv[2]);
   } catch {
     throw new Error("json-arguments must be valid JSON");
   }
@@ -41,7 +41,9 @@ export async function callTool(
 }
 
 async function main() {
-  const request = parseCallArguments(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  const stdin = argv.length === 3 && argv[2] === "--stdin" ? await Bun.stdin.text() : undefined;
+  const request = parseCallArguments(argv, stdin);
   const result = await callTool(request.tool, request.arguments);
   console.log(JSON.stringify(result, null, 2));
   if ("isError" in result && result.isError) process.exitCode = 1;

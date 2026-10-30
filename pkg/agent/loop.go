@@ -1656,6 +1656,7 @@ Either call the appropriate tool now, or give an honest present-tense status of 
 
 			toolStartedAt := time.Now()
 			toolResult := al.tools.ExecuteWithContext(ctx, tc.Name, tc.Arguments, opts.Channel, opts.ChatID, asyncCallback)
+			toolResult = tools.LimitGiteaProjectListResult(tc.Name, tc.Arguments, toolResult, al.toolResultLLMCharLimit())
 			toolNamesExecuted = append(toolNamesExecuted, tc.Name)
 			if toolResult.Async {
 				asyncToolUsed = true
