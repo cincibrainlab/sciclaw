@@ -81,7 +81,7 @@ Changed-file map:
 - skills/image-generation/SKILL.md: four-product source of truth.
 - cmd/picoclaw/main.go: baseline skill installation.
 - pkg/workspacetpl/templates/workspace/AGENTS.md: workspace routing pointer.
-- docs/issues/gpt55-image-generation-rfc.md: replace obsolete policy.
+- docs/design/gpt55-image-generation-rfc.md: replace obsolete policy.
 - .agents/skills/ship-job/** and AGENTS.md: vendored development workflow and pointer.
 - .gitignore: allow only the vendored ship skill beneath otherwise local `.agents` state.
 

@@ -2,6 +2,7 @@ name: pr-check
 
 on:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   fmt-check:

@@ -3,6 +3,7 @@ package routing
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
 type fakeProgressMessenger struct {
@@ -79,6 +81,7 @@ func (m *fakeProgressMessenger) SendOrEditProgress(_ context.Context, channelNam
 type fakeJobRunner struct {
 	started chan struct{}
 	block   chan struct{}
+	err     error
 	runs    int
 	mu      sync.Mutex
 	lastMsg bus.InboundMessage
@@ -110,8 +113,16 @@ func (r *fakeJobRunner) RunJob(ctx context.Context, msg bus.InboundMessage, onPr
 			return "", ctx.Err()
 		}
 	}
-	return "done", nil
+	return "done", r.err
 }
+
+type safeJobError struct {
+	raw     string
+	message string
+}
+
+func (e safeJobError) Error() string       { return e.raw }
+func (e safeJobError) UserMessage() string { return e.message }
 
 func (r *fakeJobRunner) snapshotLastMsg() bus.InboundMessage {
 	r.mu.Lock()
@@ -509,6 +520,127 @@ func TestJobManagerWritesProgressAndFinalState(t *testing.T) {
 	if !strings.Contains(progress.calls[len(progress.calls)-1], "Done. Reply below.") {
 		t.Fatalf("expected final progress update, got %q", progress.calls[len(progress.calls)-1])
 	}
+}
+
+func TestJobManagerResolverFailureLogsDiagnosticWithoutLeakingIt(t *testing.T) {
+	const rawCanary = "RAW_CANARY_resolver_failure_4d4c"
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+
+	logPath := filepathJoin(t.TempDir(), "server.log")
+	if err := logger.EnableFileLogging(logPath); err != nil {
+		t.Fatalf("EnableFileLogging: %v", err)
+	}
+	defer logger.DisableFileLogging()
+
+	progress := &fakeProgressMessenger{}
+	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{
+		Enabled: true, MaxConcurrent: 1, ProgressUpdateSeconds: 1, DiscordAsyncDefault: true,
+	}, mb, progress, func(LoopTarget) (JobRunner, error) {
+		return &fakeJobRunner{}, nil
+	})
+	if err != nil {
+		t.Fatalf("NewJobManager: %v", err)
+	}
+	jm.SetSideLaneResolver(func(LoopTarget) (JobRunner, error) {
+		return nil, fmt.Errorf("provider creation failed: %s", rawCanary)
+	})
+
+	target := LoopTarget{Workspace: "/tmp/work", Runtime: RuntimeProfile{Mode: config.ModeCloud}}
+	if err := jm.Submit(context.Background(), target, bus.InboundMessage{
+		Channel: "discord", ChatID: "room-1", Content: "/btw inspect this",
+	}); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	waitForNoActiveJobs(t, jm, target.key())
+
+	record := findJobRecordByAskSummary(t, jm, "inspect this")
+	if record.State != JobStateFailed {
+		t.Fatalf("state = %q, want failed", record.State)
+	}
+	if strings.Contains(record.LastError, rawCanary) {
+		t.Fatalf("raw diagnostics leaked into persisted error: %q", record.LastError)
+	}
+	for _, message := range []bus.OutboundMessage{
+		formatProgressOutbound(record),
+		formatControlRecordOutbound(parsedJobControl{Kind: jobControlStatus}, record, ""),
+	} {
+		if strings.Contains(fmt.Sprintf("%#v", message), rawCanary) {
+			t.Fatalf("raw diagnostics leaked into rendered job output: %#v", message)
+		}
+	}
+	progress.mu.Lock()
+	for _, message := range progress.messages {
+		if strings.Contains(fmt.Sprintf("%#v", message), rawCanary) {
+			progress.mu.Unlock()
+			t.Fatalf("raw diagnostics leaked into progress output: %#v", message)
+		}
+	}
+	progress.mu.Unlock()
+
+	logger.DisableFileLogging()
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	logOutput := string(logData)
+	for _, want := range []string{rawCanary, record.ID, record.Phase} {
+		if !strings.Contains(logOutput, want) {
+			t.Fatalf("server log missing %q: %s", want, logOutput)
+		}
+	}
+}
+
+func TestJobManagerFailedJobKeepsSafeReferenceOnly(t *testing.T) {
+	const rawCanary = "RAW_CANARY_job_failure_2d86"
+	const reference = "ERR-job-failure"
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+
+	progress := &fakeProgressMessenger{}
+	runner := &fakeJobRunner{
+		started: make(chan struct{}),
+		block:   make(chan struct{}),
+		err: safeJobError{
+			raw:     "provider diagnostics: " + rawCanary,
+			message: "The AI service is busy.\n\nReference ID: `" + reference + "`",
+		},
+	}
+	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{
+		Enabled: true, MaxConcurrent: 1, ProgressUpdateSeconds: 1, DiscordAsyncDefault: true,
+	}, mb, progress, func(LoopTarget) (JobRunner, error) { return runner, nil })
+	if err != nil {
+		t.Fatalf("NewJobManager: %v", err)
+	}
+
+	target := LoopTarget{Workspace: "/tmp/work", Runtime: RuntimeProfile{Mode: config.ModeCloud}}
+	if err := jm.Submit(context.Background(), target, bus.InboundMessage{Channel: "discord", ChatID: "room-1", Content: "do it"}); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	<-runner.started
+	close(runner.block)
+	waitForNoActiveJobs(t, jm, target.key())
+
+	record := findJobRecordByAskSummary(t, jm, "do it")
+	if record.State != JobStateFailed || strings.Contains(record.LastError, rawCanary) || !strings.Contains(record.LastError, reference) {
+		t.Fatalf("unsafe persisted failure: %#v", record)
+	}
+
+	progress.mu.Lock()
+	defer progress.mu.Unlock()
+	for _, call := range progress.messages {
+		rendered := call.content + call.title + call.embed.Description + call.embed.Footer
+		for _, field := range call.embed.Fields {
+			rendered += field.Name + field.Value
+		}
+		if strings.Contains(rendered, rawCanary) {
+			t.Fatalf("raw diagnostics leaked into job card: %#v", call)
+		}
+		if strings.Contains(rendered, reference) {
+			return
+		}
+	}
+	t.Fatalf("failed job card omitted safe reference %q: %#v", reference, progress.messages)
 }
 
 func TestJobManagerBTWBusyMessageExplainsQueueOptions(t *testing.T) {
