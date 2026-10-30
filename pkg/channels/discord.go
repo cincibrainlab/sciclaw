@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -329,7 +330,7 @@ func (c *DiscordChannel) Send(ctx context.Context, msg bus.OutboundMessage) erro
 		return fmt.Errorf("channel ID is empty")
 	}
 
-	message := msg.Content
+	message := discordOutboundContent(msg)
 	if strings.TrimSpace(message) == "" {
 		message = "[empty message]"
 	}
@@ -363,6 +364,32 @@ func (c *DiscordChannel) Send(ctx context.Context, msg bus.OutboundMessage) erro
 	case <-sendCtx.Done():
 		return fmt.Errorf("send message timeout: %w", sendCtx.Err())
 	}
+}
+
+func discordOutboundContent(msg bus.OutboundMessage) string {
+	content := msg.Content
+	if msg.Error == nil || strings.TrimSpace(msg.Error.TechnicalDetails) == "" {
+		return content
+	}
+	details := discordTechnicalDetails(msg.Error.TechnicalDetails)
+	if details == "" {
+		return content
+	}
+	return content + "\n\nTechnical details: ||" + details + "||"
+}
+
+func discordTechnicalDetails(details string) string {
+	var safe []string
+	for _, detail := range strings.Split(details, "\n") {
+		detail = strings.TrimSpace(detail)
+		switch {
+		case strings.HasPrefix(detail, "Status: "):
+			if status, err := strconv.Atoi(strings.TrimPrefix(detail, "Status: ")); err == nil && status >= 100 && status <= 599 {
+				safe = append(safe, fmt.Sprintf("Status: %d", status))
+			}
+		}
+	}
+	return strings.Join(safe, "\n")
 }
 
 func (c *DiscordChannel) SendOrEditProgress(ctx context.Context, chatID, messageID string, msg bus.OutboundMessage) (string, error) {

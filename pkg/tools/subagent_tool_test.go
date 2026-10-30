@@ -481,6 +481,76 @@ func TestSubagentTool_ForUserTruncation(t *testing.T) {
 	}
 }
 
+func TestSubagentTool_Execute_HidesProviderDiagnostics(t *testing.T) {
+	manager := NewSubagentManager(&failingProvider{}, "test-model", "/tmp/test", nil)
+	result := NewSubagentTool(manager).Execute(context.Background(), map[string]interface{}{
+		"task": "test",
+	})
+
+	if !result.IsError {
+		t.Fatal("expected an error result")
+	}
+	if result.ForLLM == "" || !strings.Contains(result.ForLLM, subagentExecutionFailureMessage) {
+		t.Fatalf("expected generic failure message, got %q", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, providerDiagnosticCanary) || strings.Contains(result.ForUser, providerDiagnosticCanary) {
+		t.Fatalf("provider diagnostics leaked: %#v", result)
+	}
+	if result.ForUser != "" {
+		t.Fatalf("ForUser = %q, want empty", result.ForUser)
+	}
+	if result.Err == nil || !strings.Contains(result.Err.Error(), providerDiagnosticCanary) {
+		t.Fatalf("expected internal error to retain diagnostics, got %v", result.Err)
+	}
+}
+
+func TestSubagentManagerSpawn_HidesProviderDiagnostics(t *testing.T) {
+	msgBus := bus.NewMessageBus()
+	manager := NewSubagentManager(&failingProvider{}, "test-model", "/tmp/test", msgBus)
+	callback := make(chan *ToolResult, 1)
+
+	_, err := manager.Spawn(context.Background(), "test", "failing-task", "discord", "chat-1", func(_ context.Context, result *ToolResult) {
+		callback <- result
+	})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+
+	var result *ToolResult
+	select {
+	case result = <-callback:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for subagent callback")
+	}
+	if result == nil || !result.IsError || result.ForLLM == "" || !strings.Contains(result.ForLLM, subagentExecutionFailureMessage) {
+		t.Fatalf("expected safe error callback, got %#v", result)
+	}
+	if strings.Contains(result.ForLLM, providerDiagnosticCanary) || strings.Contains(result.ForUser, providerDiagnosticCanary) {
+		t.Fatalf("provider diagnostics leaked through callback: %#v", result)
+	}
+	if result.Err == nil || !strings.Contains(result.Err.Error(), providerDiagnosticCanary) {
+		t.Fatalf("expected callback internal error to retain diagnostics, got %v", result.Err)
+	}
+
+	tasks := manager.ListTasks()
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1", len(tasks))
+	}
+	if tasks[0].Status != "failed" || tasks[0].Result == "" || strings.Contains(tasks[0].Result, providerDiagnosticCanary) {
+		t.Fatalf("unexpected task state: %#v", tasks[0])
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	message, ok := msgBus.ConsumeInbound(ctx)
+	if !ok {
+		t.Fatal("timed out waiting for parent bus announcement")
+	}
+	if !strings.Contains(message.Content, subagentExecutionFailureMessage) || strings.Contains(message.Content, providerDiagnosticCanary) {
+		t.Fatalf("provider diagnostics leaked through bus announcement: %q", message.Content)
+	}
+}
+
 func TestSubagentTool_TruncatesToolOutputWhenConfigured(t *testing.T) {
 	provider := &toolLoopEchoProvider{}
 	manager := NewSubagentManager(provider, "test-model", "/tmp/test", nil)

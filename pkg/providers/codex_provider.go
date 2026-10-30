@@ -45,6 +45,7 @@ func NewCodexProvider(token, accountID string) *CodexProvider {
 		option.WithBaseURL("https://chatgpt.com/backend-api/codex"),
 		option.WithAPIKey(token),
 		option.WithHTTPClient(transport.NewCloudflareClient()),
+		option.WithMaxRetries(0),
 	}
 	opts = appendCodexIdentityHeaders(opts)
 	if accountID != "" {
@@ -129,20 +130,34 @@ func (p *CodexProvider) Chat(ctx context.Context, messages []Message, tools []To
 			resp := event.Response
 			finalResp = &resp
 		case responses.ResponseErrorEvent:
+			message := event.Message
 			if event.Param != "" {
-				return nil, fmt.Errorf("response error (%s): %s (param=%s)", event.Code, event.Message, event.Param)
+				message += fmt.Sprintf(" (param=%s)", event.Param)
 			}
-			return nil, fmt.Errorf("response error (%s): %s", event.Code, event.Message)
+			cause := fmt.Errorf("response error (%s): %s", event.Code, message)
+			apiErr := newAPIError("Codex", nil, []byte(event.RawJSON()), cause)
+			apiErr.Code, apiErr.Message = event.Code, message
+			return nil, apiErr
 		case responses.ResponseFailedEvent:
-			return nil, fmt.Errorf("response failed with status %q", event.Response.Status)
+			message := event.Response.Error.Message
+			if message == "" {
+				message = fmt.Sprintf("response failed with status %q", event.Response.Status)
+			}
+			apiErr := newAPIError("Codex", nil, []byte(event.Response.Error.RawJSON()), errors.New(message))
+			apiErr.Code, apiErr.Message = string(event.Response.Error.Code), message
+			return nil, apiErr
 		}
 	}
 	if err := stream.Err(); err != nil {
 		logger.ErrorCF("provider.codex", "Codex API call failed", codexAPIErrorFields(err, model, resolvedModel, len(messages), len(tools), accountID != ""))
-		return nil, fmt.Errorf("codex API call: %w", err)
+		var sdkErr *openai.Error
+		if errors.As(err, &sdkErr) {
+			return nil, newAPIError("Codex", sdkErr.Response, []byte(sdkErr.RawJSON()), err)
+		}
+		return nil, &providerRuntimeError{provider: "Codex", err: fmt.Errorf("codex API call: %w", err)}
 	}
 	if finalResp == nil {
-		return nil, fmt.Errorf("codex API call: stream ended without a response payload")
+		return nil, &providerRuntimeError{provider: "Codex", err: &responseDecodeError{err: errors.New("codex API call: stream ended without a response payload")}}
 	}
 
 	// If the completed response has an empty Output array but we collected

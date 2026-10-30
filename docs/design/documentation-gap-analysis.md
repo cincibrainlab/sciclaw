@@ -28,7 +28,7 @@ Updated:
 - rewrote around the current public-release candidate feature set
 
 Files:
-- [next-release-announcement.md](/Users/ernie/Documents/irl_projects/260212-sciclaw/docs/next-release-announcement.md)
+- [next-release-announcement.md](/Users/ernie/Documents/irl_projects/260212-sciclaw/docs/drafts/next-release-announcement.md)
 
 ### 3. RFC / issue doc status drift
 
@@ -40,11 +40,11 @@ Updated:
 - public-release fix list now marked code-complete, validation-remaining
 
 Files:
-- [btw-side-lane-rfc.md](/Users/ernie/Documents/irl_projects/260212-sciclaw/docs/issues/btw-side-lane-rfc.md)
-- [discord-btw-slash-command-rfc.md](/Users/ernie/Documents/irl_projects/260212-sciclaw/docs/issues/discord-btw-slash-command-rfc.md)
-- [discord-skill-slash-command-rfc.md](/Users/ernie/Documents/irl_projects/260212-sciclaw/docs/issues/discord-skill-slash-command-rfc.md)
-- [queue-btw-scheduler.md](/Users/ernie/Documents/irl_projects/260212-sciclaw/docs/issues/queue-btw-scheduler.md)
-- [public-release-fixlist.md](/Users/ernie/Documents/irl_projects/260212-sciclaw/docs/issues/public-release-fixlist.md)
+- [btw-side-lane-rfc.md](/Users/ernie/Documents/irl_projects/260212-sciclaw/docs/design/btw-side-lane-rfc.md)
+- [discord-btw-slash-command-rfc.md](/Users/ernie/Documents/irl_projects/260212-sciclaw/docs/design/discord-btw-slash-command-rfc.md)
+- [discord-skill-slash-command-rfc.md](/Users/ernie/Documents/irl_projects/260212-sciclaw/docs/design/discord-skill-slash-command-rfc.md)
+- [queue-btw-scheduler.md](/Users/ernie/Documents/irl_projects/260212-sciclaw/docs/design/queue-btw-scheduler.md)
+- [public-release-fixlist.md](/Users/ernie/Documents/irl_projects/260212-sciclaw/docs/design/public-release-fixlist.md)
 
 ### 4. Claude OAuth parity notes
 
@@ -52,7 +52,7 @@ Updated:
 - documented the empty-direct-answer retry path added in `b0db7c3`
 
 Files:
-- [claude-oauth-parity.md](/Users/ernie/Documents/irl_projects/260212-sciclaw/docs/claude-oauth-parity.md)
+- [claude-oauth-parity.md](/Users/ernie/Documents/irl_projects/260212-sciclaw/docs/notes/claude-oauth-parity.md)
 
 ### 5. Static website docs
 

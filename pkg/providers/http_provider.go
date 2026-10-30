@@ -11,7 +11,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -27,6 +26,13 @@ type HTTPProvider struct {
 	apiBase    string
 	httpClient *http.Client
 }
+
+type responseDecodeError struct {
+	err error
+}
+
+func (e *responseDecodeError) Error() string { return e.err.Error() }
+func (e *responseDecodeError) Unwrap() error { return e.err }
 
 func NewHTTPProvider(apiKey, apiBase, proxy string) *HTTPProvider {
 	return NewHTTPProviderWithTimeout(apiKey, apiBase, proxy, 30*time.Second)
@@ -115,20 +121,24 @@ func (p *HTTPProvider) Chat(ctx context.Context, messages []Message, tools []Too
 
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
+		return nil, &providerRuntimeError{provider: "HTTP", err: fmt.Errorf("failed to send request: %w", err)}
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readProviderResponse(resp)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return nil, &providerRuntimeError{provider: "HTTP", err: fmt.Errorf("failed to read response: %w", err)}
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API request failed:\n  Status: %d\n  Body:   %s", resp.StatusCode, string(body))
+		return nil, NewAPIError("HTTP", resp, body)
 	}
 
-	return p.parseResponse(body)
+	response, err := p.parseResponse(body)
+	if err != nil {
+		return nil, &providerRuntimeError{provider: "HTTP", err: err}
+	}
+	return response, nil
 }
 
 func (p *HTTPProvider) parseResponse(body []byte) (*LLMResponse, error) {
@@ -151,7 +161,7 @@ func (p *HTTPProvider) parseResponse(body []byte) (*LLMResponse, error) {
 	}
 
 	if err := json.Unmarshal(body, &apiResponse); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal response: %w", &responseDecodeError{err: err})
 	}
 
 	if len(apiResponse.Choices) == 0 {

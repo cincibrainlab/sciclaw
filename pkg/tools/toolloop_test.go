@@ -2,12 +2,31 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
+
+const providerDiagnosticCanary = "provider-diagnostic-canary"
+
+type failingProvider struct{}
+
+func (p *failingProvider) Chat(context.Context, []providers.Message, []providers.ToolDefinition, string, map[string]interface{}) (*providers.LLMResponse, error) {
+	return nil, &providers.APIError{
+		Provider:   "test-provider",
+		StatusCode: 401,
+		Message:    providerDiagnosticCanary,
+		Body:       providerDiagnosticCanary,
+	}
+}
+
+func (p *failingProvider) GetDefaultModel() string { return "test-model" }
 
 type toolLoopEchoProvider struct {
 	calls int
@@ -110,6 +129,43 @@ func TestRunToolLoop_LeavesToolOutputUnchangedWhenLimitDisabled(t *testing.T) {
 	if result.Content != full {
 		t.Fatalf("expected unbounded tool output when limit disabled, got %q", result.Content)
 	}
+}
+
+func TestRunToolLoop_ProviderFailureLogsRawDiagnostics(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "provider-errors.log")
+	previousLevel := logger.GetLevel()
+	logger.SetLevel(logger.INFO)
+	defer logger.SetLevel(previousLevel)
+	if err := logger.EnableFileLogging(logPath); err != nil {
+		t.Fatalf("EnableFileLogging: %v", err)
+	}
+	defer logger.DisableFileLogging()
+
+	_, err := RunToolLoop(context.Background(), ToolLoopConfig{
+		Provider: &failingProvider{},
+		Model:    "test-model",
+	}, []providers.Message{{Role: "user", Content: "test"}}, "cli", "direct")
+	if err == nil {
+		t.Fatal("expected RunToolLoop to return an error")
+	}
+
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var entry logger.LogEntry
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("parse log entry: %v", err)
+		}
+		if entry.Component == "toolloop" && entry.Message == "LLM call failed" {
+			if !strings.Contains(entry.Fields["error"].(string), providerDiagnosticCanary) {
+				t.Fatalf("raw diagnostic missing from log entry: %#v", entry)
+			}
+			return
+		}
+	}
+	t.Fatal("toolloop LLM failure log entry not found")
 }
 
 func TestRunToolLoop_TruncatesErrorFallbackWhenConfigured(t *testing.T) {

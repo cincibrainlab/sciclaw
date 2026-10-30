@@ -165,7 +165,7 @@ func sciclawHomeDir() string {
 func sciclawVersionForAddons() string {
 	v := strings.TrimPrefix(version, "v")
 	if v == "" || v == "dev" {
-		// In sync with docs/issues/addon-system-rfc.md "sciClaw 0.3.0"
+		// In sync with docs/design/addon-system-rfc.md "sciClaw 0.3.0"
 		// deployment checklist. Real releases override via ldflags.
 		return "0.3.0-dev"
 	}

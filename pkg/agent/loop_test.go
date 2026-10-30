@@ -16,6 +16,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/archive/discordarchive"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/hooks"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/tools"
@@ -40,6 +41,159 @@ type diagnosticMockProvider struct {
 	diagnostics *providers.ResponseDiagnostics
 }
 
+type captureHookHandler struct {
+	contexts map[hooks.Event]hooks.Context
+}
+
+func (h *captureHookHandler) Name() string { return "capture" }
+
+func (h *captureHookHandler) Handle(_ context.Context, event hooks.Event, data hooks.Context) hooks.Result {
+	h.contexts[event] = data
+	return hooks.Result{}
+}
+
+func TestLLMHooksShareLogicalCallID(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{})
+	defer al.Stop()
+	handler := &captureHookHandler{contexts: make(map[hooks.Event]hooks.Context)}
+	al.hooks.Register(hooks.EventBeforeLLM, handler)
+	al.hooks.Register(hooks.EventAfterLLM, handler)
+
+	if _, err := al.ProcessDirect(context.Background(), "hello", "hook-call-id"); err != nil {
+		t.Fatalf("ProcessDirect() error = %v", err)
+	}
+	before := handler.contexts[hooks.EventBeforeLLM].Metadata["llm_call_id"]
+	after := handler.contexts[hooks.EventAfterLLM].Metadata["llm_call_id"]
+	if before == "" || before != after {
+		t.Fatalf("before=%v after=%v", before, after)
+	}
+}
+
+func TestProviderErrorHooksAndPresentationUseClassifiedKind(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		body       string
+		wantKind   providers.ProviderErrorKind
+		wantText   string
+		provider   func(string) providers.LLMProvider
+	}{
+		{
+			name:       "content filter",
+			statusCode: http.StatusBadRequest,
+			body:       `{"error":{"code":"content_filter","message":"Content policy rejected the request; retrying will not resolve this rate limit. RAW_CANARY_policy"}}`,
+			wantKind:   providers.ProviderErrorKindPolicyRejected,
+			wantText:   "could not complete",
+		},
+		{
+			name:       "model not found",
+			statusCode: http.StatusBadRequest,
+			body:       `{"error":{"code":"model_not_found","message":"Model unavailable for this authentication method. RAW_CANARY_model"}}`,
+			wantKind:   providers.ProviderErrorKindModelUnavailable,
+			wantText:   "assistant’s model",
+		},
+		{
+			name:       "generic invalid request missing model",
+			statusCode: http.StatusBadRequest,
+			body:       `{"error":{"code":"invalid_request_error","message":"model not found for this authentication method. RAW_CANARY_generic_model"}}`,
+			wantKind:   providers.ProviderErrorKindModelUnavailable,
+			wantText:   "check the configured model and provider access, or choose another available model. Otherwise, contact an administrator",
+		},
+		{
+			name:       "parameter without code",
+			statusCode: http.StatusBadRequest,
+			body:       `{"error":{"message":"The temperature parameter is not supported for this model. RAW_CANARY_parameter"}}`,
+			wantKind:   providers.ProviderErrorKindInvalidRequest,
+			wantText:   "could not complete",
+		},
+		{
+			name:       "invalid parameter",
+			statusCode: http.StatusBadRequest,
+			body:       `{"error":{"code":"invalid_parameter","message":"The temperature parameter is not supported for this model. RAW_CANARY_invalid_parameter"}}`,
+			wantKind:   providers.ProviderErrorKindInvalidRequest,
+			wantText:   "could not complete",
+		},
+		{
+			name:     "invalid HTML response",
+			body:     "<html>RAW_CANARY_html</html>",
+			wantKind: providers.ProviderErrorKindInvalidResponse,
+			wantText: "temporarily unavailable",
+		},
+		{
+			name:     "invalid response schema",
+			body:     `{"choices":"RAW_CANARY_schema"}`,
+			wantKind: providers.ProviderErrorKindInvalidResponse,
+			wantText: "temporarily unavailable",
+		},
+		{
+			name:     "Azure invalid HTML response",
+			body:     "<html>RAW_CANARY_azure</html>",
+			wantKind: providers.ProviderErrorKindInvalidResponse,
+			wantText: "temporarily unavailable",
+			provider: func(endpoint string) providers.LLMProvider {
+				return providers.NewAzureProvider("test-key", endpoint, "")
+			},
+		},
+		{
+			name:     "Ollama invalid HTML response",
+			body:     "<html>RAW_CANARY_ollama</html>",
+			wantKind: providers.ProviderErrorKindInvalidResponse,
+			wantText: "temporarily unavailable",
+			provider: func(endpoint string) providers.LLMProvider {
+				return providers.NewOllamaProvider(endpoint, time.Second)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if test.statusCode != 0 {
+					w.WriteHeader(test.statusCode)
+				}
+				_, _ = w.Write([]byte(test.body))
+			}))
+			defer server.Close()
+
+			var provider providers.LLMProvider = providers.NewHTTPProvider("test-key", server.URL, "")
+			if test.provider != nil {
+				provider = test.provider(server.URL)
+			}
+			cfg := config.DefaultConfig()
+			cfg.Agents.Defaults.Workspace = t.TempDir()
+			al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+			defer al.Stop()
+			handler := &captureHookHandler{contexts: make(map[hooks.Event]hooks.Context)}
+			al.hooks.Register(hooks.EventOnError, handler)
+
+			_, err := al.ProcessDirect(context.Background(), "hello", "provider-error-kind")
+			if err == nil {
+				t.Fatal("ProcessDirect() error = nil")
+			}
+			if got := handler.contexts[hooks.EventOnError].Metadata["error_kind"]; got != string(test.wantKind) {
+				t.Fatalf("on_error error_kind = %v, want %q", got, test.wantKind)
+			}
+			wantProvider := "HTTP"
+			if strings.HasPrefix(test.name, "Azure ") {
+				wantProvider = "Azure"
+			} else if strings.HasPrefix(test.name, "Ollama ") {
+				wantProvider = "Ollama"
+			}
+			if got := handler.contexts[hooks.EventOnError].Metadata["provider"]; got != wantProvider {
+				t.Fatalf("on_error provider = %v, want %q", got, wantProvider)
+			}
+			message, presentation, ok := UserError(err)
+			if !ok || presentation == nil || !strings.Contains(message, test.wantText) {
+				t.Fatalf("UserError() = message %q presentation %#v", message, presentation)
+			}
+			if strings.Contains(message, "RAW_CANARY") || strings.Contains(presentation.TechnicalDetails, "RAW_CANARY") {
+				t.Fatalf("provider response leaked: message=%q details=%q", message, presentation.TechnicalDetails)
+			}
+		})
+	}
+}
+
 func (m *diagnosticMockProvider) Chat(ctx context.Context, messages []providers.Message, tools []providers.ToolDefinition, model string, opts map[string]interface{}) (*providers.LLMResponse, error) {
 	return &providers.LLMResponse{
 		Content:     m.response,
@@ -52,9 +206,18 @@ func (m *diagnosticMockProvider) GetDefaultModel() string {
 	return "mock-model"
 }
 
+func tempWorkspaceWithoutAudit(t *testing.T) string {
+	t.Helper()
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "hooks.yaml"), []byte("audit:\n  enabled: false\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return workspace
+}
+
 func TestNewAgentLoopWithCodexProviderAssemblesImageGenerationRouting(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.Workspace = tempWorkspaceWithoutAudit(t)
 	provider := providers.NewCodexProvider("test-token", "test-account")
 
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
@@ -103,7 +266,7 @@ func TestLocalTurnDiagnostics_RecordLLMResponseTracksFallbacks(t *testing.T) {
 
 func TestNewAgentLoopWithSideLaneProfileRestrictsTools(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.Workspace = tempWorkspaceWithoutAudit(t)
 	al := NewAgentLoopWithOptions(cfg, bus.NewMessageBus(), &mockProvider{}, LoopOptions{
 		ToolProfile: ToolProfileSideLane,
 	})
@@ -146,7 +309,7 @@ func TestNewAgentLoopWithSideLaneProfileRestrictsTools(t *testing.T) {
 
 func TestLegacyExternalReadOnlyProfileAliasNormalizesToSideLane(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.Workspace = tempWorkspaceWithoutAudit(t)
 	al := NewAgentLoopWithOptions(cfg, bus.NewMessageBus(), &mockProvider{}, LoopOptions{
 		ToolProfile: ToolProfileExternalReadOnly,
 	})
@@ -161,7 +324,7 @@ func TestLegacyExternalReadOnlyProfileAliasNormalizesToSideLane(t *testing.T) {
 
 func TestSideLaneRunJobDoesNotPersistSession(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.Workspace = tempWorkspaceWithoutAudit(t)
 	al := NewAgentLoopWithOptions(cfg, bus.NewMessageBus(), &mockProvider{}, LoopOptions{
 		ToolProfile: ToolProfileSideLane,
 	})
@@ -186,7 +349,7 @@ func TestSideLaneRunJobDoesNotPersistSession(t *testing.T) {
 
 func TestSideLaneRunJobAddsRuntimeConstraintPrompt(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.Workspace = tempWorkspaceWithoutAudit(t)
 	provider := &captureMockProvider{response: "ok"}
 	al := NewAgentLoopWithOptions(cfg, bus.NewMessageBus(), provider, LoopOptions{
 		ToolProfile: ToolProfileSideLane,
@@ -222,7 +385,7 @@ func TestSideLaneRunJobAddsRuntimeConstraintPrompt(t *testing.T) {
 }
 
 func TestRunJobPersistsInboundArtifactsForFollowups(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := tempWorkspaceWithoutAudit(t)
 	inputPath := filepath.Join(workspace, ".sciclaw", "inbound", "discord", "123", "protocol.docx")
 	if err := os.MkdirAll(filepath.Dir(inputPath), 0o755); err != nil {
 		t.Fatalf("mkdir input: %v", err)
@@ -279,7 +442,7 @@ func TestRunJobPersistsInboundArtifactsForFollowups(t *testing.T) {
 }
 
 func TestRunAgentLoopRegistersOutputArtifactsFromToolCalls(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := tempWorkspaceWithoutAudit(t)
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = workspace
 
@@ -382,7 +545,7 @@ func TestInferCompletionRequirement_NarrowsToExplicitDeliverableRequests(t *test
 }
 
 func TestRunLLMIteration_RetriesUngroundedAsyncClaim(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := tempWorkspaceWithoutAudit(t)
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = workspace
 
@@ -437,7 +600,7 @@ func TestRunLLMIteration_RetriesUngroundedAsyncClaim(t *testing.T) {
 }
 
 func TestRunLLMIteration_FallsBackAfterRepeatedUngroundedAsyncClaim(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := tempWorkspaceWithoutAudit(t)
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = workspace
 
@@ -473,7 +636,7 @@ func TestRunLLMIteration_FallsBackAfterRepeatedUngroundedAsyncClaim(t *testing.T
 }
 
 func TestRunLLMIteration_RejectsNarrativeCompletionForExplicitOutputTask(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := tempWorkspaceWithoutAudit(t)
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = workspace
 
@@ -669,6 +832,80 @@ func TestProcessDirect_LocalModeEmitsRuntimeSummaryLog(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected Local runtime summary entry in log:\n%s", string(data))
+	}
+}
+
+func TestHandleInboundHidesProviderDiagnosticsButLogsThem(t *testing.T) {
+	const rawCanary = "RAW_CANARY_agent_inbound_4c19"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Request-Id", "req-agent-inbound")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"code":"rate_limit","message":"` + rawCanary + `"}}`))
+	}))
+	defer server.Close()
+
+	logPath := filepath.Join(t.TempDir(), "agent.log")
+	previousLevel := logger.GetLevel()
+	logger.SetLevel(logger.INFO)
+	defer logger.SetLevel(previousLevel)
+	if err := logger.EnableFileLogging(logPath); err != nil {
+		t.Fatalf("EnableFileLogging: %v", err)
+	}
+	defer logger.DisableFileLogging()
+
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	msgBus := bus.NewMessageBus()
+	al := NewAgentLoop(cfg, msgBus, providers.NewHTTPProvider("test-key", server.URL, ""))
+	defer al.Stop()
+
+	al.HandleInbound(context.Background(), bus.InboundMessage{
+		Channel:    "discord",
+		ChatID:     "room-1",
+		SenderID:   "user-1",
+		SessionKey: "discord:room-1",
+		Content:    "trigger provider failure",
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	outbound, ok := msgBus.SubscribeOutbound(ctx)
+	if !ok {
+		t.Fatal("expected outbound provider error")
+	}
+	if outbound.Error == nil || outbound.Error.ReferenceID == "" {
+		t.Fatalf("expected outbound error reference, got %#v", outbound)
+	}
+	if strings.Contains(outbound.Content, rawCanary) || strings.Contains(outbound.Error.TechnicalDetails, rawCanary) {
+		t.Fatalf("raw provider diagnostics leaked outbound: %#v", outbound)
+	}
+	if !strings.Contains(outbound.Content, outbound.Error.ReferenceID) {
+		t.Fatalf("outbound content omitted error reference %q: %q", outbound.Error.ReferenceID, outbound.Content)
+	}
+
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	found := false
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var entry logger.LogEntry
+		if err := json.Unmarshal([]byte(line), &entry); err != nil || entry.Message != "LLM call failed" {
+			continue
+		}
+		if entry.Fields["error_reference"] == outbound.Error.ReferenceID && strings.Contains(entry.Fields["error"].(string), rawCanary) {
+			if entry.Fields["error_kind"] != "rate_limited" || entry.Fields["provider"] != "HTTP" || entry.Fields["model"] == "" || entry.Fields["attempt"] != float64(1) || entry.Fields["final"] != true {
+				t.Fatalf("missing stable failure fields: %#v", entry.Fields)
+			}
+			if entry.Fields["llm_call_id"] != entry.Fields["turn_id"].(string)+":1" || entry.Fields["status_code"] != float64(http.StatusTooManyRequests) || entry.Fields["provider_code"] != "rate_limit" || entry.Fields["provider_request_id"] != "req-agent-inbound" {
+				t.Fatalf("incorrect failure facts: %#v", entry.Fields)
+			}
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected structured log with raw diagnostics and reference:\n%s", data)
 	}
 }
 
@@ -1250,7 +1487,7 @@ func TestProcessDirectWithChannel_LocalModePrefetchesURL(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tmpDir := t.TempDir()
+	tmpDir := tempWorkspaceWithoutAudit(t)
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = tmpDir
 	cfg.Agents.Defaults.Model = "test-model"
@@ -1315,7 +1552,7 @@ func TestProcessDirectWithChannel_CloudModeSkipsLocalPrefetch(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tmpDir := t.TempDir()
+	tmpDir := tempWorkspaceWithoutAudit(t)
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = tmpDir
 	cfg.Agents.Defaults.Model = "test-model"
@@ -1344,7 +1581,7 @@ func TestProcessDirectWithChannel_CloudModeSkipsLocalPrefetch(t *testing.T) {
 }
 
 func TestRunLLMIteration_TruncatesToolOutputForLocalMode(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := tempWorkspaceWithoutAudit(t)
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = tmpDir
 	cfg.Agents.Defaults.Model = "test-model"
@@ -1841,5 +2078,36 @@ func TestToolResult_UserFacingToolDoesSendMessage(t *testing.T) {
 	// User-facing tool should include the output in final response
 	if response != "Command output: hello world" {
 		t.Errorf("Expected 'Command output: hello world', got: %s", response)
+	}
+}
+
+func TestProviderTransportFailureHookIdentity(t *testing.T) {
+	adapters := []struct {
+		name string
+		new  func(string) providers.LLMProvider
+	}{
+		{"HTTP", func(url string) providers.LLMProvider { return providers.NewHTTPProvider("key", url, "") }},
+		{"Azure", func(url string) providers.LLMProvider { return providers.NewAzureProvider("key", url, "") }},
+		{"Ollama", func(url string) providers.LLMProvider { return providers.NewOllamaProvider(url, time.Second) }},
+	}
+	for _, adapter := range adapters {
+		t.Run(adapter.name, func(t *testing.T) {
+			server := httptest.NewServer(http.NotFoundHandler())
+			server.Close()
+			cfg := config.DefaultConfig()
+			cfg.Agents.Defaults.Workspace = t.TempDir()
+			al := NewAgentLoop(cfg, bus.NewMessageBus(), adapter.new(server.URL))
+			defer al.Stop()
+			handler := &captureHookHandler{contexts: make(map[hooks.Event]hooks.Context)}
+			al.hooks.Register(hooks.EventOnError, handler)
+			_, err := al.ProcessDirect(context.Background(), "hello", "transport-error")
+			if err == nil {
+				t.Fatal("expected transport error")
+			}
+			metadata := handler.contexts[hooks.EventOnError].Metadata
+			if metadata["provider"] != adapter.name || metadata["error_kind"] != string(providers.ProviderErrorKindNetwork) {
+				t.Fatalf("hook metadata = %v", metadata)
+			}
+		})
 	}
 }

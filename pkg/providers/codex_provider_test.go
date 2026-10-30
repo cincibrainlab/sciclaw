@@ -3,6 +3,7 @@ package providers
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -385,6 +386,63 @@ func TestCodexProvider_ChatRoundTrip(t *testing.T) {
 	}
 	if resp.Usage.TotalTokens != 18 {
 		t.Errorf("TotalTokens = %d, want 18", resp.Usage.TotalTokens)
+	}
+}
+
+func TestCodexProvider_ChatNormalizesHTTPError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("x-request-id", "req_codex")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"code":"rate_limit_exceeded","message":"try later"}}`))
+	}))
+	defer server.Close()
+
+	provider := NewCodexProvider("test-token", "")
+	provider.client = createOpenAITestClient(server.URL, "test-token", "")
+	_, err := provider.Chat(t.Context(), []Message{{Role: "user", Content: "Hello"}}, nil, "gpt-5.6-sol", map[string]interface{}{})
+	if err == nil {
+		t.Fatal("Chat() error = nil")
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Chat() error type = %T, want APIError", err)
+	}
+	if apiErr.Provider != "Codex" || apiErr.StatusCode != http.StatusTooManyRequests || apiErr.Code != "rate_limit_exceeded" || apiErr.Message != "try later" || apiErr.RequestID != "req_codex" {
+		t.Fatalf("APIError = %#v", apiErr)
+	}
+	var sdkErr *openai.Error
+	if !errors.As(err, &sdkErr) {
+		t.Fatalf("Chat() does not retain openai.Error: %v", err)
+	}
+}
+
+func TestCodexProvider_ChatNormalizesSSEError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "event: error\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"error\",\"sequence_number\":1,\"code\":\"invalid_prompt\",\"message\":\"prompt rejected\",\"param\":\"input\"}\n\n")
+	}))
+	defer server.Close()
+
+	provider := NewCodexProvider("test-token", "")
+	provider.client = createOpenAITestClient(server.URL, "test-token", "")
+	_, err := provider.Chat(t.Context(), []Message{{Role: "user", Content: "Hello"}}, nil, "gpt-5.6-sol", map[string]interface{}{})
+	if err == nil {
+		t.Fatal("Chat() error = nil")
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Chat() error type = %T, want APIError", err)
+	}
+	if apiErr.Provider != "Codex" || apiErr.StatusCode != 0 || apiErr.Code != "invalid_prompt" || apiErr.Message != "prompt rejected (param=input)" || apiErr.RequestID != "" {
+		t.Fatalf("APIError = %#v", apiErr)
+	}
+	if errors.Unwrap(apiErr) == nil {
+		t.Fatal("APIError does not retain the SSE error cause")
+	}
+	if !strings.Contains(apiErr.Body, `"code":"invalid_prompt"`) {
+		t.Fatalf("APIError body omitted raw SSE event: %q", apiErr.Body)
 	}
 }
 
