@@ -5,7 +5,7 @@ description: Move one AtomicQMS/Gitea repository task file from phase_0 to the m
 
 # Move Gitea File From Phase 0 To Phase 1
 
-Use the `exec` tool to run `mcp-server-cli`, which calls the configured official Gitea MCP server. The CLI reads `SCICLAW_MCP_URL`; never include credentials in a command, chat message, or log.
+Use the `gitea_mcp` tool for every call to the configured official Gitea MCP server. Set `tool` to the MCP tool name and `arguments` to a JSON object containing its arguments. Never use `exec` or construct shell commands. The CLI reads `SCICLAW_MCP_URL`; never include credentials in arguments, chat messages, or logs. This requires the standalone CLI with stdin support (sciclaw-mcp-cli PR #2) installed by the service packaging (sciclaw-stack #12); the older bundled CLI does not support this invocation.
 
 Collect `owner`, `repository`, `branch`, and the exact repository-relative `filePath`. Require `filePath` to start with `phase_0/` and identify one file, not a directory. Reject backslashes, empty path segments, `.`, and `..`.
 
@@ -13,8 +13,10 @@ Show the source path, matching `phase_1/` destination, and branch. Require expli
 
 First call `get_file_contents` with `owner`, `repo`, `ref: branch`, and `path: filePath`; retain the returned `sha`. Then rename the source atomically with `create_or_update_file`:
 
-```sh
-mcp-server-cli call create_or_update_file '{"owner":"<owner>","repo":"<repository>","branch_name":"<branch>","message":"Move <source> to <destination>","files":[{"path":"<destination>","from_path":"<source>","sha":"<source-sha>"}]}'
+Call `gitea_mcp` with `tool: "create_or_update_file"` and `arguments` containing:
+
+```json
+{"owner":"<owner>","repo":"<repository>","branch_name":"<branch>","message":"Move <source> to <destination>","files":[{"path":"<destination>","from_path":"<source>","sha":"<source-sha>"}]}
 ```
 
 Report the source path, destination path, and branch. Do not claim success if either call fails.
