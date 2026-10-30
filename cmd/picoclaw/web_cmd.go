@@ -411,6 +411,14 @@ func (s *webServer) handleChat(w http.ResponseWriter, r *http.Request) {
 			jsonResp(w, map[string]interface{}{"response": result.Response, "mode": "lite"})
 			return
 		}
+		if err != nil && providers.ClassifyProviderError(err).Kind == providers.ProviderErrorKindRateLimited {
+			logger.WarnCF("web", "Lightweight web chat rate limited; skipping full agent fallback", map[string]interface{}{
+				"error":   fmt.Sprint(err),
+				"message": strings.TrimSpace(body.Message),
+			})
+			jsonResp(w, map[string]interface{}{"response": "The AI service is busy. Please wait a moment and try again."})
+			return
+		}
 		logger.WarnCF("web", "Lightweight web chat failed; falling back to full agent", map[string]interface{}{
 			"error":   fmt.Sprint(err),
 			"message": strings.TrimSpace(body.Message),
@@ -478,9 +486,11 @@ func (s *webServer) runLiteChat(ctx context.Context, message string) (*liteChatR
 		},
 		{Role: "user", Content: strings.TrimSpace(message)},
 	}
-	resp, err := provider.Chat(ctx, messages, nil, model, map[string]interface{}{
+	resp, _, _, err := providers.RetryChat(ctx, provider, messages, nil, model, map[string]interface{}{
 		"max_tokens":  384,
 		"temperature": 0.7,
+	}, func(attempt providers.RetryAttempt) {
+		logger.WarnCF("web", "Lightweight web chat attempt failed", map[string]interface{}{"attempt": attempt.Number, "error_kind": attempt.Info.Kind, "recovery_action": attempt.Decision.Action, "error": attempt.Err.Error()})
 	})
 	if err != nil {
 		return nil, err
