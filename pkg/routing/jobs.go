@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -1178,9 +1179,16 @@ func (p *progressReporter) complete(state JobState, phase, detail string, err er
 		record.UpdatedAt = time.Now().UnixMilli()
 		record.LastError = ""
 		if err != nil {
-			record.LastError = utils.Truncate(compactJobLine(err.Error()), 180)
+			if userMessage, _, ok := agent.UserError(err); ok {
+				record.LastError = utils.Truncate(compactJobLine(userMessage), 180)
+			} else {
+				record.LastError = "Job failed. Check the server logs for details."
+			}
 		}
 	})
+	if err != nil {
+		logger.ErrorCF("jobs", "Job failed", map[string]interface{}{"job_id": record.ID, "phase": record.Phase, "error": err.Error()})
+	}
 	if saveErr := p.manager.store.Save(record); saveErr != nil {
 		logger.WarnCF("jobs", "Failed to persist final job state", map[string]interface{}{"job_id": record.ID, "error": saveErr.Error()})
 	}
