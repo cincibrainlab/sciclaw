@@ -19,6 +19,6 @@ COPY --from=builder --chown=nonroot:nonroot /gitea-mcp .
 USER nonroot:nonroot
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD ["/app/gitea-mcp", "-healthcheck"] || exit 1
+  CMD ["/app/gitea-mcp", "-healthcheck"]
 
 CMD ["/app/gitea-mcp"]
