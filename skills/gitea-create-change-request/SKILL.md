@@ -17,4 +17,4 @@ Create the pull request:
 mcp-server-cli call pull_request_write '{"method":"create","owner":"<owner>","repo":"<repository>","title":"<title>","head":"<head>","base":"<base>","body":"<body>"}'
 ```
 
-If reviewers were requested, take the returned `number` and call `pull_request_write` again with `method: "add_reviewers"`, the same `owner` and `repo`, `pull_number`, and `reviewers`. Report the created change-request number and URL. Do not claim it was created when either requested call fails.
+If creation fails, report the failure and do not claim the change request was created. If creation succeeds, report the created change-request number and URL. If reviewers were requested, take the returned `number` and call `pull_request_write` again with `method: "add_reviewers"`, the same `owner` and `repo`, `pull_number`, and `reviewers`. Report any reviewer-assignment failure separately without concealing the created change request.
