@@ -67,19 +67,11 @@ func startRoutingStatus(ctx context.Context, dir string, dispatcher *routing.Dis
 				workspace = m.Workspace
 			}
 		}
-		outputs := filepath.Join(workspace, "outputs")
-		resolved, err := filepath.EvalSymlinks(outputs)
-		if !active.Enabled || !filepath.IsAbs(workspace) || filepath.Clean(workspace) != workspace || err != nil || resolved != outputs {
+		if !active.Enabled || !filepath.IsAbs(workspace) || filepath.Clean(workspace) != workspace {
 			http.NotFound(w, r)
 			return
 		}
-		root, err := os.OpenRoot(outputs)
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
-		defer root.Close()
-		f, err := root.Open(marker)
+		f, err := openOutputMarker(workspace, marker)
 		if err != nil {
 			http.NotFound(w, r)
 			return

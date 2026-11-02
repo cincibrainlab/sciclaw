@@ -76,6 +76,16 @@ func TestRoutingStatus(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(outputs, marker), []byte(content), 0600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Symlink(marker, filepath.Join(outputs, ".sciclaw-check-"+strings.Repeat("d", 32))); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(workspace, "outside")
+	if err := os.WriteFile(outside, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(outputs, ".sciclaw-check-"+strings.Repeat("e", 32))); err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		query  string
 		status int
@@ -84,6 +94,8 @@ func TestRoutingStatus(t *testing.T) {
 		{"channel=999&marker=" + marker, http.StatusNotFound},
 		{"channel=123&marker=../secret", http.StatusNotFound},
 		{"channel=123&marker=.sciclaw-check-" + strings.Repeat("c", 32), http.StatusNotFound},
+		{"channel=123&marker=.sciclaw-check-" + strings.Repeat("d", 32), http.StatusNotFound},
+		{"channel=123&marker=.sciclaw-check-" + strings.Repeat("e", 32), http.StatusNotFound},
 	} {
 		resp, err := client.Get("http://unix/v1/workspace-output-marker?" + tc.query)
 		if err != nil {
