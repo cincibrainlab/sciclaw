@@ -52,9 +52,18 @@ func (m *diagnosticMockProvider) GetDefaultModel() string {
 	return "mock-model"
 }
 
+func tempWorkspaceWithoutAudit(t *testing.T) string {
+	t.Helper()
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "hooks.yaml"), []byte("audit:\n  enabled: false\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return workspace
+}
+
 func TestNewAgentLoopWithCodexProviderAssemblesImageGenerationRouting(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.Workspace = tempWorkspaceWithoutAudit(t)
 	provider := providers.NewCodexProvider("test-token", "test-account")
 
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
@@ -103,7 +112,7 @@ func TestLocalTurnDiagnostics_RecordLLMResponseTracksFallbacks(t *testing.T) {
 
 func TestNewAgentLoopWithSideLaneProfileRestrictsTools(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.Workspace = tempWorkspaceWithoutAudit(t)
 	al := NewAgentLoopWithOptions(cfg, bus.NewMessageBus(), &mockProvider{}, LoopOptions{
 		ToolProfile: ToolProfileSideLane,
 	})
@@ -146,7 +155,7 @@ func TestNewAgentLoopWithSideLaneProfileRestrictsTools(t *testing.T) {
 
 func TestLegacyExternalReadOnlyProfileAliasNormalizesToSideLane(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.Workspace = tempWorkspaceWithoutAudit(t)
 	al := NewAgentLoopWithOptions(cfg, bus.NewMessageBus(), &mockProvider{}, LoopOptions{
 		ToolProfile: ToolProfileExternalReadOnly,
 	})
@@ -161,7 +170,7 @@ func TestLegacyExternalReadOnlyProfileAliasNormalizesToSideLane(t *testing.T) {
 
 func TestSideLaneRunJobDoesNotPersistSession(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.Workspace = tempWorkspaceWithoutAudit(t)
 	al := NewAgentLoopWithOptions(cfg, bus.NewMessageBus(), &mockProvider{}, LoopOptions{
 		ToolProfile: ToolProfileSideLane,
 	})
@@ -186,7 +195,7 @@ func TestSideLaneRunJobDoesNotPersistSession(t *testing.T) {
 
 func TestSideLaneRunJobAddsRuntimeConstraintPrompt(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.Workspace = tempWorkspaceWithoutAudit(t)
 	provider := &captureMockProvider{response: "ok"}
 	al := NewAgentLoopWithOptions(cfg, bus.NewMessageBus(), provider, LoopOptions{
 		ToolProfile: ToolProfileSideLane,
@@ -222,10 +231,7 @@ func TestSideLaneRunJobAddsRuntimeConstraintPrompt(t *testing.T) {
 }
 
 func TestRunJobPersistsInboundArtifactsForFollowups(t *testing.T) {
-	workspace := t.TempDir()
-	if err := os.WriteFile(filepath.Join(workspace, "hooks.yaml"), []byte("audit:\n  enabled: false\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	workspace := tempWorkspaceWithoutAudit(t)
 	inputPath := filepath.Join(workspace, ".sciclaw", "inbound", "discord", "123", "protocol.docx")
 	if err := os.MkdirAll(filepath.Dir(inputPath), 0o755); err != nil {
 		t.Fatalf("mkdir input: %v", err)
@@ -282,7 +288,7 @@ func TestRunJobPersistsInboundArtifactsForFollowups(t *testing.T) {
 }
 
 func TestRunAgentLoopRegistersOutputArtifactsFromToolCalls(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := tempWorkspaceWithoutAudit(t)
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = workspace
 
@@ -385,7 +391,7 @@ func TestInferCompletionRequirement_NarrowsToExplicitDeliverableRequests(t *test
 }
 
 func TestRunLLMIteration_RetriesUngroundedAsyncClaim(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := tempWorkspaceWithoutAudit(t)
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = workspace
 
@@ -440,7 +446,7 @@ func TestRunLLMIteration_RetriesUngroundedAsyncClaim(t *testing.T) {
 }
 
 func TestRunLLMIteration_FallsBackAfterRepeatedUngroundedAsyncClaim(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := tempWorkspaceWithoutAudit(t)
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = workspace
 
@@ -476,7 +482,7 @@ func TestRunLLMIteration_FallsBackAfterRepeatedUngroundedAsyncClaim(t *testing.T
 }
 
 func TestRunLLMIteration_RejectsNarrativeCompletionForExplicitOutputTask(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := tempWorkspaceWithoutAudit(t)
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = workspace
 
@@ -1253,7 +1259,7 @@ func TestProcessDirectWithChannel_LocalModePrefetchesURL(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tmpDir := t.TempDir()
+	tmpDir := tempWorkspaceWithoutAudit(t)
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = tmpDir
 	cfg.Agents.Defaults.Model = "test-model"
@@ -1318,10 +1324,7 @@ func TestProcessDirectWithChannel_CloudModeSkipsLocalPrefetch(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tmpDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(tmpDir, "hooks.yaml"), []byte("audit:\n  enabled: false\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	tmpDir := tempWorkspaceWithoutAudit(t)
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = tmpDir
 	cfg.Agents.Defaults.Model = "test-model"
@@ -1350,7 +1353,7 @@ func TestProcessDirectWithChannel_CloudModeSkipsLocalPrefetch(t *testing.T) {
 }
 
 func TestRunLLMIteration_TruncatesToolOutputForLocalMode(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := tempWorkspaceWithoutAudit(t)
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = tmpDir
 	cfg.Agents.Defaults.Model = "test-model"
