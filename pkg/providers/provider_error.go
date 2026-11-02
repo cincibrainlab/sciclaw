@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -89,9 +90,17 @@ func ClassifyProviderError(err error) ProviderErrorInfo {
 		return info
 	}
 
-	message := strings.ToLower(err.Error())
+	message := err.Error()
+	if apiErr != nil {
+		message = apiErr.Message
+		body := strings.TrimSpace(apiErr.Body)
+		if strings.TrimSpace(message) == "" && body != "" && !strings.ContainsAny(body[:1], "{[<") && !json.Valid([]byte(body)) {
+			message = body
+		}
+	}
+	message = strings.ToLower(message)
 	switch {
-	case info.StatusCode == 401 || containsProviderErrorText(message, "invalid api key", "invalid bearer token", "unauthorized", "authentication"):
+	case info.StatusCode == 401 || containsProviderErrorText(message, "invalid api key", "invalid bearer token", "unauthorized"):
 		info.Kind = ProviderErrorKindAuthentication
 	case info.StatusCode == 403:
 		info.Kind = ProviderErrorKindPermission
@@ -103,11 +112,13 @@ func ClassifyProviderError(err error) ProviderErrorInfo {
 		info.Kind = ProviderErrorKindContextLimit
 	case isModelUnavailable("", message):
 		info.Kind = ProviderErrorKindModelUnavailable
+	case strings.Contains(message, "authentication"):
+		info.Kind = ProviderErrorKindAuthentication
 	case containsProviderErrorText(message, "content policy", "moderation", "content_filter"):
 		info.Kind = ProviderErrorKindPolicyRejected
 	case info.StatusCode == 408 || containsProviderErrorText(message, "timeout", "deadline exceeded"):
 		info.Kind = ProviderErrorKindTimeout
-	case info.StatusCode == 400:
+	case info.StatusCode == 400 || strings.Contains(code, "invalid_request"):
 		info.Kind = ProviderErrorKindInvalidRequest
 	case info.StatusCode == 409 || info.StatusCode >= 500 || containsProviderErrorText(message, "temporarily unavailable"):
 		info.Kind = ProviderErrorKindProviderUnavailable
@@ -135,7 +146,8 @@ func providerErrorKindForCode(code string) (ProviderErrorKind, bool) {
 		return ProviderErrorKindPolicyRejected, true
 	case containsProviderErrorText(code, "timeout", "deadline_exceeded"):
 		return ProviderErrorKindTimeout, true
-	case containsProviderErrorText(code, "invalid_request", "unsupported_parameter"):
+	case containsProviderErrorText(code, "unsupported_parameter") ||
+		(strings.Contains(code, "invalid_request") && code != "invalid_request" && code != "invalid_request_error"):
 		return ProviderErrorKindInvalidRequest, true
 	case containsProviderErrorText(code, "invalid_response"):
 		return ProviderErrorKindInvalidResponse, true

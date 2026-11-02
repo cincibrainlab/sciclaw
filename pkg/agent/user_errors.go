@@ -55,9 +55,9 @@ func providerFailurePresentation(info providers.ProviderErrorInfo) (string, stri
 	case providers.ProviderErrorKindRateLimited:
 		message, detail = "The AI service is busy. Please wait a moment and try again.", "The provider rate-limited this request."
 	case providers.ProviderErrorKindContextLimit:
-		message, detail = "This conversation is too long for the selected AI model. Start a new conversation or shorten your request.", "The provider rejected the request because it exceeds the model context limit."
+		message, detail = "This conversation has exceeded the assistant’s context limit. Try a shorter message; if the problem continues, ask an administrator to reset the conversation.", "The provider rejected the request because it exceeds the model context limit."
 	case providers.ProviderErrorKindModelUnavailable:
-		message, detail = "The selected AI model is not available. Choose another model or contact an administrator.", "The provider rejected the selected model."
+		message, detail = "The assistant’s model is unavailable. Please try again later. If the problem continues, contact an administrator.", "The provider rejected the selected model."
 	case providers.ProviderErrorKindTimeout, providers.ProviderErrorKindNetwork, providers.ProviderErrorKindProviderUnavailable, providers.ProviderErrorKindInvalidResponse:
 		message, detail = "The AI service is temporarily unavailable. Please try again shortly.", "The provider or network did not complete the request."
 	}

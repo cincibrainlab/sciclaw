@@ -7,6 +7,23 @@ import (
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
+func TestProviderFailureExactGuidance(t *testing.T) {
+	tests := []struct {
+		err  *providers.APIError
+		want string
+	}{
+		{&providers.APIError{StatusCode: 400, Code: "invalid_request_error", Message: "maximum context length exceeded"}, "This conversation has exceeded the assistant’s context limit. Try a shorter message; if the problem continues, ask an administrator to reset the conversation."},
+		{&providers.APIError{StatusCode: 400, Code: "invalid_request_error", Message: "model 'missing' not found for this authentication method"}, "The assistant’s model is unavailable. Please try again later. If the problem continues, contact an administrator."},
+	}
+	for _, test := range tests {
+		err := newProviderFailureError(test.err, "ERR-123", providers.ClassifyProviderError(test.err))
+		message, _, ok := UserError(err)
+		if !ok || message != test.want+"\n\nReference ID: `ERR-123`" {
+			t.Errorf("UserError() = %q, want guidance %q", message, test.want)
+		}
+	}
+}
+
 func TestProviderFailureErrorClassification(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -19,17 +36,17 @@ func TestProviderFailureErrorClassification(t *testing.T) {
 		{
 			name:    "does not expose raw body",
 			apiErr:  &providers.APIError{StatusCode: 400, Code: "model_not_found", Message: "private provider details", RequestID: "req-private", Body: `{"error":"private provider details"}`},
-			want:    "selected AI model",
+			want:    "assistant’s model",
 			details: []string{"Status: 400"},
 		},
 		{name: "quota before rate limit", apiErr: &providers.APIError{StatusCode: 429, Code: "insufficient_quota"}, want: "usage limit"},
-		{name: "context code before model text", apiErr: &providers.APIError{StatusCode: 400, Code: "context_length_exceeded", Message: "model context length exceeded"}, want: "conversation is too long"},
-		{name: "model-specific code not found", apiErr: &providers.APIError{StatusCode: 404, Code: "model_not_found"}, want: "selected AI model"},
-		{name: "Ollama model message not found", apiErr: &providers.APIError{StatusCode: 404, Message: "model 'missing' not found"}, want: "selected AI model"},
+		{name: "context code before model text", apiErr: &providers.APIError{StatusCode: 400, Code: "context_length_exceeded", Message: "model context length exceeded"}, want: "conversation has exceeded"},
+		{name: "model-specific code not found", apiErr: &providers.APIError{StatusCode: 404, Code: "model_not_found"}, want: "assistant’s model"},
+		{name: "Ollama model message not found", apiErr: &providers.APIError{StatusCode: 404, Message: "model 'missing' not found"}, want: "assistant’s model"},
 		{name: "generic not found", apiErr: &providers.APIError{StatusCode: 404, Code: "not_found"}, want: "could not complete"},
-		{name: "unsupported response format", apiErr: &providers.APIError{StatusCode: 400, Code: "unsupported_parameter", Message: "The response_format parameter is not supported"}, want: "could not complete", notWant: "selected AI model", notDetail: "selected model"},
-		{name: "unsupported temperature mentioning model", apiErr: &providers.APIError{StatusCode: 400, Code: "unsupported_parameter", Message: "The temperature parameter is not supported for this model"}, want: "could not complete", notWant: "selected AI model", notDetail: "selected model"},
-		{name: "invalid max tokens mentioning model", apiErr: &providers.APIError{StatusCode: 400, Code: "invalid_parameter", Message: "max_tokens is invalid for this model"}, want: "could not complete", notWant: "selected AI model", notDetail: "selected model"},
+		{name: "unsupported response format", apiErr: &providers.APIError{StatusCode: 400, Code: "unsupported_parameter", Message: "The response_format parameter is not supported"}, want: "could not complete", notWant: "assistant’s model", notDetail: "selected model"},
+		{name: "unsupported temperature mentioning model", apiErr: &providers.APIError{StatusCode: 400, Code: "unsupported_parameter", Message: "The temperature parameter is not supported for this model"}, want: "could not complete", notWant: "assistant’s model", notDetail: "selected model"},
+		{name: "invalid max tokens mentioning model", apiErr: &providers.APIError{StatusCode: 400, Code: "invalid_parameter", Message: "max_tokens is invalid for this model"}, want: "could not complete", notWant: "assistant’s model", notDetail: "selected model"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

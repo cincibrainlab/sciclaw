@@ -92,7 +92,7 @@ func TestProviderErrorHooksAndPresentationUseClassifiedKind(t *testing.T) {
 			statusCode: http.StatusBadRequest,
 			body:       `{"error":{"code":"model_not_found","message":"Model unavailable for this authentication method. RAW_CANARY_model"}}`,
 			wantKind:   providers.ProviderErrorKindModelUnavailable,
-			wantText:   "selected AI model",
+			wantText:   "assistant’s model",
 		},
 		{
 			name:       "parameter without code",
