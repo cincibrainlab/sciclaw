@@ -57,6 +57,7 @@ type AgentLoop struct {
 	recallMaxChars  int
 	discordRecallFn func(query, sessionKey string, topK, maxChars int) ([]discordarchive.RecallHit, error)
 	hooks           *hooks.Dispatcher
+	hookAudit       *hooks.JSONLAuditSink
 	hookAuditPath   string
 	localMode       bool
 	localBackend    string
@@ -398,6 +399,7 @@ func NewAgentLoopWithOptions(cfg *config.Config, msgBus *bus.MessageBus, provide
 	}
 
 	var auditSink hooks.AuditSink
+	var hookAudit *hooks.JSONLAuditSink
 	if hookPolicy.AuditEnabled || hookPolicyErr != nil {
 		auditPath := filepath.Join(workspace, "hooks", "hook-events.jsonl")
 		if hookPolicyErr == nil && hookPolicy.AuditPath != "" {
@@ -408,6 +410,7 @@ func NewAgentLoopWithOptions(cfg *config.Config, msgBus *bus.MessageBus, provide
 			logger.WarnCF("hooks", "Hook audit sink disabled: %v", map[string]interface{}{"error": err.Error()})
 		} else {
 			auditSink = sink
+			hookAudit = sink
 			hookAuditPath = sink.Path()
 		}
 	}
@@ -469,6 +472,7 @@ func NewAgentLoopWithOptions(cfg *config.Config, msgBus *bus.MessageBus, provide
 			return discordArchiveMgr.Recall(query, sessionKey, topK, maxChars), nil
 		},
 		hooks:         hookDispatcher,
+		hookAudit:     hookAudit,
 		hookAuditPath: hookAuditPath,
 		localMode:     cfg.EffectiveMode() == config.ModePhi,
 		localBackend:  strings.TrimSpace(strings.ToLower(cfg.Agents.Defaults.LocalBackend)),
@@ -544,6 +548,13 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// CloseHookAudit drains the audit writer after all turns have finished.
+func (al *AgentLoop) CloseHookAudit() {
+	if al.hookAudit != nil {
+		al.hookAudit.Close()
+	}
 }
 
 func (al *AgentLoop) Stop() {

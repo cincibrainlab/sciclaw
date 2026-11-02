@@ -55,7 +55,9 @@ func newTestAgentWithEmptyProvider(t *testing.T) *AgentLoop {
 	}
 	msgBus := bus.NewMessageBus()
 	provider := &simpleMockProvider{response: ""}
-	return NewAgentLoop(cfg, msgBus, provider)
+	al := NewAgentLoop(cfg, msgBus, provider)
+	t.Cleanup(al.CloseHookAudit)
+	return al
 }
 
 func TestDeterministicFallback_ListProjects(t *testing.T) {

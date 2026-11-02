@@ -2,9 +2,11 @@ package hooks
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 const (
@@ -14,8 +16,11 @@ const (
 
 // JSONLAuditSink appends hook entries as JSONL.
 type JSONLAuditSink struct {
-	path  string
-	queue chan []byte
+	path   string
+	queue  chan []byte
+	done   chan struct{}
+	mu     sync.Mutex
+	closed bool
 }
 
 func NewJSONLAuditSink(workspace string) (*JSONLAuditSink, error) {
@@ -30,8 +35,9 @@ func NewJSONLAuditSinkAt(path string) (*JSONLAuditSink, error) {
 	sink := &JSONLAuditSink{
 		path:  path,
 		queue: make(chan []byte, auditQueueSize),
+		done:  make(chan struct{}),
 	}
-	go sink.writeLoop()
+	go sink.writeLoop(sink.appendLine)
 	return sink, nil
 }
 
@@ -46,6 +52,11 @@ func (s *JSONLAuditSink) Write(entry AuditEntry) error {
 	}
 
 	line := append(b, '\n')
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return errors.New("hook audit sink closed")
+	}
 	select {
 	case s.queue <- line:
 		return nil
@@ -64,9 +75,21 @@ func (s *JSONLAuditSink) Write(entry AuditEntry) error {
 	return nil
 }
 
-func (s *JSONLAuditSink) writeLoop() {
+// Close drains queued entries and waits for the writer to exit.
+func (s *JSONLAuditSink) Close() {
+	s.mu.Lock()
+	if !s.closed {
+		s.closed = true
+		close(s.queue)
+	}
+	s.mu.Unlock()
+	<-s.done
+}
+
+func (s *JSONLAuditSink) writeLoop(appendLine func([]byte) error) {
+	defer close(s.done)
 	for line := range s.queue {
-		_ = s.appendLine(line)
+		_ = appendLine(line)
 	}
 }
 

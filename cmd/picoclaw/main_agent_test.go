@@ -88,6 +88,7 @@ func TestAttachChannelHistoryCallback_WiresSideLaneLoop(t *testing.T) {
 	al := agent.NewAgentLoopWithOptions(cfg, bus.NewMessageBus(), provider, agent.LoopOptions{
 		ToolProfile: agent.ToolProfileSideLane,
 	})
+	defer al.CloseHookAudit()
 
 	attachChannelHistoryCallback(al, func(channelID string, limit int, beforeID string) ([]tools.ChannelHistoryMessage, error) {
 		if channelID != "room-1" {
