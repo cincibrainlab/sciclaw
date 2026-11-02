@@ -39,11 +39,23 @@ type ProviderErrorInfo struct {
 	RetryAfter   time.Duration
 }
 
+type providerRuntimeError struct {
+	provider string
+	err      error
+}
+
+func (e *providerRuntimeError) Error() string { return e.err.Error() }
+func (e *providerRuntimeError) Unwrap() error { return e.err }
+
 // ClassifyProviderError returns provider diagnostics and a stable error category.
 func ClassifyProviderError(err error) ProviderErrorInfo {
 	info := ProviderErrorInfo{Kind: ProviderErrorKindUnknown, Provider: "unknown"}
 	if err == nil {
 		return info
+	}
+	var runtimeErr *providerRuntimeError
+	if errors.As(err, &runtimeErr) {
+		info.Provider = runtimeErr.provider
 	}
 	var apiErr *APIError
 	if errors.As(err, &apiErr) {

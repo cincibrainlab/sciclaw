@@ -167,6 +167,15 @@ func TestProviderErrorHooksAndPresentationUseClassifiedKind(t *testing.T) {
 			if got := handler.contexts[hooks.EventOnError].Metadata["error_kind"]; got != string(test.wantKind) {
 				t.Fatalf("on_error error_kind = %v, want %q", got, test.wantKind)
 			}
+			wantProvider := "HTTP"
+			if strings.HasPrefix(test.name, "Azure ") {
+				wantProvider = "Azure"
+			} else if strings.HasPrefix(test.name, "Ollama ") {
+				wantProvider = "Ollama"
+			}
+			if got := handler.contexts[hooks.EventOnError].Metadata["provider"]; got != wantProvider {
+				t.Fatalf("on_error provider = %v, want %q", got, wantProvider)
+			}
 			message, presentation, ok := UserError(err)
 			if !ok || presentation == nil || !strings.Contains(message, test.wantText) {
 				t.Fatalf("UserError() = message %q presentation %#v", message, presentation)
@@ -2053,5 +2062,36 @@ func TestToolResult_UserFacingToolDoesSendMessage(t *testing.T) {
 	// User-facing tool should include the output in final response
 	if response != "Command output: hello world" {
 		t.Errorf("Expected 'Command output: hello world', got: %s", response)
+	}
+}
+
+func TestProviderTransportFailureHookIdentity(t *testing.T) {
+	adapters := []struct {
+		name string
+		new  func(string) providers.LLMProvider
+	}{
+		{"HTTP", func(url string) providers.LLMProvider { return providers.NewHTTPProvider("key", url, "") }},
+		{"Azure", func(url string) providers.LLMProvider { return providers.NewAzureProvider("key", url, "") }},
+		{"Ollama", func(url string) providers.LLMProvider { return providers.NewOllamaProvider(url, time.Second) }},
+	}
+	for _, adapter := range adapters {
+		t.Run(adapter.name, func(t *testing.T) {
+			server := httptest.NewServer(http.NotFoundHandler())
+			server.Close()
+			cfg := config.DefaultConfig()
+			cfg.Agents.Defaults.Workspace = t.TempDir()
+			al := NewAgentLoop(cfg, bus.NewMessageBus(), adapter.new(server.URL))
+			defer al.Stop()
+			handler := &captureHookHandler{contexts: make(map[hooks.Event]hooks.Context)}
+			al.hooks.Register(hooks.EventOnError, handler)
+			_, err := al.ProcessDirect(context.Background(), "hello", "transport-error")
+			if err == nil {
+				t.Fatal("expected transport error")
+			}
+			metadata := handler.contexts[hooks.EventOnError].Metadata
+			if metadata["provider"] != adapter.name || metadata["error_kind"] != string(providers.ProviderErrorKindNetwork) {
+				t.Fatalf("hook metadata = %v", metadata)
+			}
+		})
 	}
 }

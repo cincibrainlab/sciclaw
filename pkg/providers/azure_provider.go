@@ -86,20 +86,24 @@ func (p *AzureProvider) Chat(ctx context.Context, messages []Message, tools []To
 
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
+		return nil, &providerRuntimeError{provider: "Azure", err: fmt.Errorf("failed to send request: %w", err)}
 	}
 	defer resp.Body.Close()
 
 	body, err := readProviderResponse(resp)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return nil, &providerRuntimeError{provider: "Azure", err: fmt.Errorf("failed to read response: %w", err)}
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, NewAPIError("Azure", resp, body)
 	}
 
-	return parseOpenAIResponse(body)
+	response, err := parseOpenAIResponse(body)
+	if err != nil {
+		return nil, &providerRuntimeError{provider: "Azure", err: err}
+	}
+	return response, nil
 }
 
 func (p *AzureProvider) GetDefaultModel() string {

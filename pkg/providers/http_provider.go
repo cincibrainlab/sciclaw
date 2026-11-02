@@ -121,20 +121,24 @@ func (p *HTTPProvider) Chat(ctx context.Context, messages []Message, tools []Too
 
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
+		return nil, &providerRuntimeError{provider: "HTTP", err: fmt.Errorf("failed to send request: %w", err)}
 	}
 	defer resp.Body.Close()
 
 	body, err := readProviderResponse(resp)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return nil, &providerRuntimeError{provider: "HTTP", err: fmt.Errorf("failed to read response: %w", err)}
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, NewAPIError("HTTP", resp, body)
 	}
 
-	return p.parseResponse(body)
+	response, err := p.parseResponse(body)
+	if err != nil {
+		return nil, &providerRuntimeError{provider: "HTTP", err: err}
+	}
+	return response, nil
 }
 
 func (p *HTTPProvider) parseResponse(body []byte) (*LLMResponse, error) {

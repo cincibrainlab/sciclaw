@@ -59,7 +59,7 @@ func (p *ClaudeProvider) Chat(ctx context.Context, messages []Message, tools []T
 
 	resp, err := p.client.Messages.New(ctx, params, opts...)
 	if err != nil {
-		return nil, wrapClaudeAPIError(err, useOAuthBeta)
+		return nil, &providerRuntimeError{provider: "Claude", err: wrapClaudeAPIError(err, useOAuthBeta)}
 	}
 
 	return parseClaudeResponse(resp), nil

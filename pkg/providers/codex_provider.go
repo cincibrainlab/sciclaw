@@ -153,10 +153,10 @@ func (p *CodexProvider) Chat(ctx context.Context, messages []Message, tools []To
 		if errors.As(err, &sdkErr) {
 			return nil, newAPIError("Codex", sdkErr.Response, []byte(sdkErr.RawJSON()), err)
 		}
-		return nil, fmt.Errorf("codex API call: %w", err)
+		return nil, &providerRuntimeError{provider: "Codex", err: fmt.Errorf("codex API call: %w", err)}
 	}
 	if finalResp == nil {
-		return nil, fmt.Errorf("codex API call: stream ended without a response payload")
+		return nil, &providerRuntimeError{provider: "Codex", err: &responseDecodeError{err: errors.New("codex API call: stream ended without a response payload")}}
 	}
 
 	// If the completed response has an empty Output array but we collected

@@ -93,19 +93,23 @@ func (p *OllamaProvider) Chat(ctx context.Context, messages []Message, tools []T
 
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send ollama request: %w", err)
+		return nil, &providerRuntimeError{provider: "Ollama", err: fmt.Errorf("failed to send ollama request: %w", err)}
 	}
 	defer resp.Body.Close()
 
 	body, err := readProviderResponse(resp)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read ollama response: %w", err)
+		return nil, &providerRuntimeError{provider: "Ollama", err: fmt.Errorf("failed to read ollama response: %w", err)}
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, NewAPIError("Ollama", resp, body)
 	}
 
-	return parseOllamaChatResponse(body)
+	response, err := parseOllamaChatResponse(body)
+	if err != nil {
+		return nil, &providerRuntimeError{provider: "Ollama", err: err}
+	}
+	return response, nil
 }
 
 func (p *OllamaProvider) GetDefaultModel() string { return "" }
