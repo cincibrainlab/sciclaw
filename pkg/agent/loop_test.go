@@ -1319,6 +1319,9 @@ func TestProcessDirectWithChannel_CloudModeSkipsLocalPrefetch(t *testing.T) {
 	defer server.Close()
 
 	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "hooks.yaml"), []byte("audit:\n  enabled: false\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = tmpDir
 	cfg.Agents.Defaults.Model = "test-model"
