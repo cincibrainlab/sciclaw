@@ -58,8 +58,6 @@ func TestNewAgentLoopWithCodexProviderAssemblesImageGenerationRouting(t *testing
 	provider := providers.NewCodexProvider("test-token", "test-account")
 
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
-
-	defer al.CloseHookAudit()
 	prompt := al.contextBuilder.BuildSystemPrompt()
 
 	if !strings.Contains(prompt, "read and follow the `image-generation` skill") {
@@ -109,7 +107,6 @@ func TestNewAgentLoopWithSideLaneProfileRestrictsTools(t *testing.T) {
 	al := NewAgentLoopWithOptions(cfg, bus.NewMessageBus(), &mockProvider{}, LoopOptions{
 		ToolProfile: ToolProfileSideLane,
 	})
-	defer al.CloseHookAudit()
 
 	for _, allowed := range []string{
 		"read_file",
@@ -153,7 +150,6 @@ func TestLegacyExternalReadOnlyProfileAliasNormalizesToSideLane(t *testing.T) {
 	al := NewAgentLoopWithOptions(cfg, bus.NewMessageBus(), &mockProvider{}, LoopOptions{
 		ToolProfile: ToolProfileExternalReadOnly,
 	})
-	defer al.CloseHookAudit()
 
 	if al.toolProfile != ToolProfileSideLane {
 		t.Fatalf("expected legacy alias to normalize to %q, got %q", ToolProfileSideLane, al.toolProfile)
@@ -169,7 +165,6 @@ func TestSideLaneRunJobDoesNotPersistSession(t *testing.T) {
 	al := NewAgentLoopWithOptions(cfg, bus.NewMessageBus(), &mockProvider{}, LoopOptions{
 		ToolProfile: ToolProfileSideLane,
 	})
-	defer al.CloseHookAudit()
 
 	msg := bus.InboundMessage{
 		Channel:    "discord",
@@ -196,7 +191,6 @@ func TestSideLaneRunJobAddsRuntimeConstraintPrompt(t *testing.T) {
 	al := NewAgentLoopWithOptions(cfg, bus.NewMessageBus(), provider, LoopOptions{
 		ToolProfile: ToolProfileSideLane,
 	})
-	defer al.CloseHookAudit()
 
 	msg := bus.InboundMessage{
 		Channel:    "discord",
@@ -229,6 +223,9 @@ func TestSideLaneRunJobAddsRuntimeConstraintPrompt(t *testing.T) {
 
 func TestRunJobPersistsInboundArtifactsForFollowups(t *testing.T) {
 	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "hooks.yaml"), []byte("audit:\n  enabled: false\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	inputPath := filepath.Join(workspace, ".sciclaw", "inbound", "discord", "123", "protocol.docx")
 	if err := os.MkdirAll(filepath.Dir(inputPath), 0o755); err != nil {
 		t.Fatalf("mkdir input: %v", err)
@@ -241,7 +238,6 @@ func TestRunJobPersistsInboundArtifactsForFollowups(t *testing.T) {
 	cfg.Agents.Defaults.Workspace = workspace
 	provider := &captureMockProvider{response: "ok"}
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
-	defer al.CloseHookAudit()
 
 	first := bus.InboundMessage{
 		Channel:    "discord",
@@ -308,7 +304,6 @@ func TestRunAgentLoopRegistersOutputArtifactsFromToolCalls(t *testing.T) {
 		},
 	}
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
-	defer al.CloseHookAudit()
 
 	msg := bus.InboundMessage{
 		Channel:    "discord",
@@ -406,7 +401,6 @@ func TestRunLLMIteration_RetriesUngroundedAsyncClaim(t *testing.T) {
 		},
 	}
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
-	defer al.CloseHookAudit()
 	al.RegisterTool(&mockCustomTool{})
 
 	msg := bus.InboundMessage{
@@ -462,7 +456,6 @@ func TestRunLLMIteration_FallsBackAfterRepeatedUngroundedAsyncClaim(t *testing.T
 		},
 	}
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
-	defer al.CloseHookAudit()
 	al.RegisterTool(&mockCustomTool{})
 
 	msg := bus.InboundMessage{
@@ -499,7 +492,6 @@ func TestRunLLMIteration_RejectsNarrativeCompletionForExplicitOutputTask(t *test
 		},
 	}
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
-	defer al.CloseHookAudit()
 	al.RegisterTool(&mockCustomTool{})
 
 	msg := bus.InboundMessage{
@@ -645,8 +637,6 @@ func TestProcessDirect_LocalModeEmitsRuntimeSummaryLog(t *testing.T) {
 			ContentSource: "thinking",
 		},
 	})
-
-	defer al.CloseHookAudit()
 	defer al.Stop()
 
 	if _, err := al.ProcessDirect(context.Background(), "hello local mode", "local-runtime-test"); err != nil {
@@ -709,7 +699,6 @@ func TestRecordLastChannel(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	provider := &mockProvider{}
 	al := NewAgentLoop(cfg, msgBus, provider)
-	defer al.CloseHookAudit()
 
 	// Test RecordLastChannel
 	testChannel := "test-channel"
@@ -729,7 +718,6 @@ func TestRecordLastChannel(t *testing.T) {
 
 	// Verify persistence by creating a new agent loop
 	al2 := NewAgentLoop(cfg, msgBus, provider)
-	defer al2.CloseHookAudit()
 	defer al2.Stop()
 	if al2.state.GetLastChannel() != testChannel {
 		t.Errorf("Expected persistent channel '%s', got '%s'", testChannel, al2.state.GetLastChannel())
@@ -760,7 +748,6 @@ func TestRecordLastChatID(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	provider := &mockProvider{}
 	al := NewAgentLoop(cfg, msgBus, provider)
-	defer al.CloseHookAudit()
 
 	// Test RecordLastChatID
 	testChatID := "test-chat-id-123"
@@ -780,7 +767,6 @@ func TestRecordLastChatID(t *testing.T) {
 
 	// Verify persistence by creating a new agent loop
 	al2 := NewAgentLoop(cfg, msgBus, provider)
-	defer al2.CloseHookAudit()
 	defer al2.Stop()
 	if al2.state.GetLastChatID() != testChatID {
 		t.Errorf("Expected persistent chat ID '%s', got '%s'", testChatID, al2.state.GetLastChatID())
@@ -811,7 +797,6 @@ func TestNewAgentLoop_StateInitialized(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	provider := &mockProvider{}
 	al := NewAgentLoop(cfg, msgBus, provider)
-	defer al.CloseHookAudit()
 
 	// Verify state manager is initialized
 	if al.state == nil {
@@ -847,7 +832,6 @@ func TestToolRegistry_ToolRegistration(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	provider := &mockProvider{}
 	al := NewAgentLoop(cfg, msgBus, provider)
-	defer al.CloseHookAudit()
 
 	// Register a custom tool
 	customTool := &mockCustomTool{}
@@ -893,8 +877,7 @@ func TestToolContext_Updates(t *testing.T) {
 
 	msgBus := bus.NewMessageBus()
 	provider := &simpleMockProvider{response: "OK"}
-	al := NewAgentLoop(cfg, msgBus, provider)
-	defer al.CloseHookAudit()
+	_ = NewAgentLoop(cfg, msgBus, provider)
 
 	// Verify that ContextualTool interface is defined and can be implemented
 	// This test validates the interface contract exists
@@ -926,7 +909,6 @@ func TestToolRegistry_GetDefinitions(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	provider := &mockProvider{}
 	al := NewAgentLoop(cfg, msgBus, provider)
-	defer al.CloseHookAudit()
 
 	// Register a test tool and verify it shows up in startup info
 	testTool := &mockCustomTool{}
@@ -971,7 +953,6 @@ func TestAgentLoop_GetStartupInfo(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	provider := &mockProvider{}
 	al := NewAgentLoop(cfg, msgBus, provider)
-	defer al.CloseHookAudit()
 
 	info := al.GetStartupInfo()
 
@@ -1033,7 +1014,6 @@ func TestProcessDirectWithChannel_DiscordAutoArchiveTrim(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	provider := &mockProvider{}
 	al := NewAgentLoop(cfg, msgBus, provider)
-	defer al.CloseHookAudit()
 
 	sessionKey := "discord:test-channel"
 	for i := 0; i < 8; i++ {
@@ -1087,7 +1067,6 @@ func TestProcessDirectWithChannel_DiscordAutoRecallInjectedAfterArchiveExists(t 
 	msgBus := bus.NewMessageBus()
 	provider := &captureMockProvider{response: "Mock response"}
 	al := NewAgentLoop(cfg, msgBus, provider)
-	defer al.CloseHookAudit()
 
 	sessionKey := "discord:test-channel"
 	marker := "rare-marker-phase2"
@@ -1146,7 +1125,6 @@ func TestProcessDirectWithChannel_DiscordAutoRecallInjectionCappedByBudget(t *te
 	msgBus := bus.NewMessageBus()
 	provider := &captureMockProvider{response: "Mock response"}
 	al := NewAgentLoop(cfg, msgBus, provider)
-	defer al.CloseHookAudit()
 
 	al.discordRecallFn = func(query, sessionKey string, topK, maxChars int) ([]discordarchive.RecallHit, error) {
 		return []discordarchive.RecallHit{
@@ -1202,7 +1180,6 @@ func TestProcessDirectWithChannel_DiscordAutoRecallFailureIsFailOpen(t *testing.
 	msgBus := bus.NewMessageBus()
 	provider := &captureMockProvider{response: "LLM still replied"}
 	al := NewAgentLoop(cfg, msgBus, provider)
-	defer al.CloseHookAudit()
 
 	al.discordRecallFn = func(query, sessionKey string, topK, maxChars int) ([]discordarchive.RecallHit, error) {
 		return nil, errors.New("synthetic recall failure")
@@ -1239,7 +1216,6 @@ func TestProcessDirectWithChannel_NonDiscordNoAutoRecallInjection(t *testing.T) 
 	msgBus := bus.NewMessageBus()
 	provider := &captureMockProvider{response: "Mock response"}
 	al := NewAgentLoop(cfg, msgBus, provider)
-	defer al.CloseHookAudit()
 
 	al.discordRecallFn = func(query, sessionKey string, topK, maxChars int) ([]discordarchive.RecallHit, error) {
 		return []discordarchive.RecallHit{
@@ -1286,7 +1262,6 @@ func TestProcessDirectWithChannel_LocalModePrefetchesURL(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	provider := &captureMockProvider{response: "prefetch-ok"}
 	al := NewAgentLoop(cfg, msgBus, provider)
-	defer al.CloseHookAudit()
 
 	_, err := al.ProcessDirectWithChannel(
 		context.Background(),
@@ -1352,7 +1327,6 @@ func TestProcessDirectWithChannel_CloudModeSkipsLocalPrefetch(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	provider := &captureMockProvider{response: "cloud-ok"}
 	al := NewAgentLoop(cfg, msgBus, provider)
-	defer al.CloseHookAudit()
 
 	_, err := al.ProcessDirectWithChannel(
 		context.Background(),
@@ -1383,7 +1357,6 @@ func TestRunLLMIteration_TruncatesToolOutputForLocalMode(t *testing.T) {
 	provider := &toolThenDoneProvider{}
 	msgBus := bus.NewMessageBus()
 	al := NewAgentLoop(cfg, msgBus, provider)
-	defer al.CloseHookAudit()
 	al.RegisterTool(&bigOutputTool{
 		content: strings.Repeat("x", localToolResultMaxChars+3000),
 	})
@@ -1452,7 +1425,6 @@ func TestAgentLoop_HooksCanBeDisabledByPolicy(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	provider := &mockProvider{}
 	al := NewAgentLoop(cfg, msgBus, provider)
-	defer al.CloseHookAudit()
 	info := al.GetStartupInfo()
 
 	hooksMap, ok := info["hooks"].(map[string]interface{})
@@ -1491,7 +1463,6 @@ func TestAgentLoop_WritesHookAuditEvents(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	provider := &mockProvider{}
 	al := NewAgentLoop(cfg, msgBus, provider)
-	defer al.CloseHookAudit()
 
 	_, err = al.processMessage(context.Background(), bus.InboundMessage{
 		Channel:    "cli",
@@ -1504,15 +1475,24 @@ func TestAgentLoop_WritesHookAuditEvents(t *testing.T) {
 		t.Fatalf("processMessage failed: %v", err)
 	}
 
-	al.CloseHookAudit()
 	auditPath := filepath.Join(tmpDir, "hooks", "hook-events.jsonl")
-	data, err := os.ReadFile(auditPath)
-	if err != nil {
-		t.Fatalf("read hook audit file after close: %v", err)
-	}
-	body := string(data)
-	if !strings.Contains(body, "\"event\":\"before_turn\"") || !strings.Contains(body, "\"event\":\"after_turn\"") {
-		t.Fatalf("expected before_turn and after_turn events in audit file, got: %s", body)
+	deadline := time.Now().Add(2 * time.Second)
+	var body string
+	for {
+		data, readErr := os.ReadFile(auditPath)
+		if readErr == nil {
+			body = string(data)
+			if strings.Contains(body, "\"event\":\"before_turn\"") && strings.Contains(body, "\"event\":\"after_turn\"") {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			if readErr != nil {
+				t.Fatalf("read hook audit file after wait: %v", readErr)
+			}
+			t.Fatalf("expected before_turn and after_turn events in audit file, got: %s", body)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -1538,7 +1518,6 @@ func TestAgentLoop_Stop(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	provider := &mockProvider{}
 	al := NewAgentLoop(cfg, msgBus, provider)
-	defer al.CloseHookAudit()
 
 	// Note: running is only set to true when Run() is called
 	// We can't test that without starting the event loop
@@ -1806,7 +1785,6 @@ func TestToolResult_SilentToolDoesNotSendUserMessage(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	provider := &simpleMockProvider{response: "File operation complete"}
 	al := NewAgentLoop(cfg, msgBus, provider)
-	defer al.CloseHookAudit()
 	helper := testHelper{al: al}
 
 	// ReadFileTool returns SilentResult, which should not send user message
@@ -1849,7 +1827,6 @@ func TestToolResult_UserFacingToolDoesSendMessage(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	provider := &simpleMockProvider{response: "Command output: hello world"}
 	al := NewAgentLoop(cfg, msgBus, provider)
-	defer al.CloseHookAudit()
 	helper := testHelper{al: al}
 
 	// ExecTool returns UserResult, which should send user message

@@ -83,12 +83,14 @@ func (p *channelHistoryScriptProvider) GetDefaultModel() string {
 func TestAttachChannelHistoryCallback_WiresSideLaneLoop(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = t.TempDir()
+	if err := os.WriteFile(filepath.Join(cfg.Agents.Defaults.Workspace, "hooks.yaml"), []byte("audit:\n  enabled: false\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	provider := &channelHistoryScriptProvider{t: t}
 	al := agent.NewAgentLoopWithOptions(cfg, bus.NewMessageBus(), provider, agent.LoopOptions{
 		ToolProfile: agent.ToolProfileSideLane,
 	})
-	defer al.CloseHookAudit()
 
 	attachChannelHistoryCallback(al, func(channelID string, limit int, beforeID string) ([]tools.ChannelHistoryMessage, error) {
 		if channelID != "room-1" {

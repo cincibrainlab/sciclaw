@@ -72,8 +72,6 @@ func TestProcessDirect_MessageToolFallbackForInternalChannel(t *testing.T) {
 	}
 
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
-
-	defer al.CloseHookAudit()
 	got, err := al.ProcessDirectWithChannel(context.Background(), "hi", "tui:chat", "cli", "direct", "cli")
 	if err != nil {
 		t.Fatalf("ProcessDirectWithChannel error: %v", err)
@@ -125,8 +123,6 @@ func TestProcessDirect_MessageToolFallbackWhenLLMReturnsDefaultPlaceholder(t *te
 	}
 
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
-
-	defer al.CloseHookAudit()
 	got, err := al.ProcessDirectWithChannel(context.Background(), "how are you", "tui:chat", "cli", "direct", "cli")
 	if err != nil {
 		t.Fatalf("ProcessDirectWithChannel error: %v", err)
@@ -178,8 +174,6 @@ func TestProcessDirect_MessageToolFallbackForExternalChannel(t *testing.T) {
 	}
 
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
-
-	defer al.CloseHookAudit()
 	got, err := al.ProcessDirectWithChannel(context.Background(), "save abstract", "discord:test-session", "discord", "chat-123", "user-1")
 	if err != nil {
 		t.Fatalf("ProcessDirectWithChannel error: %v", err)
