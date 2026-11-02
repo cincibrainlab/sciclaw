@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
@@ -106,9 +107,31 @@ func NewResolver(cfg *config.Config) (*Resolver, error) {
 		r.unmappedBehavior = config.RoutingUnmappedBehaviorMentionOnly
 	}
 	for _, m := range cfg.Routing.Mappings {
+		m.AllowedSenders = append(config.FlexibleStringSlice(nil), m.AllowedSenders...)
+		if m.RequireMention != nil {
+			value := *m.RequireMention
+			m.RequireMention = &value
+		}
 		r.mappings[mappingKey(m.Channel, m.ChatID)] = m
 	}
 	return r, nil
+}
+
+// ActiveRouting returns an independent snapshot of the resolver used for new decisions.
+func (r *Resolver) ActiveRouting() config.RoutingConfig {
+	out := config.RoutingConfig{Enabled: r.enabled, UnmappedBehavior: r.unmappedBehavior, Mappings: make([]config.RoutingMapping, 0, len(r.mappings))}
+	for _, m := range r.mappings {
+		m.AllowedSenders = append(config.FlexibleStringSlice(nil), m.AllowedSenders...)
+		if m.RequireMention != nil {
+			value := *m.RequireMention
+			m.RequireMention = &value
+		}
+		out.Mappings = append(out.Mappings, m)
+	}
+	sort.Slice(out.Mappings, func(i, j int) bool {
+		return mappingKey(out.Mappings[i].Channel, out.Mappings[i].ChatID) < mappingKey(out.Mappings[j].Channel, out.Mappings[j].ChatID)
+	})
+	return out
 }
 
 func (r *Resolver) Resolve(msg bus.InboundMessage) Decision {

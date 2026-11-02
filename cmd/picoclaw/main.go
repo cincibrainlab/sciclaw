@@ -1808,6 +1808,11 @@ func gatewayCmd() {
 		fmt.Printf("✓ Routing enabled: %d mapping(s)\n", len(cfg.Routing.Mappings))
 	}
 	go watchRoutingReload(ctx, routingDispatcher)
+	if dir := os.Getenv("SCICLAW_ROUTING_STATUS_DIR"); dir != "" {
+		if err := startRoutingStatus(ctx, dir, routingDispatcher); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: routing status unavailable: %v\n", err)
+		}
+	}
 	fmt.Printf("✓ Routing reload trigger: %s\n", routingReloadTriggerPath())
 	if !cfg.Routing.Enabled {
 		if jobManager != nil {

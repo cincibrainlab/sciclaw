@@ -92,6 +92,11 @@ func (d *Dispatcher) ReplaceResolver(resolver *Resolver) {
 	d.mu.Unlock()
 }
 
+// ActiveRouting snapshots the same resolver used for new dispatch decisions.
+func (d *Dispatcher) ActiveRouting() config.RoutingConfig {
+	return d.getResolver().ActiveRouting()
+}
+
 func (d *Dispatcher) getResolver() *Resolver {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
