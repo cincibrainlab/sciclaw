@@ -50,6 +50,38 @@ func TestResolve_Match(t *testing.T) {
 	}
 }
 
+func TestActiveRoutingSnapshotIsolation(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Routing.Enabled = true
+	requireMention := true
+	cfg.Routing.Mappings = []config.RoutingMapping{{
+		Channel: "discord", ChatID: "123", Workspace: t.TempDir(),
+		AllowedSenders: []string{"alice"}, RequireMention: &requireMention,
+	}}
+	resolver, err := NewResolver(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Routing.Mappings[0].AllowedSenders[0] = "bob"
+	*cfg.Routing.Mappings[0].RequireMention = false
+
+	snapshot := resolver.ActiveRouting()
+	if snapshot.Mappings[0].AllowedSenders[0] != "alice" || !*snapshot.Mappings[0].RequireMention {
+		t.Fatalf("config mutation changed snapshot: %+v", snapshot)
+	}
+	snapshot.Mappings[0].AllowedSenders[0] = "bob"
+	*snapshot.Mappings[0].RequireMention = false
+
+	msg := bus.InboundMessage{Channel: "discord", ChatID: "123", SenderID: "bob"}
+	if decision := resolver.Resolve(msg); decision.Event != EventRouteDeny {
+		t.Fatalf("snapshot mutation changed allowlist: %+v", decision)
+	}
+	msg.SenderID = "alice"
+	if decision := resolver.Resolve(msg); decision.Event != EventRouteMentionSkip {
+		t.Fatalf("snapshot mutation changed mention requirement: %+v", decision)
+	}
+}
+
 func TestResolve_UnmappedBlock(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Routing.Enabled = true

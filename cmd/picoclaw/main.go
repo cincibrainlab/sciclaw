@@ -1810,7 +1810,8 @@ func gatewayCmd() {
 	go watchRoutingReload(ctx, routingDispatcher)
 	if dir := os.Getenv("SCICLAW_ROUTING_STATUS_DIR"); dir != "" {
 		if err := startRoutingStatus(ctx, dir, routingDispatcher); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: routing status unavailable: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Error: routing status unavailable: %v\n", err)
+			os.Exit(1)
 		}
 	}
 	fmt.Printf("✓ Routing reload trigger: %s\n", routingReloadTriggerPath())
