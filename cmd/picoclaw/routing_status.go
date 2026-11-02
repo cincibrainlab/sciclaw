@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -42,6 +45,58 @@ func startRoutingStatus(ctx context.Context, dir string, dispatcher *routing.Dis
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(w).Encode(active)
+	})
+	mux.HandleFunc("/v1/workspace-output-marker", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || dispatcher == nil {
+			http.NotFound(w, r)
+			return
+		}
+		channel, marker := r.URL.Query().Get("channel"), r.URL.Query().Get("marker")
+		if !regexp.MustCompile(`^[0-9]+$`).MatchString(channel) || !regexp.MustCompile(`^\.sciclaw-check-[0-9a-f]{32}$`).MatchString(marker) {
+			http.NotFound(w, r)
+			return
+		}
+		active := dispatcher.ActiveRouting()
+		workspace := ""
+		for _, m := range active.Mappings {
+			if strings.EqualFold(strings.TrimSpace(m.Channel), "discord") && strings.TrimSpace(m.ChatID) == channel {
+				if workspace != "" {
+					http.NotFound(w, r)
+					return
+				}
+				workspace = m.Workspace
+			}
+		}
+		outputs := filepath.Join(workspace, "outputs")
+		resolved, err := filepath.EvalSymlinks(outputs)
+		if !active.Enabled || !filepath.IsAbs(workspace) || filepath.Clean(workspace) != workspace || err != nil || resolved != outputs {
+			http.NotFound(w, r)
+			return
+		}
+		root, err := os.OpenRoot(outputs)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		defer root.Close()
+		f, err := root.Open(marker)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		defer f.Close()
+		info, err := f.Stat()
+		if err != nil || !info.Mode().IsRegular() || info.Size() != 64 {
+			http.NotFound(w, r)
+			return
+		}
+		data, err := io.ReadAll(io.LimitReader(f, 65))
+		if err != nil || len(data) != 64 {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = w.Write(data)
 	})
 	server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() {

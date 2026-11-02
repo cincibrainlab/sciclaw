@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -24,7 +26,11 @@ func TestRoutingStatus(t *testing.T) {
 	dir := filepath.Join(parent, "private")
 	cfg := config.DefaultConfig()
 	cfg.Routing.Enabled = true
-	cfg.Routing.Mappings = []config.RoutingMapping{{Channel: "discord", ChatID: "123", Workspace: t.TempDir(), AllowedSenders: config.FlexibleStringSlice{"alice"}}}
+	workspace, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Routing.Mappings = []config.RoutingMapping{{Channel: "discord", ChatID: "123", Workspace: workspace, AllowedSenders: config.FlexibleStringSlice{"alice"}}}
 	resolver, err := routing.NewResolver(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -60,6 +66,34 @@ func TestRoutingStatus(t *testing.T) {
 	active := get()
 	if !active.Enabled || len(active.Mappings) != 1 || active.Mappings[0].ChatID != "123" {
 		t.Fatalf("initial: %+v", active)
+	}
+	outputs := filepath.Join(workspace, "outputs")
+	if err := os.Mkdir(outputs, 0700); err != nil {
+		t.Fatal(err)
+	}
+	marker := ".sciclaw-check-" + strings.Repeat("a", 32)
+	content := strings.Repeat("b", 64)
+	if err := os.WriteFile(filepath.Join(outputs, marker), []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		query  string
+		status int
+	}{
+		{"channel=123&marker=" + marker, http.StatusOK},
+		{"channel=999&marker=" + marker, http.StatusNotFound},
+		{"channel=123&marker=../secret", http.StatusNotFound},
+		{"channel=123&marker=.sciclaw-check-" + strings.Repeat("c", 32), http.StatusNotFound},
+	} {
+		resp, err := client.Get("http://unix/v1/workspace-output-marker?" + tc.query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil || resp.StatusCode != tc.status || (tc.status == http.StatusOK && string(body) != content) {
+			t.Fatalf("marker %q: status %d body %q error %v", tc.query, resp.StatusCode, body, err)
+		}
 	}
 	cfg.Routing.Mappings[0].ChatID = "456"
 	if get().Mappings[0].ChatID != "123" {
