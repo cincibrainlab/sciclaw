@@ -1538,7 +1538,7 @@ func gatewayCmd() {
 	// cancels this ctx below (via the defer), every in-flight hook
 	// delivery short-circuits instead of holding the shutdown path
 	// hostage to a 10s-per-call stack of addon timeouts.
-	gatewayCtx, gatewayCancel := context.WithCancel(context.Background())
+	gatewayCtx, gatewayCancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer gatewayCancel()
 	SetAddonDispatcher(&addons.Dispatcher{
 		Store:       addonStore,
@@ -1808,9 +1808,6 @@ func gatewayCmd() {
 		fmt.Printf("✓ Routing enabled: %d mapping(s)\n", len(cfg.Routing.Mappings))
 	}
 	go watchRoutingReload(ctx, routingDispatcher)
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(sigChan)
 	var routingStatusDone <-chan struct{}
 	if dir := os.Getenv("SCICLAW_ROUTING_STATUS_DIR"); dir != "" {
 		var err error
@@ -1837,21 +1834,27 @@ func gatewayCmd() {
 		}
 	}
 
-	if err := cronService.Start(); err != nil {
-		fmt.Printf("Error starting cron service: %v\n", err)
-	}
-	fmt.Println("✓ Cron service started")
-
-	if err := heartbeatService.Start(); err != nil {
-		fmt.Printf("Error starting heartbeat service: %v\n", err)
-	}
-	fmt.Println("✓ Heartbeat service started")
-
-	if err := channelManager.StartAll(ctx); err != nil {
-		fmt.Printf("Error starting channels: %v\n", err)
+	if ctx.Err() == nil {
+		if err := cronService.Start(); err != nil {
+			fmt.Printf("Error starting cron service: %v\n", err)
+		}
+		fmt.Println("✓ Cron service started")
 	}
 
-	<-sigChan
+	if ctx.Err() == nil {
+		if err := heartbeatService.Start(); err != nil {
+			fmt.Printf("Error starting heartbeat service: %v\n", err)
+		}
+		fmt.Println("✓ Heartbeat service started")
+	}
+
+	if ctx.Err() == nil {
+		if err := channelManager.StartAll(ctx); err != nil {
+			fmt.Printf("Error starting channels: %v\n", err)
+		}
+	}
+
+	<-ctx.Done()
 
 	fmt.Println("\nShutting down...")
 	cancel()
