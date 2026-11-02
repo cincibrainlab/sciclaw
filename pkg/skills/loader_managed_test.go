@@ -1,6 +1,7 @@
 package skills
 
 import (
+	"encoding/xml"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,11 +46,22 @@ func TestManagedGiteaSkills(t *testing.T) {
 	}
 	check("move-task-phase-0-to-1", "", false)
 	check("unrelated", "workspace content", true)
-	write(managed, managedGiteaNames[0], "safe v2")
-	check(managedGiteaNames[0], "safe v2", true)
+	const example = "Example: {\"owner\":\"<owner>\",\"text\":\"A & B\"}"
+	write(managed, managedGiteaNames[0], example)
+	check(managedGiteaNames[0], example, true)
 	summary := loader.BuildSkillsSummary()
-	if !strings.Contains(summary, "<content>safe v2</content>") || strings.Contains(summary, managed) {
+	if !strings.Contains(summary, example) || strings.Contains(summary, managed) {
 		t.Errorf("managed content not inlined safely: %s", summary)
+	}
+	catalog, inline, found := strings.Cut(summary, "</skills>")
+	if !found || !strings.Contains(inline, example) {
+		t.Errorf("managed content should follow the XML catalog: %s", summary)
+	}
+	var document struct {
+		XMLName xml.Name `xml:"skills"`
+	}
+	if err := xml.Unmarshal([]byte(catalog+"</skills>"), &document); err != nil {
+		t.Errorf("invalid skills catalog: %v", err)
 	}
 	if err := os.Remove(filepath.Join(managed, managedGiteaNames[1], "SKILL.md")); err != nil {
 		t.Fatal(err)

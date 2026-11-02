@@ -237,7 +237,7 @@ func buildSkillsBlock(cb *ContextBuilder) string {
 	}
 	return fmt.Sprintf(`# Skills
 
-The following skills extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool.
+The following skills extend your capabilities. Skills with inline content are ready to use; for others, read the SKILL.md location using the read_file tool.
 
 %s`, skillsSummary)
 }

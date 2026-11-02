@@ -235,7 +235,7 @@ func (sl *SkillsLoader) BuildSkillsSummary() string {
 		return ""
 	}
 
-	var lines []string
+	var lines, managedContent []string
 	lines = append(lines, "<skills>")
 	for _, s := range allSkills {
 		escapedName := escapeXML(s.Name)
@@ -254,7 +254,7 @@ func (sl *SkillsLoader) BuildSkillsSummary() string {
 		lines = append(lines, fmt.Sprintf("    <name>%s</name>", escapedName))
 		lines = append(lines, fmt.Sprintf("    <description>%s</description>", escapedDesc))
 		if s.Source == "managed" {
-			lines = append(lines, fmt.Sprintf("    <content>%s</content>", escapeXML(content)))
+			managedContent = append(managedContent, fmt.Sprintf("### Skill: %s\n\n%s", s.Name, content))
 		} else {
 			lines = append(lines, fmt.Sprintf("    <location>%s</location>", escapedPath))
 		}
@@ -262,6 +262,9 @@ func (sl *SkillsLoader) BuildSkillsSummary() string {
 		lines = append(lines, "  </skill>")
 	}
 	lines = append(lines, "</skills>")
+	if len(managedContent) > 0 {
+		lines = append(lines, "\n## Inline managed skills\n", strings.Join(managedContent, "\n\n---\n\n"))
+	}
 
 	return strings.Join(lines, "\n")
 }

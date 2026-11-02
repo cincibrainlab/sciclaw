@@ -652,7 +652,7 @@ func validateSlashSkill(available []SlashSkillChoice, requested string) (SlashSk
 }
 
 func skillSlashContent(name, prompt string) string {
-	return fmt.Sprintf("Use the skill %q for this task. Read its SKILL.md first and follow it.\n\nTask:\n%s", name, prompt)
+	return fmt.Sprintf("Use the skill %q for this task. Follow its inline instructions if provided; otherwise read its SKILL.md first.\n\nTask:\n%s", name, prompt)
 }
 
 func (c *DiscordChannel) ensureSlashCommands() error {

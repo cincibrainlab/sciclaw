@@ -9,6 +9,33 @@ import (
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
+func TestBuildSystemPromptIncludesLiteralManagedSkills(t *testing.T) {
+	workspace := t.TempDir()
+	managed := t.TempDir()
+	t.Setenv("SCICLAW_MANAGED_GITEA_SKILLS_DIR", managed)
+	write := func(path, content string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const example = `{"owner":"<owner>","text":"A & B"}`
+	write(filepath.Join(managed, "gitea-create-change-request", "SKILL.md"), example)
+	ordinary := filepath.Join(workspace, "skills", "ordinary", "SKILL.md")
+	write(ordinary, "ordinary content")
+	cb := NewContextBuilder(workspace, workspace)
+	prompt := cb.BuildSystemPrompt()
+	if !strings.Contains(prompt, example) || !strings.Contains(prompt, ordinary) || !strings.Contains(prompt, "inline content are ready to use") {
+		t.Fatalf("incorrect skill instructions in system prompt: %s", prompt)
+	}
+	if block := buildSkillsBlock(cb); !strings.Contains(prompt, block) {
+		t.Fatal("prompt inspection skill block differs from system prompt")
+	}
+}
+
 func TestBuildSystemPromptIncludesHostedToolNotes(t *testing.T) {
 	workspace := t.TempDir()
 	cb := NewContextBuilder(workspace)
