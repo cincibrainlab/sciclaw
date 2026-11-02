@@ -16,17 +16,17 @@ import (
 
 // startRoutingStatus creates a private directory exclusively so neither stale
 // sockets nor another process's files are removed or trusted.
-func startRoutingStatus(ctx context.Context, dir string, dispatcher *routing.Dispatcher) error {
+func startRoutingStatus(ctx context.Context, dir string, dispatcher *routing.Dispatcher) (<-chan struct{}, error) {
 	if !filepath.IsAbs(dir) {
-		return fmt.Errorf("routing status directory must be absolute")
+		return nil, fmt.Errorf("routing status directory must be absolute")
 	}
 	if err := os.Mkdir(dir, 0700); err != nil {
-		return fmt.Errorf("create routing status directory: %w", err)
+		return nil, fmt.Errorf("create routing status directory: %w", err)
 	}
 	listener, err := net.Listen("unix", filepath.Join(dir, "status.sock"))
 	if err != nil {
 		os.Remove(dir)
-		return fmt.Errorf("listen for routing status: %w", err)
+		return nil, fmt.Errorf("listen for routing status: %w", err)
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/routing", func(w http.ResponseWriter, r *http.Request) {
@@ -49,9 +49,11 @@ func startRoutingStatus(ctx context.Context, dir string, dispatcher *routing.Dis
 		_ = server.Close()
 		_ = listener.Close()
 	}()
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		defer os.Remove(dir)
 		_ = server.Serve(listener)
 	}()
-	return nil
+	return done, nil
 }

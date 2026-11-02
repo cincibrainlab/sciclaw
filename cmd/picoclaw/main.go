@@ -1808,8 +1808,14 @@ func gatewayCmd() {
 		fmt.Printf("✓ Routing enabled: %d mapping(s)\n", len(cfg.Routing.Mappings))
 	}
 	go watchRoutingReload(ctx, routingDispatcher)
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigChan)
+	var routingStatusDone <-chan struct{}
 	if dir := os.Getenv("SCICLAW_ROUTING_STATUS_DIR"); dir != "" {
-		if err := startRoutingStatus(ctx, dir, routingDispatcher); err != nil {
+		var err error
+		routingStatusDone, err = startRoutingStatus(ctx, dir, routingDispatcher)
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: routing status unavailable: %v\n", err)
 			os.Exit(1)
 		}
@@ -1845,12 +1851,13 @@ func gatewayCmd() {
 		fmt.Printf("Error starting channels: %v\n", err)
 	}
 
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt)
 	<-sigChan
 
 	fmt.Println("\nShutting down...")
 	cancel()
+	if routingStatusDone != nil {
+		<-routingStatusDone
+	}
 	heartbeatService.Stop()
 	cronService.Stop()
 	if loopPool != nil {

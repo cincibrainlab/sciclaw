@@ -1432,6 +1432,7 @@ func (s *webServer) handleRouting(w http.ResponseWriter, r *http.Request) {
 		ChatID         string   `json:"chatId"`
 		Workspace      string   `json:"workspace"`
 		AllowedSenders []string `json:"allowedSenders"`
+		RequireMention *bool    `json:"requireMention"`
 		Label          string   `json:"label"`
 		Mode           string   `json:"mode"`
 		LocalBackend   string   `json:"localBackend"`
@@ -1481,6 +1482,7 @@ func (s *webServer) handleRouting(w http.ResponseWriter, r *http.Request) {
 				ChatID:         m.ChatID,
 				Workspace:      m.Workspace,
 				AllowedSenders: append([]string(nil), []string(m.AllowedSenders)...),
+				RequireMention: m.RequireMention,
 				Label:          m.Label,
 				Mode:           mappingModeDisplay(m),
 				LocalBackend:   m.LocalBackend,

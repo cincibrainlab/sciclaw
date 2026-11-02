@@ -30,14 +30,14 @@ func TestRoutingStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	dispatcher := routing.NewDispatcher(nil, resolver, nil)
-	if err := startRoutingStatus(ctx, dir, dispatcher); err != nil {
+	if _, err := startRoutingStatus(ctx, dir, dispatcher); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(dir)
 	if err != nil || info.Mode().Perm() != 0700 {
 		t.Fatalf("directory permissions: %v, %v", info, err)
 	}
-	if err := startRoutingStatus(ctx, dir, dispatcher); err == nil {
+	if _, err := startRoutingStatus(ctx, dir, dispatcher); err == nil {
 		t.Fatal("existing directory accepted")
 	}
 	client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -124,7 +124,7 @@ func TestRoutingStatusWithoutDispatcher(t *testing.T) {
 	}
 	t.Cleanup(func() { os.RemoveAll(parent) })
 	dir := filepath.Join(parent, "private")
-	if err := startRoutingStatus(ctx, dir, nil); err != nil {
+	if _, err := startRoutingStatus(ctx, dir, nil); err != nil {
 		t.Fatal(err)
 	}
 	client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {

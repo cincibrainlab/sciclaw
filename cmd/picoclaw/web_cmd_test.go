@@ -558,6 +558,7 @@ func TestHandleRoutingReadsRealConfigMappings(t *testing.T) {
 		AllowedSenders []string `json:"allowedSenders"`
 		Label          string   `json:"label"`
 		Mode           string   `json:"mode"`
+		RequireMention *bool    `json:"requireMention"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &mappings); err != nil {
 		t.Fatalf("decode mappings: %v", err)
@@ -567,6 +568,23 @@ func TestHandleRoutingReadsRealConfigMappings(t *testing.T) {
 	}
 	if mappings[0].ID != "discord:12345" || mappings[0].Workspace != workspace || mappings[0].Label != "Alpha" || mappings[0].Mode != "default" {
 		t.Fatalf("unexpected mapping: %#v", mappings[0])
+	}
+	no, yes := false, true
+	for _, value := range []*bool{nil, &no, &yes} {
+		cfg.Routing.Mappings[0].RequireMention = value
+		if err := config.SaveConfig(filepath.Join(cfgDir, "config.json"), cfg); err != nil {
+			t.Fatal(err)
+		}
+		rec = httptest.NewRecorder()
+		srv.handleRouting(rec, req)
+		var got []map[string]json.RawMessage
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got) != 1 {
+			t.Fatalf("mappings: %s (%v)", rec.Body.String(), err)
+		}
+		want, _ := json.Marshal(value)
+		if string(got[0]["requireMention"]) != string(want) {
+			t.Fatalf("requireMention = %s, want %s", got[0]["requireMention"], want)
+		}
 	}
 }
 
