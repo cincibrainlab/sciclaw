@@ -258,7 +258,8 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, update telego.Updat
 	mediaPaths := []string{}
 	localFiles := []string{} // 跟踪需要清理的本地文件
 
-	cleanupFiles := func() {
+	// 确保临时文件在函数返回时被清理
+	defer func() {
 		for _, file := range localFiles {
 			if err := os.Remove(file); err != nil {
 				logger.DebugCF("telegram", "Failed to cleanup temp file", map[string]interface{}{
@@ -266,11 +267,6 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, update telego.Updat
 					"error": err.Error(),
 				})
 			}
-		}
-	}
-	defer func() {
-		if cleanupFiles != nil {
-			cleanupFiles()
 		}
 	}()
 
@@ -410,8 +406,7 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, update telego.Updat
 		"is_mention": fmt.Sprintf("%t", isMention),
 	}
 
-	c.BaseChannel.handleMessage(ctx, fmt.Sprintf("%d", user.ID), fmt.Sprintf("%d", chatID), content, mediaPaths, metadata, cleanupFiles)
-	cleanupFiles = nil
+	c.HandleMessage(fmt.Sprintf("%d", user.ID), fmt.Sprintf("%d", chatID), content, mediaPaths, metadata)
 }
 
 func sendTelegramAttachment(ctx context.Context, bot *telego.Bot, chatID int64, attachment bus.OutboundAttachment) error {
