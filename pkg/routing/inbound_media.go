@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -114,6 +115,11 @@ func rewriteInboundMediaURL(source string, rewrites map[string]string) string {
 	targetURL, err := url.Parse(target)
 	if err != nil || (targetURL.Scheme != "http" && targetURL.Scheme != "https") || targetURL.Hostname() == "" || targetURL.User != nil || targetURL.Path != "" || targetURL.RawQuery != "" || targetURL.ForceQuery || targetURL.Fragment != "" {
 		return source
+	}
+	if port := targetURL.Port(); port != "" {
+		if _, err := strconv.ParseUint(port, 10, 16); err != nil {
+			return source
+		}
 	}
 	sourceURL.Scheme = targetURL.Scheme
 	sourceURL.Host = targetURL.Host
