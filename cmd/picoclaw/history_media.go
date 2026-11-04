@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/url"
@@ -19,6 +20,8 @@ import (
 
 // Cache entries may be edited by agents, so exceeding the limit rejects new files.
 const historyCacheMaxBytes int64 = 1024 * 1024 * 1024
+
+var errHistoryCacheQuota = errors.New("history attachment cache quota exhausted")
 
 // History uses a stable, separate cache so retries do not replace agent-edited files.
 func stageHistoryAttachment(ctx context.Context, workspace, channel, message string, index int, mediaID, source string, rewrites map[string]string) (string, error) {
@@ -89,7 +92,7 @@ func stageHistoryAttachmentWithQuota(ctx context.Context, workspace, channel, me
 	}
 	remaining := quota - used
 	if remaining <= 0 {
-		return "", fmt.Errorf("history attachment cache quota exhausted")
+		return "", errHistoryCacheQuota
 	}
 	temp, err := os.MkdirTemp(root, ".stage-")
 	if err != nil {
@@ -98,6 +101,9 @@ func stageHistoryAttachmentWithQuota(ctx context.Context, workspace, channel, me
 	defer os.RemoveAll(temp)
 	inbound := bus.InboundMessage{Channel: "discord-history", Media: []string{source}, Metadata: map[string]string{"message_id": message}}
 	if err := routing.PrepareInboundMediaWithLimit(ctx, temp, &inbound, rewrites, remaining); err != nil {
+		if remaining < routing.InboundMediaMaxDownloadBytes && errors.Is(err, routing.ErrInboundMediaTooLarge) {
+			return "", errHistoryCacheQuota
+		}
 		return "", err
 	}
 	if len(inbound.Media) != 1 {
