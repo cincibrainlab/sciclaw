@@ -25,7 +25,21 @@ func PrepareInboundMedia(ctx context.Context, workspace string, msg *bus.Inbound
 	return prepareInboundMedia(ctx, workspace, msg, urlRewrites)
 }
 
+func PrepareInboundMediaWithLimit(ctx context.Context, workspace string, msg *bus.InboundMessage, urlRewrites map[string]string, maxBytes int64) error {
+	if maxBytes <= 0 {
+		return fmt.Errorf("attachment capacity exhausted")
+	}
+	if maxBytes > inboundMediaMaxDownloadBytes {
+		maxBytes = inboundMediaMaxDownloadBytes
+	}
+	return prepareInboundMediaLimit(ctx, workspace, msg, urlRewrites, maxBytes)
+}
+
 func prepareInboundMedia(ctx context.Context, workspace string, msg *bus.InboundMessage, urlRewrites map[string]string) error {
+	return prepareInboundMediaLimit(ctx, workspace, msg, urlRewrites, inboundMediaMaxDownloadBytes)
+}
+
+func prepareInboundMediaLimit(ctx context.Context, workspace string, msg *bus.InboundMessage, urlRewrites map[string]string, maxBytes int64) error {
 	if msg == nil || strings.TrimSpace(workspace) == "" || len(msg.Media) == 0 {
 		return nil
 	}
@@ -62,9 +76,9 @@ func prepareInboundMedia(ctx context.Context, workspace string, msg *bus.Inbound
 		var err error
 		switch {
 		case isHTTPURL(source):
-			err = downloadInboundURL(ctx, source, destPath)
+			err = downloadInboundURL(ctx, source, destPath, maxBytes)
 		default:
-			err = copyInboundFile(source, destPath)
+			err = copyInboundFile(source, destPath, maxBytes)
 		}
 		if err != nil {
 			if firstErr == nil {
@@ -205,7 +219,7 @@ func isHTTPURL(value string) bool {
 	}
 }
 
-func downloadInboundURL(ctx context.Context, sourceURL, destPath string) error {
+func downloadInboundURL(ctx context.Context, sourceURL, destPath string, maxBytes int64) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sourceURL, nil)
 	if err != nil {
 		return err
@@ -218,26 +232,26 @@ func downloadInboundURL(ctx context.Context, sourceURL, destPath string) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}
-	if resp.ContentLength > inboundMediaMaxDownloadBytes {
-		return fmt.Errorf("attachment exceeds %d bytes", inboundMediaMaxDownloadBytes)
+	if resp.ContentLength > maxBytes {
+		return fmt.Errorf("attachment exceeds %d bytes", maxBytes)
 	}
-	return writeInboundFile(io.LimitReader(resp.Body, inboundMediaMaxDownloadBytes+1), destPath, inboundMediaMaxDownloadBytes)
+	return writeInboundFile(io.LimitReader(resp.Body, maxBytes+1), destPath, maxBytes)
 }
 
-func copyInboundFile(sourcePath, destPath string) error {
+func copyInboundFile(sourcePath, destPath string, maxBytes int64) error {
 	info, err := os.Stat(sourcePath)
 	if err != nil {
 		return err
 	}
-	if info.Size() > inboundMediaMaxDownloadBytes {
-		return fmt.Errorf("attachment exceeds %d bytes", inboundMediaMaxDownloadBytes)
+	if info.Size() > maxBytes {
+		return fmt.Errorf("attachment exceeds %d bytes", maxBytes)
 	}
 	in, err := os.Open(sourcePath)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-	return writeInboundFile(io.LimitReader(in, inboundMediaMaxDownloadBytes+1), destPath, inboundMediaMaxDownloadBytes)
+	return writeInboundFile(io.LimitReader(in, maxBytes+1), destPath, maxBytes)
 }
 
 func writeInboundFile(r io.Reader, destPath string, maxBytes int64) error {
@@ -248,16 +262,19 @@ func writeInboundFile(r io.Reader, destPath string, maxBytes int64) error {
 	if err != nil {
 		return err
 	}
-	written, err := io.Copy(out, r)
-	if err != nil {
+	_, err = io.CopyN(out, r, maxBytes)
+	if err == nil {
+		var extra [1]byte
+		var n int
+		n, err = io.ReadFull(r, extra[:])
+		if n > 0 {
+			err = fmt.Errorf("attachment exceeds %d bytes", maxBytes)
+		}
+	}
+	if err != nil && err != io.EOF {
 		_ = out.Close()
 		_ = os.Remove(destPath)
 		return err
-	}
-	if maxBytes > 0 && written > maxBytes {
-		_ = out.Close()
-		_ = os.Remove(destPath)
-		return fmt.Errorf("attachment exceeds %d bytes", maxBytes)
 	}
 	if err := out.Close(); err != nil {
 		_ = os.Remove(destPath)

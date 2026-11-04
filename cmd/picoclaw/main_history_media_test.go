@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -245,5 +246,121 @@ func TestHistoryIdentifiesUnstagedAndUnavailableAttachments(t *testing.T) {
 		if !strings.Contains(messages[0].Content, want) {
 			t.Fatalf("missing %q in %s", want, messages[0].Content)
 		}
+	}
+}
+
+func TestHistoryCacheQuotaPreservesExistingFilesAndCountsConcurrentDownloads(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startedOnce sync.Once
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "4")
+		if r.URL.Path == "/first" {
+			_, _ = w.Write([]byte("12"))
+			w.(http.Flusher).Flush()
+			startedOnce.Do(func() { close(started) })
+			<-release
+			_, _ = w.Write([]byte("34"))
+			return
+		}
+		_, _ = w.Write([]byte("5678"))
+	}))
+	defer server.Close()
+	workspace := t.TempDir()
+	type result struct {
+		path string
+		err  error
+	}
+	first := make(chan result, 1)
+	second := make(chan result, 1)
+	go func() {
+		path, err := stageHistoryAttachmentWithQuota(context.Background(), workspace, "room", "1", 0, "first", server.URL+"/first", nil, 5)
+		first <- result{path, err}
+	}()
+	<-started
+	ready := make(chan struct{})
+	go func() {
+		close(ready)
+		path, err := stageHistoryAttachmentWithQuota(context.Background(), workspace, "room", "2", 0, "second", server.URL+"/second", nil, 5)
+		second <- result{path, err}
+	}()
+	<-ready
+	// A concurrent admission must wait for the in-progress download's reservation.
+	select {
+	case got := <-second:
+		t.Fatalf("second admission finished while first was in progress: %+v", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	got := <-first
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, filepath.FromSlash(got.path)), []byte("EDIT"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	failed := <-second
+	if failed.err == nil {
+		t.Fatal("second attachment exceeded remaining quota")
+	}
+	data, err := os.ReadFile(filepath.Join(workspace, filepath.FromSlash(got.path)))
+	if err != nil || string(data) != "EDIT" {
+		t.Fatalf("existing file %q: %v", data, err)
+	}
+	cached, err := stageHistoryAttachmentWithQuota(context.Background(), workspace, "room", "1", 0, "first", server.URL+"/first", nil, 4)
+	if err != nil || cached != got.path {
+		t.Fatalf("cache hit at quota = %q, %v", cached, err)
+	}
+	_, err = stageHistoryAttachmentWithQuota(context.Background(), workspace, "room", "3", 0, "third", server.URL+"/third", nil, 4)
+	if err == nil || !strings.Contains(err.Error(), "quota exhausted") {
+		t.Fatalf("admission at quota: %v", err)
+	}
+}
+
+func TestHistoryCacheQuotaRejectsUnknownLengthAndKeepsExisting(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.(http.Flusher).Flush()
+		_, _ = w.Write([]byte("12345"))
+	}))
+	defer server.Close()
+	workspace := t.TempDir()
+	root := filepath.Join(workspace, ".sciclaw", "inbound", "discord-history", "existing")
+	if err := os.MkdirAll(root, 0755); err != nil {
+		t.Fatal(err)
+	}
+	existing := filepath.Join(root, "edited.txt")
+	if err := os.WriteFile(existing, []byte("edit"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := stageHistoryAttachmentWithQuota(context.Background(), workspace, "room", "1", 0, "new", server.URL+"/unknown", nil, 8)
+	if err == nil {
+		t.Fatal("expected streamed attachment to exceed remaining quota")
+	}
+	data, err := os.ReadFile(existing)
+	if err != nil || string(data) != "edit" {
+		t.Fatalf("existing file %q: %v", data, err)
+	}
+	matches, err := filepath.Glob(filepath.Join(workspace, ".sciclaw", "inbound", "discord-history", ".stage-*"))
+	if err != nil || len(matches) != 0 {
+		t.Fatalf("temporary files %v: %v", matches, err)
+	}
+}
+
+func TestHistoryCacheLockHonorsCancellation(t *testing.T) {
+	root := t.TempDir()
+	first, err := lockHistoryCache(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	second, err := lockHistoryCache(ctx, root)
+	if second != nil {
+		second.Close()
+		t.Fatal("lock unexpectedly acquired")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("lock error: %v", err)
 	}
 }

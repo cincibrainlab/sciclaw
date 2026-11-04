@@ -153,3 +153,65 @@ func TestRunGatewayDefaultDispatch_CleansTemporaryMediaAfterStaging(t *testing.T
 		t.Fatal("timed out waiting for provider")
 	}
 }
+
+func TestRunGatewayDefaultDispatch_PreservesTextWhenAttachmentsFail(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	messageBus := bus.NewMessageBus()
+	defer messageBus.Close()
+	provider := &captureDispatchProvider{messages: make(chan []providers.Message, 1)}
+	al := agent.NewAgentLoop(cfg, messageBus, provider)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go runGatewayDefaultDispatch(ctx, messageBus, al, nil, routing.LoopTarget{Workspace: cfg.WorkspacePath()}, nil)
+	err := messageBus.PublishInbound(ctx, bus.InboundMessage{Channel: "telegram", ChatID: "room", SenderID: "user", Content: "Important question", Media: []string{filepath.Join(t.TempDir(), "missing")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case messages := <-provider.messages:
+		var text strings.Builder
+		for _, m := range messages {
+			text.WriteString(m.Content)
+		}
+		if !strings.Contains(text.String(), "Important question") || !strings.Contains(text.String(), "Attachments could not be staged locally") {
+			t.Fatalf("prompt: %s", text.String())
+		}
+	case <-ctx.Done():
+		t.Fatal("message was dropped")
+	}
+}
+
+func TestRunGatewayDefaultDispatch_CancelledStagingDoesNotDispatch(t *testing.T) {
+	started := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { close(started); <-r.Context().Done() }))
+	defer server.Close()
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	messageBus := bus.NewMessageBus()
+	defer messageBus.Close()
+	provider := &captureDispatchProvider{messages: make(chan []providers.Message, 1)}
+	al := agent.NewAgentLoop(cfg, messageBus, provider)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runGatewayDefaultDispatch(ctx, messageBus, al, nil, routing.LoopTarget{Workspace: cfg.WorkspacePath()}, nil)
+	}()
+	if err := messageBus.PublishInbound(ctx, bus.InboundMessage{Channel: "telegram", ChatID: "room", Content: "question", Media: []string{server.URL + "/slow"}}); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("dispatch did not stop")
+	}
+	select {
+	case <-provider.messages:
+		t.Fatal("cancelled message dispatched")
+	default:
+	}
+}
