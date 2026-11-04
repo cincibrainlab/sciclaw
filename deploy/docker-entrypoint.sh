@@ -3,21 +3,20 @@ set -eu
 
 mkdir -p /root/sciclaw/skills
 for skill in gitea-create-change-request gitea-move-work-item gitea-move-file-phase-0-to-1; do
-  if mkdir "/root/sciclaw/skills/$skill" 2>/dev/null; then
+  dir="/root/sciclaw/skills/$skill"
+  mkdir -p "$dir"
+  if [ ! -e "$dir/SKILL.md" ] && [ ! -L "$dir/SKILL.md" ]; then
     (
-      tmp=
-      trap '[ -z "$tmp" ] || rm -f "$tmp"; rmdir "/root/sciclaw/skills/$skill" 2>/dev/null || :' 0
-      tmp=$(mktemp "/root/sciclaw/skills/$skill/.SKILL.md.XXXXXX")
+      tmp=$(mktemp "$dir/.SKILL.md.XXXXXX")
+      trap 'rm -f "$tmp"' 0
       cp "/opt/sciclaw/skills/$skill/SKILL.md" "$tmp"
       chmod 644 "$tmp"
-      ln "$tmp" "/root/sciclaw/skills/$skill/SKILL.md" 2>/dev/null ||
-        [ -e "/root/sciclaw/skills/$skill/SKILL.md" ] || [ -L "/root/sciclaw/skills/$skill/SKILL.md" ]
+      ln "$tmp" "$dir/SKILL.md" 2>/dev/null ||
+        [ -e "$dir/SKILL.md" ] || [ -L "$dir/SKILL.md" ]
     )
-  elif [ ! -e "/root/sciclaw/skills/$skill" ] && [ ! -L "/root/sciclaw/skills/$skill" ]; then
-    echo "Cannot create workspace skill $skill" >&2
-    exit 1
-  elif ! cmp -s "/root/sciclaw/skills/$skill/SKILL.md" "/opt/sciclaw/skills/$skill/SKILL.md"; then
-    echo "Warning: workspace skill $skill differs from the bundled version and may use obsolete MCP tools. Review /root/sciclaw/skills/$skill/SKILL.md against /opt/sciclaw/skills/$skill/SKILL.md and update it while preserving customizations." >&2
+  fi
+  if ! cmp -s "$dir/SKILL.md" "/opt/sciclaw/skills/$skill/SKILL.md"; then
+    echo "Warning: workspace skill $skill differs from the bundled version and may use obsolete MCP tools. Review $dir/SKILL.md against /opt/sciclaw/skills/$skill/SKILL.md and update it while preserving customizations." >&2
   fi
 done
 
