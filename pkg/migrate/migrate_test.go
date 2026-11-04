@@ -755,6 +755,54 @@ func TestRunPicoClawMigrationPreservesUnknownFieldsAndIgnoresEnvironment(t *test
 	}
 }
 
+func TestRunPicoClawMigrationRejectsInvalidWorkspaces(t *testing.T) {
+	for _, field := range []string{"workspace", "shared_workspace", "routing"} {
+		t.Run(field, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("SCICLAW_HOME", filepath.Join(home, "visible"))
+			t.Setenv("SCICLAW_STATE_HOME", filepath.Join(home, "state"))
+			legacy := filepath.Join(home, ".picoclaw")
+			if err := os.MkdirAll(legacy, 0700); err != nil {
+				t.Fatal(err)
+			}
+			input := `{"agents":{"defaults":{"` + field + `":"~/.picoclaw/custom"}}}`
+			if field == "routing" {
+				input = `{"routing":{"mappings":[{"workspace":"` + filepath.Join(home, "state", "project") + `"}]}}`
+			}
+			if err := os.WriteFile(filepath.Join(legacy, "config.json"), []byte(input), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Run(Options{PicoClawHome: legacy, Force: true}); err == nil || !strings.Contains(err.Error(), "update the workspace path") {
+				t.Fatalf("expected actionable workspace error, got %v", err)
+			}
+			if _, err := os.Stat(paths.ConfigPath()); !os.IsNotExist(err) {
+				t.Fatalf("destination created: %v", err)
+			}
+		})
+	}
+}
+
+func TestRunPicoClawMigrationRejectsInvalidRouting(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SCICLAW_HOME", filepath.Join(home, "visible"))
+	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(home, "state"))
+	legacy := filepath.Join(home, ".picoclaw")
+	if err := os.MkdirAll(legacy, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy, "config.json"), []byte(`{"routing":{"mappings":[{}]}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Run(Options{PicoClawHome: legacy, Force: true}); err == nil || !strings.Contains(err.Error(), "invalid routing") {
+		t.Fatalf("expected invalid routing error, got %v", err)
+	}
+	if _, err := os.Stat(paths.ConfigPath()); !os.IsNotExist(err) {
+		t.Fatalf("destination created: %v", err)
+	}
+}
+
 func TestRunPicoClawMigrationRefusesExistingConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

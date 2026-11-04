@@ -152,8 +152,8 @@ func runPicoClawConfigMigration(opts Options, picoClawHome string) (*Result, err
 	if err != nil {
 		return nil, fmt.Errorf("reading PicoClaw config: %w", err)
 	}
-	var cfg config.Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	cfg := config.DefaultConfig()
+	if err := json.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("loading PicoClaw config: %w", err)
 	}
 	var root map[string]json.RawMessage
@@ -176,9 +176,27 @@ func runPicoClawConfigMigration(opts Options, picoClawHome string) (*Result, err
 	for _, key := range []string{"workspace", "shared_workspace"} {
 		var workspace string
 		if json.Unmarshal(defaults[key], &workspace) == nil && (filepath.Clean(workspace) == legacyWorkspace || workspace == "~/.picoclaw/workspace") {
-			defaults[key], _ = json.Marshal(paths.DefaultWorkspace())
+			workspace = config.DefaultConfig().Agents.Defaults.Workspace
+			defaults[key], _ = json.Marshal(workspace)
 			changed = true
+			if key == "workspace" {
+				cfg.Agents.Defaults.Workspace = workspace
+			} else {
+				cfg.Agents.Defaults.SharedWorkspace = workspace
+			}
 		}
+	}
+	workspaces := []string{cfg.WorkspacePath(), cfg.SharedWorkspacePath()}
+	for _, mapping := range cfg.Routing.Mappings {
+		workspaces = append(workspaces, expandHome(mapping.Workspace))
+	}
+	for _, workspace := range workspaces {
+		if err := paths.ValidateWorkspace(workspace); err != nil {
+			return nil, fmt.Errorf("cannot import PicoClaw config: %w; update the workspace path before importing", err)
+		}
+	}
+	if err := config.ValidateRoutingConfig(cfg.Routing); err != nil {
+		return nil, fmt.Errorf("cannot import PicoClaw config: invalid routing: %w", err)
 	}
 	if changed {
 		agents["defaults"], _ = json.Marshal(defaults)

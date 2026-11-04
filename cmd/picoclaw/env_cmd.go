@@ -112,14 +112,15 @@ func dockerCmd() {
 }
 
 func dockerGatewayArgs(image, userHome, stateHome string) []string {
-	return []string{
+	args := []string{
 		"run", "--rm", "-it",
 		"-v", userHome + ":/root/sciclaw",
 		"-v", stateHome + ":/root/.sciclaw",
-		"-p", "8080:8080",
-		image,
-		"gateway",
 	}
+	if userHome != "/root/sciclaw" {
+		args = append(args, "-v", userHome+":"+userHome)
+	}
+	return append(args, "-p", "8080:8080", image, "gateway")
 }
 
 func printDockerHelp() {

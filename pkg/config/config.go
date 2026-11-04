@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/caarlos0/env/v11"
+	"github.com/sipeed/picoclaw/pkg/paths"
 )
 
 // FlexibleStringSlice is a []string that also accepts JSON numbers,
@@ -298,12 +299,16 @@ type ToolsConfig struct {
 }
 
 func DefaultConfig() *Config {
+	workspace := paths.DefaultWorkspace()
+	if os.Getenv("SCICLAW_HOME") == "" {
+		workspace = "~/sciclaw/workspaces/default"
+	}
 	return &Config{
 		Agents: AgentsConfig{
 			Defaults: AgentDefaults{
-				Workspace:               "~/sciclaw/workspaces/default",
+				Workspace:               workspace,
 				RestrictToWorkspace:     true,
-				SharedWorkspace:         "~/sciclaw/workspaces/default",
+				SharedWorkspace:         workspace,
 				SharedWorkspaceReadOnly: false,
 				Provider:                "",
 				Model:                   "gpt-5.6-sol",
