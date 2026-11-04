@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/agent"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/routing"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
@@ -362,5 +364,78 @@ func TestHistoryCacheLockHonorsCancellation(t *testing.T) {
 	}
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("lock error: %v", err)
+	}
+}
+
+func TestHistoryQuotaFailuresExplainHowToRecover(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("123")) }))
+	defer server.Close()
+	for _, tc := range []struct {
+		name string
+		used int64
+	}{{"full", historyCacheMaxBytes}, {"insufficient", historyCacheMaxBytes - 2}} {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			dir := filepath.Join(workspace, ".sciclaw", "inbound", "discord-history", "existing")
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				t.Fatal(err)
+			}
+			existing := filepath.Join(dir, "edited")
+			f, err := os.Create(existing)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := f.Truncate(tc.used); err != nil {
+				f.Close()
+				t.Fatal(err)
+			}
+			f.Close()
+			messages, err := prepareHistoryMessages(context.Background(), workspace, "room", []tools.ChannelHistoryMessage{{ID: "1", Media: []string{server.URL + "/file"}, MediaIDs: []string{"a"}, MediaNames: []string{"file"}}}, 0, nil, time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []string{"history cache quota", "insufficient space", "Preserve any edited files", ".sciclaw/inbound/discord-history", "attachment_offset=0"} {
+				if !strings.Contains(messages[0].Content, want) {
+					t.Fatalf("missing %q: %s", want, messages[0].Content)
+				}
+			}
+			info, err := os.Stat(existing)
+			if err != nil || info.Size() != tc.used {
+				t.Fatalf("existing file changed: %v %v", info, err)
+			}
+		})
+	}
+}
+
+func TestHistoryOversizedAttachmentIsNotMisreportedAsQuota(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", routing.InboundMediaMaxDownloadBytes+1))
+	}))
+	defer server.Close()
+	messages, err := prepareHistoryMessages(context.Background(), t.TempDir(), "room", []tools.ChannelHistoryMessage{{ID: "1", Media: []string{server.URL + "/large"}}}, 0, nil, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(messages[0].Content, "history cache quota") || !strings.Contains(messages[0].Content, "could not be staged") {
+		t.Fatalf("message: %s", messages[0].Content)
+	}
+}
+
+func TestHistoryRequestTimesOutWaitingForDownloadLock(t *testing.T) {
+	workspace := t.TempDir()
+	root := filepath.Join(workspace, ".sciclaw", "inbound", "discord-history")
+	if err := os.MkdirAll(root, 0755); err != nil {
+		t.Fatal(err)
+	}
+	held, err := lockHistoryCache(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_, err = stageHistoryAttachment(ctx, workspace, "room", "1", 0, "id", "https://example.invalid/file", nil)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("waiting for lock: %v", err)
 	}
 }

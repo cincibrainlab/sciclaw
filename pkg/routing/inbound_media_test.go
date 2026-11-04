@@ -154,7 +154,7 @@ func TestPrepareInboundMedia_UsesContextCancellationForDownloads(t *testing.T) {
 func TestPrepareInboundMedia_RejectsOversizedDownloads(t *testing.T) {
 	workspace := t.TempDir()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", inboundMediaMaxDownloadBytes+1))
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", InboundMediaMaxDownloadBytes+1))
 		_, _ = w.Write([]byte("tiny"))
 	}))
 	defer server.Close()
@@ -187,7 +187,7 @@ func TestPrepareInboundMedia_RejectsOversizedLocalFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create oversized source: %v", err)
 	}
-	if err := f.Truncate(inboundMediaMaxDownloadBytes + 1); err != nil {
+	if err := f.Truncate(InboundMediaMaxDownloadBytes + 1); err != nil {
 		_ = f.Close()
 		t.Fatalf("truncate oversized source: %v", err)
 	}

@@ -2343,6 +2343,10 @@ func prepareHistoryMessages(ctx context.Context, workspace, channelID string, me
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
+			if errors.Is(err, errHistoryCacheQuota) {
+				msg.Content += fmt.Sprintf("\nAttachment %s could not be staged: the history cache quota is full or has insufficient space. Preserve any edited files before freeing space in .sciclaw/inbound/discord-history, then retry with attachment_offset=%d.", label, index)
+				continue
+			}
 			if err != nil {
 				msg.Content += fmt.Sprintf("\nAttachment %s could not be staged; retry with attachment_offset=%d.", label, index)
 				continue
