@@ -19,6 +19,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/routing"
 )
 
@@ -256,6 +257,38 @@ func (e *webActualAgentExec) ExecShell(_ time.Duration, command string) (string,
 	e.executions++
 	out, err := exec.Command("/bin/sh", "-c", command).Output()
 	return string(out), err
+}
+
+func TestHandleChatCanceledDuringRetryDoesNotStartFullAgent(t *testing.T) {
+	var calls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Retry-After", "10")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"code":"rate_limit_error","message":"slow down"}}`))
+	}))
+	defer upstream.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	executor := &webTestExec{}
+	srv := newWebServer(executor, "")
+	srv.liteChatRunner = func(ctx context.Context, _ string) (*liteChatResult, error) {
+		provider := providers.NewHTTPProvider("", upstream.URL, "")
+		_, _, _, err := providers.RetryChat(ctx, provider, nil, nil, "test", nil, func(providers.RetryAttempt) { cancel() })
+		return nil, err
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/chat", strings.NewReader(`{"message":"hello"}`)).WithContext(ctx)
+	srv.handleChat(httptest.NewRecorder(), req)
+	if !errors.Is(ctx.Err(), context.Canceled) {
+		t.Fatal("retry did not cancel the request")
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("provider calls = %d, want 1", calls.Load())
+	}
+	if executor.command != "" {
+		t.Fatalf("full agent started after cancellation: %s", executor.command)
+	}
 }
 
 func TestHandleChatRateLimitDoesNotStartFullAgent(t *testing.T) {

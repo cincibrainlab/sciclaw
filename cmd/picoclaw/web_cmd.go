@@ -407,6 +407,9 @@ func (s *webServer) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	if shouldUseLightweightWebChat(body.Message) {
 		result, err := s.liteChatRunner(r.Context(), body.Message)
+		if r.Context().Err() != nil {
+			return
+		}
 		if err == nil && result != nil && strings.TrimSpace(result.Response) != "" {
 			jsonResp(w, map[string]interface{}{"response": result.Response, "mode": "lite"})
 			return
