@@ -45,6 +45,16 @@ func TestIndependentRootOverrides(t *testing.T) {
 	}
 }
 
+func TestRelativeRootOverridesAreAbsolute(t *testing.T) {
+	t.Setenv("SCICLAW_HOME", "relative-visible")
+	t.Setenv("SCICLAW_STATE_HOME", "relative-state")
+	for _, root := range []string{UserHome(), StateHome()} {
+		if !filepath.IsAbs(root) {
+			t.Fatalf("root is not absolute: %q", root)
+		}
+	}
+}
+
 func TestVisibleAndStateHelpers(t *testing.T) {
 	visible := filepath.Join(t.TempDir(), "visible")
 	state := filepath.Join(t.TempDir(), "state")

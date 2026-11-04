@@ -218,7 +218,7 @@ func resolvePhysicalPath(path string) string {
 
 func rootFromEnv(envName, defaultName string) string {
 	if value := strings.TrimSpace(os.Getenv(envName)); value != "" {
-		return filepath.Clean(expandHome(value))
+		return cleanAbsolute(value)
 	}
 	home, err := os.UserHomeDir()
 	if err != nil || strings.TrimSpace(home) == "" {
