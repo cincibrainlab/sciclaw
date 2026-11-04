@@ -8,8 +8,6 @@ type InboundMessage struct {
 	Media      []string          `json:"media,omitempty"`
 	SessionKey string            `json:"session_key"`
 	Metadata   map[string]string `json:"metadata,omitempty"`
-	// Cleanup releases temporary media after the consumer has staged or rejected it.
-	Cleanup func() `json:"-"`
 }
 
 type OutboundAttachment struct {

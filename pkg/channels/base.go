@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
 	"sync/atomic"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
@@ -97,27 +96,6 @@ func (c *BaseChannel) IsAllowed(senderID string) bool {
 }
 
 func (c *BaseChannel) HandleMessage(senderID, chatID, content string, media []string, metadata map[string]string) {
-	c.handleMessage(context.TODO(), senderID, chatID, content, media, metadata, nil)
-}
-
-func (c *BaseChannel) handleMessage(ctx context.Context, senderID, chatID, content string, media []string, metadata map[string]string, cleanup func()) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if cleanup != nil {
-		var once sync.Once
-		original := cleanup
-		cleanup = func() { once.Do(original) }
-		stop := context.AfterFunc(ctx, cleanup)
-		defer func() {
-			if cleanup != nil {
-				stop()
-				cleanup()
-			}
-		}()
-		originalCleanup := cleanup
-		cleanup = func() { stop(); originalCleanup() }
-	}
 	// TODO(addon-hooks): emit "user_added" / "user_removed" events once
 	// first-appearance detection lands. See docs/design/addon-system-rfc.md
 	// section 4 (Hook Dispatch) — the open design question is where to store
@@ -144,13 +122,11 @@ func (c *BaseChannel) handleMessage(ctx context.Context, senderID, chatID, conte
 		Media:      media,
 		SessionKey: sessionKey,
 		Metadata:   metadata,
-		Cleanup:    cleanup,
 	}
 
-	// A failed publish leaves cleanup with the producer.
-	if err := c.bus.PublishInbound(ctx, msg); err == nil {
-		cleanup = nil
-	}
+	// context.TODO: channel event handlers don't carry a context; the bus's
+	// done channel still prevents blocking when the bus is closed.
+	c.bus.PublishInbound(context.TODO(), msg)
 }
 
 func (c *BaseChannel) setRunning(running bool) {

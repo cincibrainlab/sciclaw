@@ -52,9 +52,6 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 		d.logDecision(decision)
 
 		if !decision.Allowed {
-			if msg.Cleanup != nil {
-				msg.Cleanup()
-			}
 			d.sendBlockNotice(ctx, msg, decision)
 			continue
 		}
@@ -66,9 +63,6 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 			Runtime:   decision.Runtime,
 		}
 		if err := d.enqueueDispatch(ctx, dispatchTask{target: target, decision: decision, msg: routed}); err != nil {
-			if msg.Cleanup != nil {
-				msg.Cleanup()
-			}
 			logger.ErrorCF("routing", "dispatch_enqueue_failed", map[string]interface{}{
 				"channel":   msg.Channel,
 				"chat_id":   msg.ChatID,
@@ -152,12 +146,7 @@ func (d *Dispatcher) runDispatchLane(ctx context.Context, key string, lane *disp
 
 func (d *Dispatcher) dispatchResolved(ctx context.Context, task dispatchTask) {
 	msg := task.msg
-	stageErr := prepareInboundMedia(ctx, task.target.Workspace, &msg, d.getResolver().InboundMediaURLRewrites())
-	if msg.Cleanup != nil {
-		msg.Cleanup()
-		msg.Cleanup = nil
-	}
-	if err := stageErr; err != nil {
+	if err := prepareInboundMedia(ctx, task.target.Workspace, &msg, d.getResolver().InboundMediaURLRewrites()); err != nil {
 		logger.ErrorCF("routing", "inbound_media_stage_failed", map[string]interface{}{
 			"channel":   msg.Channel,
 			"chat_id":   msg.ChatID,

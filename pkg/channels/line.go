@@ -309,7 +309,7 @@ func (c *LINEChannel) processEvent(event lineEvent) {
 	var mediaPaths []string
 	localFiles := []string{}
 
-	cleanupFiles := func() {
+	defer func() {
 		for _, file := range localFiles {
 			if err := os.Remove(file); err != nil {
 				logger.DebugCF("line", "Failed to cleanup temp file", map[string]interface{}{
@@ -317,11 +317,6 @@ func (c *LINEChannel) processEvent(event lineEvent) {
 					"error": err.Error(),
 				})
 			}
-		}
-	}
-	defer func() {
-		if cleanupFiles != nil {
-			cleanupFiles()
 		}
 	}()
 
@@ -382,8 +377,7 @@ func (c *LINEChannel) processEvent(event lineEvent) {
 	// Show typing/loading indicator (requires user ID, not group ID)
 	c.sendLoading(senderID)
 
-	c.handleMessage(c.ctx, senderID, chatID, content, mediaPaths, metadata, cleanupFiles)
-	cleanupFiles = nil
+	c.HandleMessage(senderID, chatID, content, mediaPaths, metadata)
 }
 
 // isBotMentioned checks if the bot is mentioned in the message.

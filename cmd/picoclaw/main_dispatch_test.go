@@ -130,41 +130,6 @@ func TestRunGatewayDefaultDispatch_StagesWithoutJobManager(t *testing.T) {
 	}
 }
 
-func TestRunGatewayDefaultDispatch_CleansTemporaryMediaAfterStaging(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.Agents.Defaults.Workspace = t.TempDir()
-	messageBus := bus.NewMessageBus()
-	defer messageBus.Close()
-	provider := &captureDispatchProvider{messages: make(chan []providers.Message, 1)}
-	al := agent.NewAgentLoop(cfg, messageBus, provider)
-	file := filepath.Join(t.TempDir(), "telegram.jpg")
-	if err := os.WriteFile(file, []byte("telegram photo"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	go runGatewayDefaultDispatch(ctx, messageBus, al, nil, routing.LoopTarget{Workspace: cfg.WorkspacePath()}, nil)
-	if err := messageBus.PublishInbound(ctx, bus.InboundMessage{Channel: "telegram", ChatID: "room", SenderID: "user", Content: "inspect", Media: []string{file}, Metadata: map[string]string{"message_id": "msg-1"}, Cleanup: func() { _ = os.Remove(file) }}); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-provider.messages:
-		if _, err := os.Stat(file); !os.IsNotExist(err) {
-			t.Fatalf("temporary file still exists: %v", err)
-		}
-		matches, err := filepath.Glob(filepath.Join(cfg.WorkspacePath(), ".sciclaw", "inbound", "telegram", "msg-1-*", "telegram.jpg"))
-		if err != nil || len(matches) != 1 {
-			t.Fatalf("staged paths = %v, error = %v", matches, err)
-		}
-		data, err := os.ReadFile(matches[0])
-		if err != nil || string(data) != "telegram photo" {
-			t.Fatalf("staged content %q: %v", data, err)
-		}
-	case <-ctx.Done():
-		t.Fatal("timed out waiting for provider")
-	}
-}
-
 func TestRunGatewayDefaultDispatch_PreservesTextWhenAttachmentsFail(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = t.TempDir()

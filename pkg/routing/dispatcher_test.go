@@ -189,33 +189,3 @@ func TestDispatcherDispatchResolved_StagesInboundMediaBeforeJobSubmit(t *testing
 		t.Fatalf("expected staged file to exist: %v", err)
 	}
 }
-
-func TestDispatcherDispatchResolved_CleansTemporaryMediaAfterStaging(t *testing.T) {
-	mb := bus.NewMessageBus()
-	defer mb.Close()
-	target := LoopTarget{Workspace: t.TempDir()}
-	source := filepath.Join(t.TempDir(), "photo.jpg")
-	if err := os.WriteFile(source, []byte("photo"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	pool := NewAgentLoopPoolWithFactory(func(LoopTarget) (inboundHandler, error) {
-		return &fakeHandler{received: make(chan bus.InboundMessage, 1)}, nil
-	})
-	defer pool.Close()
-	dispatcher := NewDispatcher(mb, nil, pool)
-	cleaned := false
-	dispatcher.dispatchResolved(context.Background(), dispatchTask{target: target, msg: bus.InboundMessage{Channel: "telegram", ChatID: "room", Media: []string{source}, Metadata: map[string]string{"message_id": "1"}, Cleanup: func() { cleaned = true; _ = os.Remove(source) }}})
-	if !cleaned {
-		t.Fatal("cleanup was not called")
-	}
-	matches, err := filepath.Glob(filepath.Join(target.Workspace, ".sciclaw", "inbound", "telegram", "1-*", "photo.jpg"))
-	if err != nil || len(matches) != 1 {
-		t.Fatalf("staged paths = %v, error = %v", matches, err)
-	}
-	if data, err := os.ReadFile(matches[0]); err != nil || string(data) != "photo" {
-		t.Fatalf("staged content %q: %v", data, err)
-	}
-	if _, err := os.Stat(source); !os.IsNotExist(err) {
-		t.Fatalf("temporary source still exists: %v", err)
-	}
-}
