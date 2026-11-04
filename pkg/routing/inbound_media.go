@@ -118,7 +118,7 @@ func rewriteInboundMediaURL(source string, rewrites map[string]string) string {
 		return source
 	}
 	targetURL, err := url.Parse(target)
-	if err != nil || targetURL.Scheme == "" || targetURL.Host == "" || targetURL.Path != "" || targetURL.RawQuery != "" {
+	if err != nil || (targetURL.Scheme != "http" && targetURL.Scheme != "https") || targetURL.Host == "" || targetURL.User != nil || targetURL.Path != "" || targetURL.RawQuery != "" || targetURL.ForceQuery || targetURL.Fragment != "" {
 		return source
 	}
 	sourceURL.Scheme = targetURL.Scheme

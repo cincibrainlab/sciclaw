@@ -10,8 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/agent"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/routing"
 )
 
@@ -76,5 +78,47 @@ func TestRunGatewayDefaultDispatch_StagesInboundMediaBeforeJob(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for job")
+	}
+}
+
+type captureDispatchProvider struct{ messages chan []providers.Message }
+
+func (p *captureDispatchProvider) Chat(_ context.Context, messages []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]interface{}) (*providers.LLMResponse, error) {
+	p.messages <- messages
+	return &providers.LLMResponse{Content: "done"}, nil
+}
+func (p *captureDispatchProvider) GetDefaultModel() string { return "mock-model" }
+
+func TestRunGatewayDefaultDispatch_StagesWithoutJobManager(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("attachment")) }))
+	defer server.Close()
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	messageBus := bus.NewMessageBus()
+	defer messageBus.Close()
+	provider := &captureDispatchProvider{messages: make(chan []providers.Message, 1)}
+	al := agent.NewAgentLoop(cfg, messageBus, provider)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go runGatewayDefaultDispatch(ctx, messageBus, al, nil, routing.LoopTarget{Workspace: cfg.WorkspacePath()}, nil)
+	if err := messageBus.PublishInbound(ctx, bus.InboundMessage{Channel: "discord", ChatID: "room", SenderID: "user", Content: "inspect", Media: []string{server.URL + "/file.txt"}, Metadata: map[string]string{"message_id": "msg-1"}}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case messages := <-provider.messages:
+		var contents strings.Builder
+		for _, msg := range messages {
+			contents.WriteString(msg.Content)
+		}
+		relative := ".sciclaw/inbound/discord/msg-1/file.txt"
+		if !strings.Contains(contents.String(), relative) {
+			t.Fatalf("prompt missing staged path: %s", contents.String())
+		}
+		data, err := os.ReadFile(filepath.Join(cfg.WorkspacePath(), filepath.FromSlash(relative)))
+		if err != nil || string(data) != "attachment" {
+			t.Fatalf("staged content %q, error %v", data, err)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for provider")
 	}
 }

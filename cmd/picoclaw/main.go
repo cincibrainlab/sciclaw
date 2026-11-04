@@ -25,6 +25,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bwmarrin/discordgo"
 	"github.com/chzyer/readline"
 	"github.com/sipeed/picoclaw/cmd/picoclaw/tui"
 	"github.com/sipeed/picoclaw/pkg/addons"
@@ -1755,8 +1756,8 @@ func gatewayCmd() {
 	var channelHistoryCB tools.FetchChannelHistoryCallback
 	if discordCh, ok := channelManager.GetChannel("discord"); ok {
 		if dc, ok := discordCh.(*channels.DiscordChannel); ok {
-			channelHistoryCB = discordHistoryCallback(dc)
-			attachChannelHistoryCallback(agentLoop, channelHistoryCB)
+			channelHistoryCB = discordHistoryCallback(dc.GetChannelMessages)
+			attachChannelHistoryCallback(agentLoop, channelHistoryCB, cfg.Routing.InboundMediaURLRewrites)
 			dc.SetSlashSkillCatalogCallback(func(channelID, guildID, userID string) ([]channels.SlashSkillChoice, error) {
 				return listDiscordSlashSkills(cfg, channelID, guildID, userID)
 			})
@@ -1816,7 +1817,7 @@ func gatewayCmd() {
 		al := agent.NewAgentLoopWithOptions(cloned, msgBus, loopProvider, agent.LoopOptions{
 			ToolProfile: agent.ToolProfileSideLane,
 		})
-		attachChannelHistoryCallback(al, channelHistoryCB)
+		attachChannelHistoryCallback(al, channelHistoryCB, cfg.Routing.InboundMediaURLRewrites)
 		return al, nil
 	}
 	if cfg.Jobs.Enabled && cfg.Jobs.DiscordAsyncDefault {
@@ -1859,7 +1860,7 @@ func gatewayCmd() {
 		})
 		if channelHistoryCB != nil {
 			poolSetup = append(poolSetup, func(al *agent.AgentLoop) {
-				attachChannelHistoryCallback(al, channelHistoryCB)
+				attachChannelHistoryCallback(al, channelHistoryCB, cfg.Routing.InboundMediaURLRewrites)
 			})
 		}
 		loopPool = routing.NewAgentLoopPool(cfg, msgBus, poolSetup...)
@@ -1880,19 +1881,15 @@ func gatewayCmd() {
 	go watchRoutingReload(ctx, routingDispatcher)
 	fmt.Printf("✓ Routing reload trigger: %s\n", routingReloadTriggerPath())
 	if !cfg.Routing.Enabled {
-		if jobManager != nil {
-			go runGatewayDefaultDispatch(ctx, msgBus, agentLoop, jobManager, routing.LoopTarget{
-				Workspace: cfg.WorkspacePath(),
-				Runtime: routing.RuntimeProfile{
-					Mode:         cfg.EffectiveMode(),
-					LocalBackend: cfg.Agents.Defaults.LocalBackend,
-					LocalModel:   cfg.Agents.Defaults.LocalModel,
-					LocalPreset:  cfg.Agents.Defaults.LocalPreset,
-				},
-			}, cfg.Routing.InboundMediaURLRewrites)
-		} else {
-			go agentLoop.Run(ctx)
-		}
+		go runGatewayDefaultDispatch(ctx, msgBus, agentLoop, jobManager, routing.LoopTarget{
+			Workspace: cfg.WorkspacePath(),
+			Runtime: routing.RuntimeProfile{
+				Mode:         cfg.EffectiveMode(),
+				LocalBackend: cfg.Agents.Defaults.LocalBackend,
+				LocalModel:   cfg.Agents.Defaults.LocalModel,
+				LocalPreset:  cfg.Agents.Defaults.LocalPreset,
+			},
+		}, cfg.Routing.InboundMediaURLRewrites)
 	}
 
 	if err := cronService.Start(); err != nil {
@@ -2254,18 +2251,34 @@ func modelsCmd() {
 	}
 }
 
-// discordHistoryCallback builds a FetchChannelHistoryCallback that reads
-// messages from the Discord REST API via the given DiscordChannel.
-func attachChannelHistoryCallback(al *agent.AgentLoop, cb tools.FetchChannelHistoryCallback) {
+func attachChannelHistoryCallback(al *agent.AgentLoop, cb tools.FetchChannelHistoryCallback, rewrites map[string]string) {
 	if al == nil || cb == nil {
 		return
 	}
-	al.SetChannelHistoryCallback(cb)
+	al.SetChannelHistoryCallback(func(ctx context.Context, channelID string, limit int, beforeID string) ([]tools.ChannelHistoryMessage, error) {
+		messages, err := cb(ctx, channelID, limit, beforeID)
+		if err != nil {
+			return nil, err
+		}
+		for i := range messages {
+			msg := &messages[i]
+			inbound := bus.InboundMessage{Channel: "discord", ChatID: channelID, Content: msg.Content, Media: msg.Media, Metadata: map[string]string{"message_id": msg.ID}}
+			if err := routing.PrepareInboundMedia(ctx, al.Workspace(), &inbound, rewrites); err != nil {
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				msg.Content += "\nAttachments could not be staged locally."
+				continue
+			}
+			msg.Content = inbound.Content
+		}
+		return messages, nil
+	})
 }
 
-func discordHistoryCallback(dc *channels.DiscordChannel) tools.FetchChannelHistoryCallback {
-	return func(channelID string, limit int, beforeID string) ([]tools.ChannelHistoryMessage, error) {
-		msgs, err := dc.GetChannelMessages(channelID, limit, beforeID)
+func discordHistoryCallback(fetch func(string, int, string) ([]*discordgo.Message, error)) tools.FetchChannelHistoryCallback {
+	return func(ctx context.Context, channelID string, limit int, beforeID string) ([]tools.ChannelHistoryMessage, error) {
+		msgs, err := fetch(channelID, limit, beforeID)
 		if err != nil {
 			return nil, err
 		}
@@ -2276,10 +2289,24 @@ func discordHistoryCallback(dc *channels.DiscordChannel) tools.FetchChannelHisto
 			if msg.Author != nil {
 				author = msg.Author.Username
 			}
+			var media []string
+			for _, attachment := range msg.Attachments {
+				if attachment == nil {
+					continue
+				}
+				attachmentURL := attachment.URL
+				if attachmentURL == "" {
+					attachmentURL = attachment.ProxyURL
+				}
+				if attachmentURL != "" {
+					media = append(media, attachmentURL)
+				}
+			}
 			result[len(msgs)-1-i] = tools.ChannelHistoryMessage{
 				ID:        msg.ID,
 				Author:    author,
 				Content:   msg.Content,
+				Media:     media,
 				Timestamp: msg.Timestamp.Format("2006-01-02 15:04"),
 			}
 		}

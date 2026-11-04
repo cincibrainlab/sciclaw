@@ -9,7 +9,7 @@ import (
 func TestFilteredClonesChannelHistoryToolContext(t *testing.T) {
 	registry := NewToolRegistry()
 	channelHistory := NewChannelHistoryTool()
-	channelHistory.SetFetchCallback(func(channelID string, limit int, beforeID string) ([]ChannelHistoryMessage, error) {
+	channelHistory.SetFetchCallback(func(ctx context.Context, channelID string, limit int, beforeID string) ([]ChannelHistoryMessage, error) {
 		return []ChannelHistoryMessage{{
 			ID:        "1",
 			Author:    "tester",
