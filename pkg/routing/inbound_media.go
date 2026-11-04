@@ -33,12 +33,8 @@ func prepareInboundMedia(ctx context.Context, workspace string, msg *bus.Inbound
 		ctx = context.Background()
 	}
 
-	channelDir := filepath.Join(workspace, ".sciclaw", "inbound", sanitizePathSegment(msg.Channel))
-	if err := os.MkdirAll(channelDir, 0755); err != nil {
-		return fmt.Errorf("create inbound media staging dir: %w", err)
-	}
-	stageDir, err := os.MkdirTemp(channelDir, inboundMediaMessageDir(msg)+"-")
-	if err != nil {
+	stageDir := filepath.Join(workspace, ".sciclaw", "inbound", sanitizePathSegment(msg.Channel), inboundMediaMessageDir(msg))
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
 		return fmt.Errorf("create inbound media staging dir: %w", err)
 	}
 

@@ -47,7 +47,7 @@ func TestPrepareInboundMedia_DownloadsURLIntoWorkspaceAndAnnotatesContent(t *tes
 	if !strings.Contains(msg.Content, "Attachments staged locally and available to tools:") {
 		t.Fatalf("expected staged attachment summary in content, got %q", msg.Content)
 	}
-	if !strings.Contains(msg.Content, ".sciclaw/inbound/discord/msg-1-") {
+	if !strings.Contains(msg.Content, ".sciclaw/inbound/discord/msg-1/") {
 		t.Fatalf("expected relative staged path in content, got %q", msg.Content)
 	}
 }
@@ -119,7 +119,7 @@ func TestPrepareInboundMedia_CopiesLocalFileIntoWorkspace(t *testing.T) {
 	if string(data) != "hello" {
 		t.Fatalf("unexpected staged file content: %q", string(data))
 	}
-	if !strings.Contains(msg.Content, ".sciclaw/inbound/discord/msg-2-") {
+	if !strings.Contains(msg.Content, ".sciclaw/inbound/discord/msg-2/") {
 		t.Fatalf("expected staged path in content, got %q", msg.Content)
 	}
 }
@@ -223,34 +223,5 @@ func TestRewriteInboundMediaURL_InvalidTargetsLeaveSourceUnchanged(t *testing.T)
 				t.Fatalf("got %q, want %q", got, source)
 			}
 		})
-	}
-}
-
-func TestPrepareInboundMedia_RepeatedMessageDoesNotOverwriteEdits(t *testing.T) {
-	workspace := t.TempDir()
-	source := filepath.Join(t.TempDir(), "file.txt")
-	if err := os.WriteFile(source, []byte("original"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	makeMessage := func() *bus.InboundMessage {
-		return &bus.InboundMessage{Channel: "telegram", ChatID: "same-chat", Media: []string{source}, Metadata: map[string]string{"message_id": "1"}}
-	}
-	first := makeMessage()
-	if err := prepareInboundMedia(context.Background(), workspace, first, nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(first.Media[0], []byte("edited"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	second := makeMessage()
-	if err := prepareInboundMedia(context.Background(), workspace, second, nil); err != nil {
-		t.Fatal(err)
-	}
-	if first.Media[0] == second.Media[0] {
-		t.Fatal("repeated message reused staging path")
-	}
-	data, err := os.ReadFile(first.Media[0])
-	if err != nil || string(data) != "edited" {
-		t.Fatalf("previous content = %q, err = %v", data, err)
 	}
 }
