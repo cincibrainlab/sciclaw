@@ -27,6 +27,7 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/chzyer/readline"
+	"github.com/google/uuid"
 	"github.com/sipeed/picoclaw/cmd/picoclaw/tui"
 	"github.com/sipeed/picoclaw/pkg/addons"
 	"github.com/sipeed/picoclaw/pkg/agent"
@@ -2266,8 +2267,19 @@ func historyStagingCallback(workspace string, cb tools.FetchChannelHistoryCallba
 		}
 		for i := range messages {
 			msg := &messages[i]
-			inbound := bus.InboundMessage{Channel: "discord-history", ChatID: channelID, Content: msg.Content, Media: msg.Media, Metadata: map[string]string{"message_id": msg.ID}}
-			err := routing.PrepareInboundMedia(ctx, workspace, &inbound, rewrites)
+			if len(msg.Media) == 0 {
+				continue
+			}
+			root := filepath.Join(workspace, ".sciclaw", "inbound", "discord-history")
+			if err := os.MkdirAll(root, 0755); err != nil {
+				return nil, err
+			}
+			dir, err := os.MkdirTemp(root, "message-")
+			if err != nil {
+				return nil, err
+			}
+			inbound := bus.InboundMessage{Channel: "discord-history", ChatID: channelID, Content: msg.Content, Media: msg.Media, Metadata: map[string]string{"message_id": filepath.Base(dir)}}
+			err = routing.PrepareInboundMedia(ctx, workspace, &inbound, rewrites)
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
@@ -2934,7 +2946,10 @@ func runGatewayDefaultDispatch(ctx context.Context, msgBus *bus.MessageBus, agen
 			if !ok {
 				continue
 			}
-			stageErr := routing.PrepareInboundMedia(ctx, target.Workspace, &msg, inboundMediaURLRewrites)
+			staged := msg
+			staged.Metadata = map[string]string{"message_id": msg.Metadata["message_id"] + "-" + uuid.NewString()}
+			stageErr := routing.PrepareInboundMedia(ctx, target.Workspace, &staged, inboundMediaURLRewrites)
+			msg.Content, msg.Media = staged.Content, staged.Media
 			if stageErr != nil {
 				if ctx.Err() != nil {
 					return

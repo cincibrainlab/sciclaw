@@ -30,7 +30,7 @@ func TestHistoryStagesProxyAttachmentsWithoutOverwriting(t *testing.T) {
 		if err != nil || len(messages) != 1 || !strings.Contains(messages[0].Content, "Attachments staged locally") {
 			t.Fatalf("messages = %+v, err = %v", messages, err)
 		}
-		paths, err := filepath.Glob(filepath.Join(workspace, ".sciclaw", "inbound", "discord-history", "1-*", "file.txt"))
+		paths, err := filepath.Glob(filepath.Join(workspace, ".sciclaw", "inbound", "discord-history", "message-*", "file.txt"))
 		if err != nil || len(paths) != i+1 {
 			t.Fatalf("paths = %v, err = %v", paths, err)
 		}
@@ -40,7 +40,7 @@ func TestHistoryStagesProxyAttachmentsWithoutOverwriting(t *testing.T) {
 			}
 		}
 	}
-	paths, _ := filepath.Glob(filepath.Join(workspace, ".sciclaw", "inbound", "discord-history", "1-*", "file.txt"))
+	paths, _ := filepath.Glob(filepath.Join(workspace, ".sciclaw", "inbound", "discord-history", "message-*", "file.txt"))
 	preserved := false
 	for _, p := range paths {
 		data, _ := os.ReadFile(p)

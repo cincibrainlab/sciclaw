@@ -1045,6 +1045,7 @@ func (c *DiscordChannel) processIncomingMessage(_ *discordgo.Session, m *discord
 			attachmentURL = attachment.ProxyURL
 		}
 		isAudio := utils.IsAudioFile(attachment.Filename, attachment.ContentType)
+		mediaPaths = append(mediaPaths, attachmentURL)
 
 		if isAudio {
 			localPath := c.downloadAttachment(attachmentURL, attachment.Filename)
@@ -1078,11 +1079,9 @@ func (c *DiscordChannel) processIncomingMessage(_ *discordgo.Session, m *discord
 					"url":      attachmentURL,
 					"filename": attachment.Filename,
 				})
-				mediaPaths = append(mediaPaths, attachmentURL)
 				content = appendContent(content, fmt.Sprintf("[attachment: %s]", attachment.Filename))
 			}
 		} else {
-			mediaPaths = append(mediaPaths, attachmentURL)
 			content = appendContent(content, fmt.Sprintf("[attachment: %s]", attachment.Filename))
 		}
 	}
