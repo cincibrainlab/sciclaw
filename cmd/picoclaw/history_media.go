@@ -101,7 +101,8 @@ func stageHistoryAttachmentWithQuota(ctx context.Context, workspace, channel, me
 	defer os.RemoveAll(temp)
 	inbound := bus.InboundMessage{Channel: "discord-history", Media: []string{source}, Metadata: map[string]string{"message_id": message}}
 	if err := routing.PrepareInboundMediaWithLimit(ctx, temp, &inbound, rewrites, remaining); err != nil {
-		if remaining < routing.InboundMediaMaxDownloadBytes && errors.Is(err, routing.ErrInboundMediaTooLarge) {
+		var sizeErr *routing.InboundMediaSizeError
+		if remaining < routing.InboundMediaMaxDownloadBytes && errors.As(err, &sizeErr) && (sizeErr.Size < 0 || sizeErr.Size <= routing.InboundMediaMaxDownloadBytes) {
 			return "", errHistoryCacheQuota
 		}
 		return "", err

@@ -439,3 +439,50 @@ func TestHistoryRequestTimesOutWaitingForDownloadLock(t *testing.T) {
 		t.Fatalf("waiting for lock: %v", err)
 	}
 }
+
+func TestHistoryKnownOversizedAndUnknownLengthWithLimitedQuota(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		known bool
+	}{{"known-oversized", true}, {"unknown-length", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tc.known {
+					w.Header().Set("Content-Length", fmt.Sprintf("%d", routing.InboundMediaMaxDownloadBytes+1))
+					return
+				}
+				w.(http.Flusher).Flush()
+				_, _ = w.Write([]byte("123"))
+			}))
+			defer server.Close()
+			workspace := t.TempDir()
+			root := filepath.Join(workspace, ".sciclaw", "inbound", "discord-history", "existing")
+			if err := os.MkdirAll(root, 0755); err != nil {
+				t.Fatal(err)
+			}
+			f, err := os.Create(filepath.Join(root, "edited"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := f.Truncate(historyCacheMaxBytes - 2); err != nil {
+				f.Close()
+				t.Fatal(err)
+			}
+			f.Close()
+			messages, err := prepareHistoryMessages(context.Background(), workspace, "room", []tools.ChannelHistoryMessage{{ID: "1", Media: []string{server.URL + "/file"}}}, 0, nil, time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			content := messages[0].Content
+			if tc.known {
+				if !strings.Contains(content, "exceeds the 64 MiB attachment limit") || strings.Contains(content, "history cache quota") {
+					t.Fatalf("known size: %s", content)
+				}
+			} else {
+				if !strings.Contains(content, "history cache quota") || !strings.Contains(content, "Freeing space may help") || !strings.Contains(content, "attachments over 64 MiB cannot be staged") {
+					t.Fatalf("unknown size: %s", content)
+				}
+			}
+		})
+	}
+}

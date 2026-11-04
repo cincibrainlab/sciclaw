@@ -2344,7 +2344,11 @@ func prepareHistoryMessages(ctx context.Context, workspace, channelID string, me
 				return nil, ctx.Err()
 			}
 			if errors.Is(err, errHistoryCacheQuota) {
-				msg.Content += fmt.Sprintf("\nAttachment %s could not be staged: the history cache quota is full or has insufficient space. Preserve any edited files before freeing space in .sciclaw/inbound/discord-history, then retry with attachment_offset=%d.", label, index)
+				msg.Content += fmt.Sprintf("\nAttachment %s could not be staged: the history cache quota is full or has insufficient space. Preserve any edited files before freeing space in .sciclaw/inbound/discord-history; retry with attachment_offset=%d. Freeing space may help, but attachments over 64 MiB cannot be staged.", label, index)
+				continue
+			}
+			if errors.Is(err, routing.ErrInboundMediaTooLarge) {
+				msg.Content += fmt.Sprintf("\nAttachment %s could not be staged: it exceeds the 64 MiB attachment limit.", label)
 				continue
 			}
 			if err != nil {
