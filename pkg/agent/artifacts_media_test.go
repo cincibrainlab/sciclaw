@@ -11,7 +11,7 @@ import (
 )
 
 func TestPersistProviderMedia_WritesWorkspacePNG(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := tempWorkspaceWithoutAudit(t)
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = workspace
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{})
