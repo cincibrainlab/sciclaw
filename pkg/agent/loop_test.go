@@ -95,6 +95,13 @@ func TestProviderErrorHooksAndPresentationUseClassifiedKind(t *testing.T) {
 			wantText:   "assistant’s model",
 		},
 		{
+			name:       "generic invalid request missing model",
+			statusCode: http.StatusBadRequest,
+			body:       `{"error":{"code":"invalid_request_error","message":"model not found for this authentication method. RAW_CANARY_generic_model"}}`,
+			wantKind:   providers.ProviderErrorKindModelUnavailable,
+			wantText:   "check the configured model and provider access, or choose another available model. Otherwise, contact an administrator",
+		},
+		{
 			name:       "parameter without code",
 			statusCode: http.StatusBadRequest,
 			body:       `{"error":{"message":"The temperature parameter is not supported for this model. RAW_CANARY_parameter"}}`,

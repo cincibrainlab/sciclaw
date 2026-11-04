@@ -13,7 +13,7 @@ func TestProviderFailureExactGuidance(t *testing.T) {
 		want string
 	}{
 		{&providers.APIError{StatusCode: 400, Code: "invalid_request_error", Message: "maximum context length exceeded"}, "This conversation has exceeded the assistant’s context limit. Try a shorter message; if the problem continues, ask an administrator to reset the conversation."},
-		{&providers.APIError{StatusCode: 400, Code: "invalid_request_error", Message: "model 'missing' not found for this authentication method"}, "The assistant’s model is unavailable. Please try again later. If the problem continues, contact an administrator."},
+		{&providers.APIError{StatusCode: 400, Code: "invalid_request_error", Message: "model 'missing' not found for this authentication method"}, "The assistant’s model is unavailable. If you manage the model, check the configured model and provider access, or choose another available model. Otherwise, contact an administrator."},
 	}
 	for _, test := range tests {
 		err := newProviderFailureError(test.err, "ERR-123", providers.ClassifyProviderError(test.err))
