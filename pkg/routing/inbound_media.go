@@ -24,6 +24,16 @@ const InboundMediaMaxDownloadBytes int64 = 64 * 1024 * 1024
 
 var ErrInboundMediaTooLarge = errors.New("attachment exceeds size limit")
 
+type InboundMediaSizeError struct {
+	Limit int64
+	Size  int64 // -1 when the complete size is unknown.
+}
+
+func (e *InboundMediaSizeError) Error() string {
+	return fmt.Sprintf("%v: %d bytes", ErrInboundMediaTooLarge, e.Limit)
+}
+func (e *InboundMediaSizeError) Unwrap() error { return ErrInboundMediaTooLarge }
+
 func PrepareInboundMedia(ctx context.Context, workspace string, msg *bus.InboundMessage, urlRewrites map[string]string) error {
 	return prepareInboundMedia(ctx, workspace, msg, urlRewrites)
 }
@@ -236,7 +246,7 @@ func downloadInboundURL(ctx context.Context, sourceURL, destPath string, maxByte
 		return fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}
 	if resp.ContentLength > maxBytes {
-		return fmt.Errorf("%w: %d bytes", ErrInboundMediaTooLarge, maxBytes)
+		return &InboundMediaSizeError{Limit: maxBytes, Size: resp.ContentLength}
 	}
 	return writeInboundFile(io.LimitReader(resp.Body, maxBytes+1), destPath, maxBytes)
 }
@@ -247,7 +257,7 @@ func copyInboundFile(sourcePath, destPath string, maxBytes int64) error {
 		return err
 	}
 	if info.Size() > maxBytes {
-		return fmt.Errorf("%w: %d bytes", ErrInboundMediaTooLarge, maxBytes)
+		return &InboundMediaSizeError{Limit: maxBytes, Size: info.Size()}
 	}
 	in, err := os.Open(sourcePath)
 	if err != nil {
@@ -271,7 +281,7 @@ func writeInboundFile(r io.Reader, destPath string, maxBytes int64) error {
 		var n int
 		n, err = io.ReadFull(r, extra[:])
 		if n > 0 {
-			err = fmt.Errorf("%w: %d bytes", ErrInboundMediaTooLarge, maxBytes)
+			err = &InboundMediaSizeError{Limit: maxBytes, Size: -1}
 		}
 	}
 	if err != nil && err != io.EOF {
