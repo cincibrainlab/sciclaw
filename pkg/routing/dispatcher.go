@@ -154,8 +154,11 @@ func (d *Dispatcher) dispatchResolved(ctx context.Context, task dispatchTask) {
 			"workspace": task.target.Workspace,
 			"reason":    err.Error(),
 		})
-		d.sendInboundMediaStageError(ctx, msg, err)
-		return
+		if ctx.Err() != nil {
+			return
+		}
+		msg.Media = nil
+		msg.Content = appendInboundContent(msg.Content, "Attachments could not be staged locally.")
 	}
 	if jobs := d.getJobManager(); jobs != nil && jobs.ShouldHandleChannel(msg.Channel) {
 		if err := jobs.Submit(ctx, task.target, msg); err != nil {
@@ -275,21 +278,6 @@ func (d *Dispatcher) sendJobSubmitError(ctx context.Context, msg bus.InboundMess
 		return
 	}
 	content := "Failed to start background job"
-	if detail := strings.TrimSpace(err.Error()); detail != "" {
-		content += ": " + detail
-	}
-	d.bus.PublishOutbound(ctx, bus.OutboundMessage{
-		Channel: msg.Channel,
-		ChatID:  msg.ChatID,
-		Content: content,
-	})
-}
-
-func (d *Dispatcher) sendInboundMediaStageError(ctx context.Context, msg bus.InboundMessage, err error) {
-	if constants.IsInternalChannel(msg.Channel) {
-		return
-	}
-	content := "Failed to stage inbound attachments"
 	if detail := strings.TrimSpace(err.Error()); detail != "" {
 		content += ": " + detail
 	}
