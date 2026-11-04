@@ -5,7 +5,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 
 export function parseCallArguments(argv: string[]): { tool: string; arguments: Record<string, unknown> } {
   if (argv.length !== 3 || argv[0] !== "call") {
-    throw new Error("usage: mcp-server-cli call <tool-name> '<json-arguments>'");
+    throw new Error("usage: mcp-server-cli call <tool-name> '<json-arguments>' | --stdin");
   }
 
   let parsed: unknown;
@@ -41,7 +41,11 @@ export async function callTool(
 }
 
 async function main() {
-  const request = parseCallArguments(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  if (argv.length === 3 && argv[0] === "call" && argv[2] === "--stdin") {
+    argv[2] = await Bun.stdin.text();
+  }
+  const request = parseCallArguments(argv);
   const result = await callTool(request.tool, request.arguments);
   console.log(JSON.stringify(result, null, 2));
   if ("isError" in result && result.isError) process.exitCode = 1;
