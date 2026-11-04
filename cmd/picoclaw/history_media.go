@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"path"
@@ -16,8 +17,15 @@ import (
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
+// Cache entries may be edited by agents, so exceeding the limit rejects new files.
+const historyCacheMaxBytes int64 = 1024 * 1024 * 1024
+
 // History uses a stable, separate cache so retries do not replace agent-edited files.
 func stageHistoryAttachment(ctx context.Context, workspace, channel, message string, index int, mediaID, source string, rewrites map[string]string) (string, error) {
+	return stageHistoryAttachmentWithQuota(ctx, workspace, channel, message, index, mediaID, source, rewrites, historyCacheMaxBytes)
+}
+
+func stageHistoryAttachmentWithQuota(ctx context.Context, workspace, channel, message string, index int, mediaID, source string, rewrites map[string]string, quota int64) (string, error) {
 	identity := source
 	if mediaID != "" {
 		identity = mediaID
@@ -49,13 +57,47 @@ func stageHistoryAttachment(ctx context.Context, workspace, channel, message str
 	if err := os.MkdirAll(root, 0755); err != nil {
 		return "", err
 	}
+	// Hold the workspace lock through download so partial files count against the quota.
+	lock, err := lockHistoryCache(ctx, root)
+	if err != nil {
+		return "", err
+	}
+	defer lock.Close()
+	if info, err := os.Lstat(dest); err == nil {
+		if !info.Mode().IsRegular() {
+			return "", fmt.Errorf("history cache path is not a regular file")
+		}
+		return filepath.ToSlash(rel), nil
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+	var used int64
+	if err := filepath.WalkDir(root, func(_ string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type().IsRegular() {
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			used += info.Size()
+		}
+		return nil
+	}); err != nil {
+		return "", err
+	}
+	remaining := quota - used
+	if remaining <= 0 {
+		return "", fmt.Errorf("history attachment cache quota exhausted")
+	}
 	temp, err := os.MkdirTemp(root, ".stage-")
 	if err != nil {
 		return "", err
 	}
 	defer os.RemoveAll(temp)
 	inbound := bus.InboundMessage{Channel: "discord-history", Media: []string{source}, Metadata: map[string]string{"message_id": message}}
-	if err := routing.PrepareInboundMedia(ctx, temp, &inbound, rewrites); err != nil {
+	if err := routing.PrepareInboundMediaWithLimit(ctx, temp, &inbound, rewrites, remaining); err != nil {
 		return "", err
 	}
 	if len(inbound.Media) != 1 {

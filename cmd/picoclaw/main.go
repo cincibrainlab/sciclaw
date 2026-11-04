@@ -3024,15 +3024,12 @@ func runGatewayDefaultDispatch(ctx context.Context, msgBus *bus.MessageBus, agen
 				msg.Cleanup()
 				msg.Cleanup = nil
 			}
-			if err := stageErr; err != nil {
-				if !constants.IsInternalChannel(msg.Channel) {
-					_ = msgBus.PublishOutbound(ctx, bus.OutboundMessage{
-						Channel: msg.Channel,
-						ChatID:  msg.ChatID,
-						Content: fmt.Sprintf("Failed to stage inbound attachments: %v", err),
-					})
+			if stageErr != nil {
+				if ctx.Err() != nil {
+					return
 				}
-				continue
+				msg.Media = nil
+				msg.Content = strings.TrimSpace(msg.Content) + "\nAttachments could not be staged locally."
 			}
 			if jobManager != nil && jobManager.ShouldHandleChannel(msg.Channel) {
 				if err := jobManager.Submit(ctx, target, msg); err != nil && !constants.IsInternalChannel(msg.Channel) {
