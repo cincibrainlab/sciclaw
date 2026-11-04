@@ -13,6 +13,7 @@ type ChannelHistoryMessage struct {
 	Author    string
 	Content   string
 	Media     []string
+	MediaIDs  []string
 	Timestamp string
 }
 
@@ -20,7 +21,7 @@ type ChannelHistoryMessage struct {
 // channelID is the platform-specific channel/chat ID.
 // limit is the max number of messages to return (capped by the callback).
 // beforeID, if non-empty, fetches messages before this message ID (for pagination).
-type FetchChannelHistoryCallback func(ctx context.Context, channelID string, limit int, beforeID string) ([]ChannelHistoryMessage, error)
+type FetchChannelHistoryCallback func(ctx context.Context, channelID string, limit int, beforeID string, attachmentOffset int) ([]ChannelHistoryMessage, error)
 
 type ChannelHistoryTool struct {
 	fetchCallback  FetchChannelHistoryCallback
@@ -48,6 +49,10 @@ func (t *ChannelHistoryTool) Parameters() map[string]interface{} {
 			"limit": map[string]interface{}{
 				"type":        "integer",
 				"description": "Number of messages to fetch (default 50, max 100)",
+			},
+			"attachment_offset": map[string]interface{}{
+				"type":        "integer",
+				"description": "Skip this many attachments, newest messages first; reuse limit and before to fetch the next attachment page",
 			},
 			"before": map[string]interface{}{
 				"type":        "string",
@@ -102,7 +107,11 @@ func (t *ChannelHistoryTool) Execute(ctx context.Context, args map[string]interf
 
 	beforeID, _ := args["before"].(string)
 
-	messages, err := fetchCallback(ctx, defaultChatID, limit, beforeID)
+	attachmentOffset := 0
+	if offset, ok := args["attachment_offset"].(float64); ok && offset > 0 && offset <= 100000 {
+		attachmentOffset = int(offset)
+	}
+	messages, err := fetchCallback(ctx, defaultChatID, limit, beforeID, attachmentOffset)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("failed to fetch channel history: %v", err))
 	}
@@ -120,7 +129,11 @@ func (t *ChannelHistoryTool) Execute(ctx context.Context, args map[string]interf
 		if content == "" {
 			content = "[no text content]"
 		}
-		sb.WriteString(fmt.Sprintf("[%s] %s: %s\n", ts, author, content))
+		if msg.ID != "" {
+			sb.WriteString(fmt.Sprintf("[%s] %s (id: %s): %s\n", ts, author, msg.ID, content))
+		} else {
+			sb.WriteString(fmt.Sprintf("[%s] %s: %s\n", ts, author, content))
+		}
 	}
 
 	return NewToolResult(sb.String())
