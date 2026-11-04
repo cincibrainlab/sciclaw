@@ -2,7 +2,7 @@
 
 ## Status
 
-Implemented on `main`, then partially superseded by the cleaner read-only-task framing in [btw-side-lane-rfc.md](/Users/ernie/Documents/irl_projects/260212-sciclaw/docs/issues/btw-side-lane-rfc.md).
+Implemented on `main`, then partially superseded by the cleaner read-only-task framing in [btw-side-lane-rfc.md](/Users/ernie/Documents/irl_projects/260212-sciclaw/docs/design/btw-side-lane-rfc.md).
 
 Use this document as implementation history for:
 - queue-first main jobs

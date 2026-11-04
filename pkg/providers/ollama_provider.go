@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -98,12 +97,12 @@ func (p *OllamaProvider) Chat(ctx context.Context, messages []Message, tools []T
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readProviderResponse(resp)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read ollama response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ollama API request failed:\n  Status: %d\n  Body:   %s", resp.StatusCode, string(body))
+		return nil, NewAPIError("Ollama", resp, body)
 	}
 
 	return parseOllamaChatResponse(body)

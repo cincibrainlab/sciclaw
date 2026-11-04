@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,12 +23,12 @@ import (
 )
 
 const (
-	transcriptionTimeout = 30 * time.Second
-	sendTimeout          = 10 * time.Second
-	typingInterval       = 8 * time.Second
-	maxTypingDuration    = 3 * time.Minute // safety net: auto-cancel typing if stopTyping is never called
-	discordMaxRunes      = 2000
-	discordMaxFileBytes  = 25 * 1024 * 1024
+	transcriptionTimeout   = 30 * time.Second
+	sendTimeout            = 10 * time.Second
+	typingInterval         = 8 * time.Second
+	maxTypingDuration      = 3 * time.Minute // safety net: auto-cancel typing if stopTyping is never called
+	discordMaxRunes        = 2000
+	discordMaxFileBytes    = 25 * 1024 * 1024
 	discordInboundDedupTTL = 2 * time.Minute
 )
 
@@ -52,9 +53,9 @@ type DiscordChannel struct {
 	config      config.DiscordConfig
 	transcriber *voice.GroqTranscriber
 	ctx         context.Context
-	botUserID  string
-	botRoleMu  sync.Mutex
-	botRoleIDs map[string]bool // managed role IDs discovered lazily per guild
+	botUserID   string
+	botRoleMu   sync.Mutex
+	botRoleIDs  map[string]bool // managed role IDs discovered lazily per guild
 
 	typingMu              sync.Mutex
 	typing                map[string]*typingState
@@ -70,8 +71,14 @@ type DiscordChannel struct {
 	createCommandFn       func(appID, guildID string, cmd *discordgo.ApplicationCommand) (*discordgo.ApplicationCommand, error)
 	editCommandFn         func(appID, guildID, cmdID string, cmd *discordgo.ApplicationCommand) (*discordgo.ApplicationCommand, error)
 	skillCatalogFn        func(channelID, guildID, userID string) ([]SlashSkillChoice, error)
+	themeSetFn            func(senderID, displayName, theme string) error
 	inboundMu             sync.Mutex
 	recentInbound         map[string]inboundMessageFingerprint
+}
+
+// SetThemeHandler sets the callback for the /theme slash command.
+func (c *DiscordChannel) SetThemeHandler(fn func(senderID, displayName, theme string) error) {
+	c.themeSetFn = fn
 }
 
 func NewDiscordChannel(cfg config.DiscordConfig, messageBus *bus.MessageBus) (*DiscordChannel, error) {
@@ -323,7 +330,7 @@ func (c *DiscordChannel) Send(ctx context.Context, msg bus.OutboundMessage) erro
 		return fmt.Errorf("channel ID is empty")
 	}
 
-	message := msg.Content
+	message := discordOutboundContent(msg)
 	if strings.TrimSpace(message) == "" {
 		message = "[empty message]"
 	}
@@ -357,6 +364,32 @@ func (c *DiscordChannel) Send(ctx context.Context, msg bus.OutboundMessage) erro
 	case <-sendCtx.Done():
 		return fmt.Errorf("send message timeout: %w", sendCtx.Err())
 	}
+}
+
+func discordOutboundContent(msg bus.OutboundMessage) string {
+	content := msg.Content
+	if msg.Error == nil || strings.TrimSpace(msg.Error.TechnicalDetails) == "" {
+		return content
+	}
+	details := discordTechnicalDetails(msg.Error.TechnicalDetails)
+	if details == "" {
+		return content
+	}
+	return content + "\n\nTechnical details: ||" + details + "||"
+}
+
+func discordTechnicalDetails(details string) string {
+	var safe []string
+	for _, detail := range strings.Split(details, "\n") {
+		detail = strings.TrimSpace(detail)
+		switch {
+		case strings.HasPrefix(detail, "Status: "):
+			if status, err := strconv.Atoi(strings.TrimPrefix(detail, "Status: ")); err == nil && status >= 100 && status <= 599 {
+				safe = append(safe, fmt.Sprintf("Status: %d", status))
+			}
+		}
+	}
+	return strings.Join(safe, "\n")
 }
 
 func (c *DiscordChannel) SendOrEditProgress(ctx context.Context, chatID, messageID string, msg bus.OutboundMessage) (string, error) {
@@ -474,6 +507,26 @@ func buildSkillSlashCommand() *discordgo.ApplicationCommand {
 				Description: "The task to perform with that skill",
 				Type:        discordgo.ApplicationCommandOptionString,
 				Required:    true,
+			},
+		},
+	}
+}
+
+func buildThemeSlashCommand() *discordgo.ApplicationCommand {
+	return &discordgo.ApplicationCommand{
+		Name:        "theme",
+		Description: "Set your answer theme (clear, formal, brief)",
+		Options: []*discordgo.ApplicationCommandOption{
+			{
+				Name:        "style",
+				Description: "Answer theme to use",
+				Type:        discordgo.ApplicationCommandOptionString,
+				Required:    true,
+				Choices: []*discordgo.ApplicationCommandOptionChoice{
+					{Name: "Clear (default — plain language, dense prose)", Value: "clear"},
+					{Name: "Formal (academic, publication-ready)", Value: "formal"},
+					{Name: "Brief (3-5 sentences max)", Value: "brief"},
+				},
 			},
 		},
 	}
@@ -620,7 +673,7 @@ func (c *DiscordChannel) ensureSlashCommands() error {
 		}
 		existingByName[existing.Name] = existing
 	}
-	for _, cmd := range []*discordgo.ApplicationCommand{buildBTWSlashCommand(), buildSkillSlashCommand()} {
+	for _, cmd := range []*discordgo.ApplicationCommand{buildBTWSlashCommand(), buildSkillSlashCommand(), buildThemeSlashCommand()} {
 		existing := existingByName[cmd.Name]
 		if existing == nil {
 			if _, err := c.createCommandFn(c.botUserID, "", cmd); err != nil {
@@ -670,6 +723,8 @@ func (c *DiscordChannel) handleInteractionCreate(_ *discordgo.Session, i *discor
 		c.handleBTWInteraction(i, data)
 	case "skill":
 		c.handleSkillInteraction(i, data)
+	case "theme":
+		c.handleThemeInteraction(i, data)
 	}
 }
 
@@ -820,6 +875,45 @@ func (c *DiscordChannel) handleSkillInteraction(i *discordgo.InteractionCreate, 
 	metadata := buildSlashMetadata(i.Interaction, data.Name, author)
 	metadata["requested_skill_name"] = selected.Name
 	c.publishSlashTask(i, author, skillSlashContent(selected.Name, prompt), metadata, fmt.Sprintf("Started. I’m using the skill %q and will reply in the channel below.", selected.Name))
+}
+
+func (c *DiscordChannel) handleThemeInteraction(i *discordgo.InteractionCreate, data discordgo.ApplicationCommandInteractionData) {
+	style := slashOptionString(data.Options, "style")
+	if style == "" {
+		c.respondInteractionEphemeral(i.Interaction, "Please select a theme.")
+		return
+	}
+	author := interactionAuthor(i.Interaction)
+	if author == nil {
+		return
+	}
+	if !c.IsAllowed(author.ID) {
+		c.respondInteractionEphemeral(i.Interaction, "You are not allowed to use this sciClaw bot.")
+		return
+	}
+	if c.themeSetFn == nil {
+		c.respondInteractionEphemeral(i.Interaction, "Theme preferences are not configured on this sciClaw instance.")
+		return
+	}
+	if err := c.themeSetFn("discord:"+author.ID, author.Username, style); err != nil {
+		c.respondInteractionEphemeral(i.Interaction, fmt.Sprintf("Failed to set theme: %v", err))
+		return
+	}
+	label := strings.ToUpper(style[:1]) + style[1:]
+	c.respondInteractionEphemeral(i.Interaction, fmt.Sprintf("Answer theme set to **%s**. I'll use this style for all your messages.", label))
+}
+
+func (c *DiscordChannel) respondInteractionEphemeral(interaction *discordgo.Interaction, content string) {
+	if c.interactionRespondFn == nil {
+		return
+	}
+	c.interactionRespondFn(interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content: content,
+			Flags:   discordgo.MessageFlagsEphemeral,
+		},
+	})
 }
 
 func (c *DiscordChannel) handleMessageUpdate(s *discordgo.Session, m *discordgo.MessageUpdate) {

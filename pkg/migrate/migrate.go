@@ -1,6 +1,7 @@
 package migrate
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -147,21 +148,58 @@ func runPicoClawConfigMigration(opts Options, picoClawHome string) (*Result, err
 		}
 	}
 
-	cfg, err := config.LoadConfig(source)
+	data, err := os.ReadFile(source)
 	if err != nil {
+		return nil, fmt.Errorf("reading PicoClaw config: %w", err)
+	}
+	var cfg config.Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("loading PicoClaw config: %w", err)
 	}
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(data, &root); err != nil || root == nil {
+		return nil, fmt.Errorf("PicoClaw config must be a JSON object")
+	}
+	var agents, defaults map[string]json.RawMessage
+	if len(root["agents"]) > 0 && string(root["agents"]) != "null" {
+		if err := json.Unmarshal(root["agents"], &agents); err != nil {
+			return nil, fmt.Errorf("loading PicoClaw agents: %w", err)
+		}
+	}
+	if len(agents["defaults"]) > 0 && string(agents["defaults"]) != "null" {
+		if err := json.Unmarshal(agents["defaults"], &defaults); err != nil {
+			return nil, fmt.Errorf("loading PicoClaw defaults: %w", err)
+		}
+	}
+	changed := false
 	legacyWorkspace := filepath.Join(legacyHome, "workspace")
-	for _, workspace := range []*string{&cfg.Agents.Defaults.Workspace, &cfg.Agents.Defaults.SharedWorkspace} {
-		if filepath.Clean(*workspace) == legacyWorkspace || *workspace == "~/.picoclaw/workspace" {
-			*workspace = paths.DefaultWorkspace()
+	for _, key := range []string{"workspace", "shared_workspace"} {
+		var workspace string
+		if json.Unmarshal(defaults[key], &workspace) == nil && (filepath.Clean(workspace) == legacyWorkspace || workspace == "~/.picoclaw/workspace") {
+			defaults[key], _ = json.Marshal(paths.DefaultWorkspace())
+			changed = true
+		}
+	}
+	if changed {
+		agents["defaults"], _ = json.Marshal(defaults)
+		root["agents"], _ = json.Marshal(agents)
+		data, err = json.MarshalIndent(root, "", "  ")
+		if err != nil {
+			return nil, fmt.Errorf("encoding PicoClaw config: %w", err)
 		}
 	}
 	if err := paths.EnsureStateLayout(); err != nil {
 		return nil, err
 	}
-	if err := config.SaveConfig(destination, cfg); err != nil {
-		return nil, fmt.Errorf("saving SciClaw config: %w", err)
+	file, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return nil, fmt.Errorf("creating SciClaw config without overwriting: %w", err)
+	}
+	_, writeErr := file.Write(data)
+	closeErr := file.Close()
+	if writeErr != nil || closeErr != nil {
+		_ = os.Remove(destination)
+		return nil, fmt.Errorf("saving SciClaw config: %v %v", writeErr, closeErr)
 	}
 	return &Result{ConfigMigrated: true}, nil
 }

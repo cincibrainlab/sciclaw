@@ -2,15 +2,19 @@ package providers
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
 	"github.com/sipeed/picoclaw/pkg/auth"
+	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/transport"
 )
 
@@ -20,12 +24,29 @@ type CodexProvider struct {
 	tokenSource func() (string, string, error)
 }
 
+// Codex ChatGPT OAuth routes GPT-5.6 models (esp. Luna) by client identity.
+// Catalog metadata sets minimal_client_version=0.144.0; without originator+version
+// Luna returns HTTP 404 "Model not found". Match current Codex CLI identity.
+const (
+	codexCLIOriginator = "codex_cli_rs"
+	codexCLIVersion    = "0.144.1"
+)
+
+func appendCodexIdentityHeaders(opts []option.RequestOption) []option.RequestOption {
+	return append(opts,
+		option.WithHeader("originator", codexCLIOriginator),
+		option.WithHeader("version", codexCLIVersion),
+		option.WithHeader("User-Agent", codexCLIOriginator+"/"+codexCLIVersion),
+	)
+}
+
 func NewCodexProvider(token, accountID string) *CodexProvider {
 	opts := []option.RequestOption{
 		option.WithBaseURL("https://chatgpt.com/backend-api/codex"),
 		option.WithAPIKey(token),
 		option.WithHTTPClient(transport.NewCloudflareClient()),
 	}
+	opts = appendCodexIdentityHeaders(opts)
 	if accountID != "" {
 		opts = append(opts, option.WithHeader("Chatgpt-Account-Id", accountID))
 	}
@@ -43,7 +64,21 @@ func NewCodexProviderWithTokenSource(token, accountID string, tokenSource func()
 }
 
 func (p *CodexProvider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition, model string, options map[string]interface{}) (*LLMResponse, error) {
+	accountID := p.accountID
+	resolvedModel, fallbackReason, err := resolveCodexModel(model)
+	if err != nil {
+		return nil, err
+	}
+	if fallbackReason != "" {
+		logger.WarnCF("provider.codex", "Requested model is not compatible with Codex backend, using fallback", map[string]interface{}{
+			"requested_model": model,
+			"resolved_model":  resolvedModel,
+			"reason":          fallbackReason,
+		})
+	}
+
 	var opts []option.RequestOption
+	opts = appendCodexIdentityHeaders(opts)
 	if p.tokenSource != nil {
 		tok, accID, err := p.tokenSource()
 		if err != nil {
@@ -51,11 +86,14 @@ func (p *CodexProvider) Chat(ctx context.Context, messages []Message, tools []To
 		}
 		opts = append(opts, option.WithAPIKey(tok))
 		if accID != "" {
-			opts = append(opts, option.WithHeader("Chatgpt-Account-Id", accID))
+			accountID = accID
 		}
 	}
+	if accountID != "" {
+		opts = append(opts, option.WithHeader("Chatgpt-Account-Id", accountID))
+	}
 
-	params := buildCodexParams(messages, tools, model, options)
+	params := buildCodexParams(messages, tools, resolvedModel, options)
 
 	// Set reasoning effort if provided (critical for o-series and codex models).
 	if effort, ok := options["reasoning_effort"].(string); ok && effort != "" {
@@ -71,36 +109,155 @@ func (p *CodexProvider) Chat(ctx context.Context, messages []Message, tools []To
 	defer stream.Close()
 
 	var finalResp *responses.Response
+	// Collect output items from ResponseOutputItemDoneEvent because
+	// ResponseCompletedEvent.Response.Output may be empty (known backend bug:
+	// content is delivered via output_item.done events, not in the completed payload).
+	var collectedOutputItems []responses.ResponseOutputItemUnion
+	// Also accumulate output_text deltas: completed payloads can have null/empty
+	// output even when deltas streamed valid text (upstream 2026-05-30).
+	var streamedText strings.Builder
 	for stream.Next() {
 		switch event := stream.Current().AsAny().(type) {
+		case responses.ResponseTextDeltaEvent:
+			streamedText.WriteString(event.Delta)
+		case responses.ResponseOutputItemDoneEvent:
+			collectedOutputItems = append(collectedOutputItems, event.Item)
 		case responses.ResponseCompletedEvent:
 			resp := event.Response
 			finalResp = &resp
 		case responses.ResponseIncompleteEvent:
-			// Keep the incomplete response payload so callers can map finish reason.
 			resp := event.Response
 			finalResp = &resp
 		case responses.ResponseErrorEvent:
+			message := event.Message
 			if event.Param != "" {
-				return nil, fmt.Errorf("response error (%s): %s (param=%s)", event.Code, event.Message, event.Param)
+				message += fmt.Sprintf(" (param=%s)", event.Param)
 			}
-			return nil, fmt.Errorf("response error (%s): %s", event.Code, event.Message)
+			cause := fmt.Errorf("response error (%s): %s", event.Code, message)
+			apiErr := newAPIError("Codex", nil, []byte(event.RawJSON()), cause)
+			apiErr.Code, apiErr.Message = event.Code, message
+			return nil, apiErr
 		case responses.ResponseFailedEvent:
-			return nil, fmt.Errorf("response failed with status %q", event.Response.Status)
+			message := event.Response.Error.Message
+			if message == "" {
+				message = fmt.Sprintf("response failed with status %q", event.Response.Status)
+			}
+			apiErr := newAPIError("Codex", nil, []byte(event.Response.Error.RawJSON()), errors.New(message))
+			apiErr.Code, apiErr.Message = string(event.Response.Error.Code), message
+			return nil, apiErr
 		}
 	}
 	if err := stream.Err(); err != nil {
+		logger.ErrorCF("provider.codex", "Codex API call failed", codexAPIErrorFields(err, model, resolvedModel, len(messages), len(tools), accountID != ""))
+		var sdkErr *openai.Error
+		if errors.As(err, &sdkErr) {
+			return nil, newAPIError("Codex", sdkErr.Response, []byte(sdkErr.RawJSON()), err)
+		}
 		return nil, fmt.Errorf("codex API call: %w", err)
 	}
 	if finalResp == nil {
 		return nil, fmt.Errorf("codex API call: stream ended without a response payload")
 	}
 
-	return parseCodexResponse(finalResp), nil
+	// If the completed response has an empty Output array but we collected
+	// items from output_item.done events, inject them.
+	if len(finalResp.Output) == 0 && len(collectedOutputItems) > 0 {
+		finalResp.Output = collectedOutputItems
+	}
+
+	parsed := parseCodexResponse(finalResp)
+	if parsed.Content == "" && streamedText.Len() > 0 && finalResp.Status != "incomplete" {
+		parsed.Content = streamedText.String()
+	}
+	if finalResp.Status == "incomplete" {
+		partialChars := len(parsed.Content)
+		if partialChars == 0 {
+			partialChars = streamedText.Len()
+		}
+		return parsed, fmt.Errorf("codex response incomplete (truncated; %d partial chars)", partialChars)
+	}
+	return parsed, nil
+}
+
+// resolveCodexModel maps a requested model onto one the Codex backend accepts.
+// Empty models and known Codex-incompatible GPT ids fall back to GetDefaultModel
+// with a reason for logging. Wrong-family / unrecognized ids return an error
+// instead of silently answering as Sol.
+func resolveCodexModel(model string) (string, string, error) {
+	fallback := (&CodexProvider{}).GetDefaultModel()
+	m := strings.ToLower(strings.TrimSpace(model))
+	if m == "" {
+		return fallback, "empty model", nil
+	}
+
+	if after, ok := strings.CutPrefix(m, "openai/"); ok {
+		m = after
+	} else if strings.Contains(m, "/") {
+		return "", "", fmt.Errorf("codex backend cannot use non-openai model %q", model)
+	}
+
+	unsupportedPrefixes := []string{
+		"glm", "claude", "anthropic", "gemini", "google", "moonshot", "kimi",
+		"qwen", "deepseek", "llama", "meta-llama", "mistral", "grok", "xai", "zhipu",
+	}
+	for _, prefix := range unsupportedPrefixes {
+		if strings.HasPrefix(m, prefix) {
+			return "", "", fmt.Errorf("codex backend cannot use model %q", model)
+		}
+	}
+
+	// Plain gpt-5.2 (non-codex) 400s on Codex + ChatGPT account; remap to Sol.
+	if isCodexIncompatibleGPT(m) {
+		return fallback, "codex-incompatible model", nil
+	}
+
+	// Align with models.ResolveProvider OpenAI family: gpt / o1 / o3 / o4 / codex.
+	if strings.HasPrefix(m, "gpt-") || strings.HasPrefix(m, "o1") || strings.HasPrefix(m, "o3") || strings.HasPrefix(m, "o4") || strings.HasPrefix(m, "codex") {
+		return m, "", nil
+	}
+
+	return "", "", fmt.Errorf("codex backend cannot use unrecognized model %q", model)
+}
+
+func isCodexIncompatibleGPT(m string) bool {
+	switch m {
+	case "gpt-5.2", "gpt-5.2-2025-12-11", "gpt-5.2-chat-latest", "gpt-5.2-pro", "gpt-5.2-pro-2025-12-11":
+		return true
+	default:
+		return false
+	}
+}
+
+// codexAPIErrorFields builds structured log fields for stream errors without
+// dumping request bodies or Authorization headers.
+func codexAPIErrorFields(err error, requestedModel, resolvedModel string, messagesCount, toolsCount int, accountIDPresent bool) map[string]interface{} {
+	fields := map[string]interface{}{
+		"requested_model":    requestedModel,
+		"resolved_model":     resolvedModel,
+		"messages_count":     messagesCount,
+		"tools_count":        toolsCount,
+		"account_id_present": accountIDPresent,
+		"error":              err.Error(),
+	}
+	var apiErr *openai.Error
+	if errors.As(err, &apiErr) {
+		fields["status_code"] = apiErr.StatusCode
+		fields["api_type"] = apiErr.Type
+		fields["api_code"] = apiErr.Code
+		fields["api_param"] = apiErr.Param
+		fields["api_message"] = apiErr.Message
+		if apiErr.StatusCode == 400 {
+			fields["hint"] = "verify account id header and model compatibility for codex backend"
+		}
+		if apiErr.Response != nil {
+			fields["request_id"] = apiErr.Response.Header.Get("x-request-id")
+		}
+	}
+	return fields
 }
 
 func (p *CodexProvider) GetDefaultModel() string {
-	return "gpt-5.2"
+	return "gpt-5.6-sol"
 }
 
 func buildCodexParams(messages []Message, tools []ToolDefinition, model string, options map[string]interface{}) responses.ResponseNewParams {
@@ -220,7 +377,7 @@ func resolveToolCallArguments(tc ToolCall) string {
 }
 
 func translateToolsForCodex(tools []ToolDefinition) []responses.ToolUnionParam {
-	result := make([]responses.ToolUnionParam, 0, len(tools))
+	result := make([]responses.ToolUnionParam, 0, len(tools)+1)
 	for _, t := range tools {
 		ft := responses.FunctionToolParam{
 			Name:       t.Function.Name,
@@ -232,12 +389,21 @@ func translateToolsForCodex(tools []ToolDefinition) []responses.ToolUnionParam {
 		}
 		result = append(result, responses.ToolUnionParam{OfFunction: &ft})
 	}
+	// Hosted Responses image tool. Microtested against chatgpt.com Codex backend
+	// with gpt-5.5 OAuth: the model emits image_generation_call items when asked
+	// to generate an image. Keep this ahead of function tools so the model can
+	// choose it without a local generate_image function.
+	result = append(result, responses.ToolUnionParam{
+		OfImageGeneration: &responses.ToolImageGenerationParam{},
+	})
 	return result
 }
 
 func parseCodexResponse(resp *responses.Response) *LLMResponse {
 	var content strings.Builder
 	var toolCalls []ToolCall
+	var media []MediaAttachment
+	imageIndex := 0
 
 	for _, item := range resp.Output {
 		switch item.Type {
@@ -257,6 +423,11 @@ func parseCodexResponse(resp *responses.Response) *LLMResponse {
 				Name:      item.Name,
 				Arguments: args,
 			})
+		case "image_generation_call":
+			if att, ok := mediaFromCodexImageCall(item.Result, imageIndex); ok {
+				media = append(media, att)
+				imageIndex++
+			}
 		}
 	}
 
@@ -280,9 +451,33 @@ func parseCodexResponse(resp *responses.Response) *LLMResponse {
 	return &LLMResponse{
 		Content:      content.String(),
 		ToolCalls:    toolCalls,
+		Media:        media,
 		FinishReason: finishReason,
 		Usage:        usage,
 	}
+}
+
+func mediaFromCodexImageCall(result string, index int) (MediaAttachment, bool) {
+	raw := strings.TrimSpace(result)
+	if raw == "" {
+		return MediaAttachment{}, false
+	}
+	if comma := strings.Index(raw, ","); strings.HasPrefix(raw, "data:") && comma > 0 {
+		raw = raw[comma+1:]
+	}
+	data, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		data, err = base64.RawStdEncoding.DecodeString(raw)
+	}
+	if err != nil || len(data) == 0 {
+		return MediaAttachment{}, false
+	}
+	filename := fmt.Sprintf("generated-%s-%d.png", time.Now().UTC().Format("20060102-150405"), index+1)
+	return MediaAttachment{
+		Filename: filename,
+		MIME:     "image/png",
+		Data:     data,
+	}, true
 }
 
 func createCodexTokenSource() func() (string, string, error) {

@@ -76,7 +76,11 @@ auth.json
 # Local agent scratch
 .agent/
 output/correspondences/
-.agents/
+.agents/*
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/ship-job/
+!.agents/skills/ship-job/**
 .cache/
 .claude/
 .factory/
@@ -90,3 +94,7 @@ docs/v*-thread.html
 manuscript/
 
 env.local
+
+# Private key material
+*.key
+*.pem

@@ -250,17 +250,369 @@
           <div class="track">
             <strong>Stable channel</strong>
             <code>brew install sciclaw</code>
-            <div class="meta">Production track. Current public stable: <strong>v0.2.3</strong>.</div>
+            <div class="meta">Production track. Current public stable: <strong>v0.3.9</strong>.</div>
           </div>
           <div class="track">
             <strong>Dev channel</strong>
             <code>brew install sciclaw-dev</code>
-            <div class="meta">Preview track for upcoming features and fixes. Current preview: <strong>v0.2.4-dev.20</strong>.</div>
+            <div class="meta">Preview track for upcoming features and fixes. Current preview: <strong>v0.3.9</strong> (stable).</div>
           </div>
         </div>
       </section>
 
       <section class="timeline">
+
+        <!-- v0.3.9 -->
+        <article class="item">
+          <div class="item-head">
+            <div class="tagline">
+              <span class="tag stable">stable</span>
+              <span class="rel">v0.3.9</span>
+            </div>
+            <span class="date">July 17, 2026</span>
+          </div>
+          <ul>
+            <li><strong>Artifact-aware imagery:</strong> image generation now preserves whether the requested product is a standalone image, a slide asset, an editable PowerPoint, or a complete worded 16:9 slide.</li>
+            <li><strong>Presentation hierarchy:</strong> complete generated slides prioritize the argument, audience-facing wording, integrated exhibit, and takeaway instead of substituting a wordless conceptual illustration.</li>
+            <li><strong>Workspace repair:</strong> the new built-in <code>image-generation</code> skill is installed during onboarding and added to existing workspaces by <code>sciclaw doctor --fix</code>.</li>
+          </ul>
+          <div class="links">
+            <a href="https://github.com/drpedapati/sciclaw/releases/tag/v0.3.9" target="_blank" rel="noopener noreferrer">Release</a>
+            <a href="https://github.com/drpedapati/sciclaw/compare/v0.3.8...v0.3.9" target="_blank" rel="noopener noreferrer">Compare</a>
+            <a href="blog.html#entry-2026-07-17-image-routing">Blog</a>
+          </div>
+        </article>
+
+        <!-- v0.3.8 -->
+        <article class="item">
+          <div class="item-head">
+            <div class="tagline">
+              <span class="tag stable">stable</span>
+              <span class="rel">v0.3.8</span>
+            </div>
+            <span class="date">July 11, 2026</span>
+          </div>
+          <ul>
+            <li><strong>Codex Luna unlock:</strong> ChatGPT OAuth Codex requests now send Codex CLI identity headers (<code>originator</code>, <code>version</code>, versioned <code>User-Agent</code>) so <code>gpt-5.6-luna</code> resolves instead of HTTP 404.</li>
+            <li><strong>Catalog:</strong> <code>gpt-5.6-luna</code> is listed with Sol/Terra. Product default remains <code>gpt-5.6-sol</code> @ low.</li>
+          </ul>
+          <div class="links">
+            <a href="https://github.com/drpedapati/sciclaw/releases/tag/v0.3.8" target="_blank" rel="noopener noreferrer">Release</a>
+            <a href="https://github.com/drpedapati/sciclaw/compare/v0.3.7...v0.3.8" target="_blank" rel="noopener noreferrer">Compare</a>
+            <a href="blog.html#entry-2026-07-11-luna">Blog</a>
+          </div>
+        </article>
+
+        <!-- v0.3.7 -->
+        <article class="item">
+          <div class="item-head">
+            <div class="tagline">
+              <span class="tag stable">stable</span>
+              <span class="rel">v0.3.7</span>
+            </div>
+            <span class="date">July 11, 2026</span>
+          </div>
+          <ul>
+            <li><strong>Default model:</strong> product default is now <code>gpt-5.6-sol</code> at <code>reasoning_effort: low</code> (catalog, config, TUI, docs). Terra remains the cheaper peer; 5.5/5.4 still supported.</li>
+            <li><strong>Codex robustness:</strong> output_text delta fallback for empty completed payloads, structured <code>*openai.Error</code> logging, openai-go 3.22.0, and safer <code>resolveCodexModel</code> (remap known-bad <code>gpt-5.2</code>; reject wrong-family typos instead of silent Sol swap; skip delta fallback on truncated incomplete streams).</li>
+            <li><strong>Incomplete-turn UX:</strong> CLI shows the human status reply without a scary <code>Error:</code> line for soft incomplete turns, but one-shot <code>agent -m</code> still exits non-zero. <code>Error()</code> keeps the short ops reason.</li>
+            <li><strong>Workspace guidance:</strong> AGENTS / imagemagick skill contact-sheet rules (quote paths, no <code>../</code>, fonts, prefer pptx) from the Jul 11 docs cut.</li>
+          </ul>
+          <div class="links">
+            <a href="https://github.com/drpedapati/sciclaw/releases/tag/v0.3.7" target="_blank" rel="noopener noreferrer">Release</a>
+            <a href="https://github.com/drpedapati/sciclaw/compare/v0.3.5...v0.3.7" target="_blank" rel="noopener noreferrer">Compare</a>
+            <a href="blog.html#entry-2026-07-11-sol">Blog</a>
+          </div>
+        </article>
+
+        <!-- Workspace ImageMagick guidance -->
+        <article class="item">
+          <div class="item-head">
+            <div class="tagline">
+              <span class="tag stable">stable</span>
+              <span class="rel">workspace</span>
+            </div>
+            <span class="date">July 11, 2026</span>
+          </div>
+          <ul>
+            <li><strong>ImageMagick / contact-sheet guidance.</strong> Default <code>AGENTS.md</code> now tells agents to quote paths with spaces, never use <code>../</code> in exec (set <code>working_dir</code> and write in-place), prefer a real DejaVu font path or omit labels, and build decks with <code>python-pptx</code> / the <code>pptx</code> skill instead of <code>magick montage</code>.</li>
+            <li><strong>Missing pptx skill.</strong> Template notes that agents must not read a nonexistent <code>skills/pptx/SKILL.md</code> or escape the workspace with path traversal.</li>
+            <li><strong>imagemagick skill.</strong> Contact-sheet recipe updated with explicit font / no-label fallbacks.</li>
+            <li><strong>Public explanation.</strong> <a href="blog.html#entry-2026-07-11-imagemagick">Less Discord thrash on slides and contact sheets</a>.</li>
+          </ul>
+          <div class="links">
+            <a href="blog.html#entry-2026-07-11-imagemagick">Blog</a>
+          </div>
+        </article>
+
+        <!-- v0.3.5 -->
+        <article class="item">
+          <div class="item-head">
+            <div class="tagline">
+              <span class="tag stable">stable</span>
+              <span class="rel">v0.3.5</span>
+            </div>
+            <span class="date">July 8, 2026</span>
+          </div>
+          <ul>
+            <li><strong>Chat image generation.</strong> On the OpenAI Codex/OAuth Responses path, sciClaw exposes the hosted <code>image_generation</code> tool. Ask in Discord or Telegram to generate an illustration and get a PNG attachment back.</li>
+            <li><strong>Workspace artifacts.</strong> Generated images are saved under <code>workspace/artifacts/generated/</code> and delivered through the existing outbound attachment path.</li>
+            <li><strong>Prompt catalog awareness.</strong> When Codex is the active provider, the system prompt lists the provider-hosted image tool so the model knows it is available alongside local tools and skills.</li>
+            <li><strong>Cron startup hardening.</strong> An empty <code>cron/jobs.json</code> is treated as an empty store instead of failing cron startup with <code>unexpected end of JSON input</code>.</li>
+            <li><strong>Toolchain.</strong> Pinned <code>docx-review</code> 1.5.1 and updated CI actions for Node 24.</li>
+            <li><strong>Public explanation.</strong> <a href="blog.html#entry-2026-07-08-image-gen">Chat image generation in Discord and Telegram</a>.</li>
+          </ul>
+          <div class="links">
+            <a href="https://github.com/drpedapati/sciclaw/releases/tag/v0.3.5" target="_blank" rel="noopener noreferrer">Release</a>
+            <a href="https://github.com/drpedapati/sciclaw/compare/v0.3.4...v0.3.5" target="_blank" rel="noopener noreferrer">Compare</a>
+            <a href="blog.html#entry-2026-07-08-image-gen">Blog</a>
+          </div>
+        </article>
+
+        <!-- v0.3.4 -->
+        <article class="item">
+          <div class="item-head">
+            <div class="tagline">
+              <span class="tag stable">stable</span>
+              <span class="rel">v0.3.4</span>
+            </div>
+            <span class="date">May 5, 2026</span>
+          </div>
+          <ul>
+            <li><strong>Curated workspace memory.</strong> Added the dedicated <code>remember</code> tool for durable project facts: method decisions, data provenance, project conventions, canonical artifacts, known recurring issues, open questions, and collaborator preferences.</li>
+            <li><strong>MEMORY.md guardrails.</strong> Generic <code>write_file</code>, <code>edit_file</code>, and <code>append_file</code> calls now refuse direct writes to <code>memory/MEMORY.md</code>. Obvious shell bypasses such as <code>&gt;&gt; memory/MEMORY.md</code> and <code>tee -a MEMORY.md</code> are blocked too.</li>
+            <li><strong>No more execution-log memory.</strong> Routine successful runs, validation summaries, row counts, file sizes, and command transcripts stay in session history, jobs, hooks, artifacts, or output files instead of being injected as long-term memory on every turn.</li>
+            <li><strong>Cleaner workspace templates.</strong> <code>AGENTS.md</code>, <code>HOOKS.md</code>, and the starter <code>MEMORY.md</code> template now describe memory as curated durable context, not runtime state or an activity ledger.</li>
+            <li><strong>Public explanation.</strong> Added the <a href="blog.html#entry-2026-05-05-memory">Memory Is Not a Log File</a> blog post and the curated workspace memory RFC.</li>
+            <li><strong>Release hygiene.</strong> Re-ran Go formatting so GitHub build checks pass from the tagged release commit.</li>
+          </ul>
+          <div class="links">
+            <a href="https://github.com/drpedapati/sciclaw/releases/tag/v0.3.4" target="_blank" rel="noopener noreferrer">Release</a>
+            <a href="https://github.com/drpedapati/sciclaw/compare/v0.3.2...v0.3.4" target="_blank" rel="noopener noreferrer">Compare</a>
+            <a href="blog.html#entry-2026-05-05-memory" target="_blank" rel="noopener noreferrer">Blog</a>
+          </div>
+        </article>
+
+        <!-- v0.3.3 -->
+        <article class="item">
+          <div class="item-head">
+            <div class="tagline">
+              <span class="tag stable">stable</span>
+              <span class="rel">v0.3.3</span>
+            </div>
+            <span class="date">May 5, 2026</span>
+          </div>
+          <ul>
+            <li>First public cut of curated workspace memory. Superseded by <code>v0.3.4</code>, which carries the same feature payload from a CI-clean formatted commit.</li>
+          </ul>
+          <div class="links">
+            <a href="https://github.com/drpedapati/sciclaw/releases/tag/v0.3.3" target="_blank" rel="noopener noreferrer">Release</a>
+            <a href="https://github.com/drpedapati/sciclaw/compare/v0.3.2...v0.3.3" target="_blank" rel="noopener noreferrer">Compare</a>
+          </div>
+        </article>
+
+        <!-- v0.3.2 -->
+        <article class="item">
+          <div class="item-head">
+            <div class="tagline">
+              <span class="tag stable">stable</span>
+              <span class="rel">v0.3.2</span>
+            </div>
+            <span class="date">April 26, 2026</span>
+          </div>
+          <ul>
+            <li>Promoted the <code>gpt-5.5</code> model list update and documentation privacy scrub to the stable channel.</li>
+            <li>Updated README and docs for the current install, upgrade, model, and ctxclaw prompt-inspection workflow.</li>
+          </ul>
+          <div class="links">
+            <a href="https://github.com/drpedapati/sciclaw/releases/tag/v0.3.2" target="_blank" rel="noopener noreferrer">Release</a>
+            <a href="https://github.com/drpedapati/sciclaw/compare/v0.3.1...v0.3.2" target="_blank" rel="noopener noreferrer">Compare</a>
+          </div>
+        </article>
+
+        <!-- v0.3.2-dev.1 -->
+        <article class="item">
+          <div class="item-head">
+            <div class="tagline">
+              <span class="tag dev">dev</span>
+              <span class="rel">v0.3.2-dev.1</span>
+            </div>
+            <span class="date">April 26, 2026</span>
+          </div>
+          <ul>
+            <li>Added <code>gpt-5.5</code> to the OpenAI model list.</li>
+            <li>Scrubbed real Discord user/channel IDs from CLI examples in README and docs. Replaced with placeholder IDs.</li>
+            <li>Added <code>*.key</code> and <code>*.pem</code> to <code>.gitignore</code>.</li>
+          </ul>
+          <div class="links">
+            <a href="https://github.com/drpedapati/sciclaw/releases/tag/v0.3.2-dev.1" target="_blank" rel="noopener noreferrer">Release</a>
+            <a href="https://github.com/drpedapati/sciclaw/compare/v0.3.1...v0.3.2-dev.1" target="_blank" rel="noopener noreferrer">Compare</a>
+          </div>
+        </article>
+
+        <!-- v0.3.1 -->
+        <article class="item">
+          <div class="item-head">
+            <div class="tagline">
+              <span class="tag stable">stable</span>
+              <span class="rel">v0.3.1</span>
+            </div>
+            <span class="date">April 21, 2026</span>
+          </div>
+          <ul>
+            <li>Fixed email delivery on self-hosted Resend instances. The <code>from</code> field now sends the bare email address instead of wrapping it in a display name, which self-hosted builds reject.</li>
+          </ul>
+          <div class="links">
+            <a href="https://github.com/drpedapati/sciclaw/releases/tag/v0.3.1" target="_blank" rel="noopener noreferrer">Release</a>
+            <a href="https://github.com/drpedapati/sciclaw/compare/v0.3.0...v0.3.1" target="_blank" rel="noopener noreferrer">Compare</a>
+          </div>
+        </article>
+
+        <!-- v0.3.0 -->
+        <article class="item">
+          <div class="item-head">
+            <div class="tagline">
+              <span class="tag stable">stable</span>
+              <span class="rel">v0.3.0</span>
+            </div>
+            <span class="date">April 21, 2026</span>
+          </div>
+          <ul>
+            <li><strong>Addon system.</strong> sciClaw can now host optional capabilities as installable addons. Addons are separate git repos with a manifest, a sidecar binary, and optional install scripts. Ten CLI commands: <code>install</code>, <code>enable</code>, <code>disable</code>, <code>uninstall</code>, <code>upgrade</code>, <code>verify</code>, <code>rollback</code>, <code>sbom</code>, <code>list</code>, <code>status</code>.</li>
+            <li><strong>Gateway reconciler.</strong> The gateway automatically spawns sidecar processes for enabled addons on startup and converges live state against the on-disk registry every 10 seconds. CLI changes take effect without a gateway restart.</li>
+            <li><strong>Web UI addon tabs.</strong> The sidebar dynamically injects tabs for each enabled addon. Clicking a tab loads the addon's own React UI in an iframe, proxied over the addon's Unix socket.</li>
+            <li><strong>User identity endpoint.</strong> <code>GET /api/core/users</code> returns the union of profile store entries and routing rule allowed senders. Addon UIs source a dropdown from this instead of accepting freeform names.</li>
+            <li><strong>Two reference addons</strong> (private repos under the sciclaw org):
+              <ul>
+                <li><strong>sciclaw-addon-webtop:</strong> per-user Ubuntu XFCE browser desktops via linuxserver/webtop and Docker. Shared workspace mounts. React admin panel with the identity dropdown.</li>
+                <li><strong>sciclaw-addon-jupyter:</strong> per-user Jupyter Lab with token auth. Tokens rotate on restart. One-shot URL display with explicit copy/open actions. React admin panel.</li>
+              </ul>
+            </li>
+            <li><strong>Security hardening.</strong> Two full review passes closed 13 findings: proxy path allowlisting, mount source validation against an allowlist, Docker flag injection blocked via <code>--</code> terminators, hook payload stripped of per-chat ACLs, socket 0600 enforced, concurrent installs serialized with file locks, upgrade failures roll back the working tree, rollback stops and restarts the live sidecar, symlink escape blocked in UI handlers.</li>
+            <li><strong>Hook pipeline.</strong> Routing changes fire <code>routing_changed</code> hooks to subscribed addons via the gateway's reload watcher. Profile updates fire <code>profile_updated</code>. The reload watcher now starts unconditionally so addons receive hooks even when routing is enabled at runtime.</li>
+            <li><strong>Cross-process proxy.</strong> The web server (separate process from the gateway) can proxy addon UIs by reading the on-disk registry and constructing a client for the addon's Unix socket, so the standard <code>sciclaw gateway</code> + <code>sciclaw web</code> two-process deployment works with addons.</li>
+            <li><strong>SBOM honesty.</strong> The <code>sciclaw addon sbom</code> output now reports <code>verification_status: not_implemented</code> instead of the old misleading <code>signature_verified: false</code> field. GPG signing is not yet wired into the install flow.</li>
+          </ul>
+          <div class="links">
+            <a href="https://github.com/drpedapati/sciclaw/releases/tag/v0.3.0" target="_blank" rel="noopener noreferrer">Release</a>
+            <a href="https://github.com/drpedapati/sciclaw/compare/v0.2.8...v0.3.0" target="_blank" rel="noopener noreferrer">Compare</a>
+            <a href="devlog.html" target="_blank" rel="noopener noreferrer">Dev log</a>
+          </div>
+        </article>
+
+        <!-- v0.2.8 -->
+        <article class="item">
+          <div class="item-head">
+            <div class="tagline">
+              <span class="tag stable">stable</span>
+              <span class="rel">v0.2.8</span>
+            </div>
+            <span class="date">April 7, 2026</span>
+          </div>
+          <ul>
+            <li>Rewrote SOUL.md from corporate bullet points to direct, opinionated prose: "I am sciClaw. I work with scientists, not for them."</li>
+            <li>Hotfix for Codex provider streaming. The OpenAI backend delivers content via <code>output_item.done</code> events but the <code>response.completed</code> payload arrives with an empty output array. sciClaw now collects output items from stream events and injects them into the final response.</li>
+          </ul>
+          <div class="links">
+            <a href="https://github.com/drpedapati/sciclaw/releases/tag/v0.2.8" target="_blank" rel="noopener noreferrer">Release</a>
+            <a href="https://github.com/drpedapati/sciclaw/compare/v0.2.7-dev.4...v0.2.8" target="_blank" rel="noopener noreferrer">Compare</a>
+          </div>
+        </article>
+
+        <!-- v0.2.7-dev.4 -->
+        <article class="item">
+          <div class="item-head">
+            <div class="tagline">
+              <span class="tag dev">dev</span>
+              <span class="rel">v0.2.7-dev.4</span>
+            </div>
+            <span class="date">April 7, 2026</span>
+          </div>
+          <ul>
+            <li>Fixed Codex provider empty responses caused by relying on <code>ResponseCompletedEvent.Response.Output</code> instead of collecting from <code>ResponseOutputItemDoneEvent</code> stream events.</li>
+          </ul>
+          <div class="links">
+            <a href="https://github.com/drpedapati/sciclaw/releases/tag/v0.2.7-dev.4" target="_blank" rel="noopener noreferrer">Release</a>
+            <a href="https://github.com/drpedapati/sciclaw/compare/v0.2.7-dev.3...v0.2.7-dev.4" target="_blank" rel="noopener noreferrer">Compare</a>
+          </div>
+        </article>
+
+        <!-- v0.2.7-dev.3 -->
+        <article class="item">
+          <div class="item-head">
+            <div class="tagline">
+              <span class="tag dev">dev</span>
+              <span class="rel">v0.2.7-dev.3</span>
+            </div>
+            <span class="date">April 1, 2026</span>
+          </div>
+          <ul>
+            <li>Added per-user answer theme profiles and the <code>/theme</code> Discord slash command. Scientists pick Clear, Formal, or Brief; the agent adjusts its response style per user across all channels.</li>
+          </ul>
+          <div class="links">
+            <a href="https://github.com/drpedapati/sciclaw/releases/tag/v0.2.7-dev.3" target="_blank" rel="noopener noreferrer">Release</a>
+            <a href="https://github.com/drpedapati/sciclaw/compare/v0.2.7-dev.2...v0.2.7-dev.3" target="_blank" rel="noopener noreferrer">Compare</a>
+          </div>
+        </article>
+
+        <!-- v0.2.7-dev.2 -->
+        <article class="item">
+          <div class="item-head">
+            <div class="tagline">
+              <span class="tag dev">dev</span>
+              <span class="rel">v0.2.7-dev.2</span>
+            </div>
+            <span class="date">April 1, 2026</span>
+          </div>
+          <ul>
+            <li>Added answer theme definitions to the AGENTS.md workspace template so new workspaces get Clear/Formal/Brief descriptions out of the box.</li>
+            <li>Surgical documentation update across all five doc surfaces (docs.html, README, security.html, philosophy.html, pubmed SKILL.md) for the v0.2.7-dev.1 feature set.</li>
+          </ul>
+          <div class="links">
+            <a href="https://github.com/drpedapati/sciclaw/releases/tag/v0.2.7-dev.2" target="_blank" rel="noopener noreferrer">Release</a>
+            <a href="https://github.com/drpedapati/sciclaw/compare/v0.2.7-dev.1...v0.2.7-dev.2" target="_blank" rel="noopener noreferrer">Compare</a>
+          </div>
+        </article>
+
+        <!-- v0.2.7-dev.1 -->
+        <article class="item">
+          <div class="item-head">
+            <div class="tagline">
+              <span class="tag dev">dev</span>
+              <span class="rel">v0.2.7-dev.1</span>
+            </div>
+            <span class="date">March 31, 2026</span>
+          </div>
+          <ul>
+            <li>Fixed routing wizard silently failing when adding mappings: backend now passes required <code>--allow</code> flag, returns proper error codes on CLI failure, and shell-quotes all user-supplied arguments.</li>
+            <li>Added Discord community server with programmatic channel/role scaffolding and linked the invite across README, docs, and landing page.</li>
+            <li>Documented <code>ctxclaw</code> context optimizer and <code>sciclaw prompt inspect</code> for token budget analysis.</li>
+          </ul>
+          <div class="links">
+            <a href="https://github.com/drpedapati/sciclaw/releases/tag/v0.2.7-dev.1" target="_blank" rel="noopener noreferrer">Release</a>
+            <a href="https://github.com/drpedapati/sciclaw/compare/v0.2.6...v0.2.7-dev.1" target="_blank" rel="noopener noreferrer">Compare</a>
+          </div>
+        </article>
+
+        <!-- v0.2.6 -->
+        <article class="item">
+          <div class="item-head">
+            <div class="tagline">
+              <span class="tag stable">stable</span>
+              <span class="rel">v0.2.6</span>
+            </div>
+            <span class="date">March 27, 2026</span>
+          </div>
+          <ul>
+            <li>Added Discord channel picker and directory browser to the routing wizard so operators point and click instead of typing raw channel IDs and paths.</li>
+            <li>Added Web Interface documentation section covering the gateway vs web split, access methods, and the System tab.</li>
+          </ul>
+          <div class="links">
+            <a href="https://github.com/drpedapati/sciclaw/releases/tag/v0.2.6" target="_blank" rel="noopener noreferrer">Release</a>
+            <a href="https://github.com/drpedapati/sciclaw/compare/v0.2.5-dev.21...v0.2.6" target="_blank" rel="noopener noreferrer">Compare</a>
+          </div>
+        </article>
+
         <article class="item">
           <div class="item-head">
             <div class="tagline">
@@ -403,13 +755,13 @@
           <strong>v0.1.54:</strong> launched the visual <code>sciclaw app</code> dashboard, first-run wizard, collaborative routing, and safer mention-gated group behavior.
         </p>
         <div class="links">
-          <a href="v0.1.56-announcement.md" target="_blank" rel="noopener noreferrer">v0.1.56 announcement</a>
-          <a href="v0.1.54-announcement.md" target="_blank" rel="noopener noreferrer">v0.1.54 announcement</a>
+          <a href="releases/v0.1.56-announcement.md" target="_blank" rel="noopener noreferrer">v0.1.56 announcement</a>
+          <a href="releases/v0.1.54-announcement.md" target="_blank" rel="noopener noreferrer">v0.1.54 announcement</a>
         </div>
       </section>
 
       <p class="foot">
-        Last updated: March 15, 2026. Highlights are curated for user impact from release notes and compare ranges.
+        Last updated: July 11, 2026. Highlights are curated for user impact from release notes and compare ranges.
       </p>
     </div>
   </body>

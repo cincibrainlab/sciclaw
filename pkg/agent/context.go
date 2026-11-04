@@ -23,6 +23,33 @@ type ContextBuilder struct {
 	memory                     *MemoryStore
 	tools                      *tools.ToolRegistry // Direct reference to tool registry
 	includePromptToolSummaries bool
+	// hostedToolNotes are provider-hosted capabilities that are not local Go
+	// tools (for example Codex Responses image_generation). They still need to
+	// appear in the system prompt so the model knows they exist.
+	hostedToolNotes []string
+
+	// Per-turn sender context (set before each BuildMessages call)
+	senderID    string
+	senderName  string
+	answerTheme string
+}
+
+// SetSenderContext sets per-turn sender identity and answer theme.
+// Call this before BuildMessages on each turn.
+func (cb *ContextBuilder) SetSenderContext(senderID, displayName, theme string) {
+	cb.senderID = senderID
+	// Sanitize display name: single line, bounded length, no control chars
+	name := strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r < 32 {
+			return ' '
+		}
+		return r
+	}, strings.TrimSpace(displayName))
+	if len(name) > 64 {
+		name = name[:64]
+	}
+	cb.senderName = name
+	cb.answerTheme = theme
 }
 
 func defaultSharedWorkspaceDir() string {
@@ -59,6 +86,19 @@ func NewContextBuilder(workspace string, sharedWorkspace ...string) *ContextBuil
 // SetToolsRegistry sets the tools registry for dynamic tool summary generation.
 func (cb *ContextBuilder) SetToolsRegistry(registry *tools.ToolRegistry) {
 	cb.tools = registry
+}
+
+// SetHostedToolNotes records provider-hosted tools that are not in the local
+// ToolRegistry but are available on the current provider path.
+func (cb *ContextBuilder) SetHostedToolNotes(notes ...string) {
+	cb.hostedToolNotes = nil
+	for _, note := range notes {
+		note = strings.TrimSpace(note)
+		if note == "" {
+			continue
+		}
+		cb.hostedToolNotes = append(cb.hostedToolNotes, note)
+	}
 }
 
 // SetIncludePromptToolSummaries controls whether human-readable tool summaries
@@ -109,34 +149,45 @@ Your workspace is at: %s
 
 2. **Be scientifically rigorous** - Distinguish hypotheses from verified findings and cite evidence paths.
 
-3. **Memory** - When remembering something, write to %s/memory/MEMORY.md
+3. **Memory** - Use the remember tool for curated long-term memory. Do not write %s/memory/MEMORY.md with generic file tools. Long-term memory is only for durable project knowledge that changes future work: method decisions, data provenance, project conventions, canonical artifacts, known recurring issues, open questions, and collaborator preferences. Routine successful runs, file sizes, row counts, validation summaries, and command transcripts belong in session history, artifacts, jobs, hook audit logs, or output files.
+   - **Long-term** (%s/memory/MEMORY.md): curated durable context injected across sessions.
+   - **Daily notes** (%s/memory/YYYYMM/YYYYMMDD.md): sparse short-lived context that is still useful for the next few days. Do not use daily notes as a substitute execution log; they are loaded for only the last 3 days.
 
 4. **Reproducibility** - Prefer idempotent actions and report assumptions/uncertainty.
 
 5. **PubMed-first verification** - For citation checks, PMID lookup, and PubMed literature verification, start with the dedicated `+"`pubmed_search`"+` and `+"`pubmed_fetch`"+` tools. Use raw `+"`exec`"+` with the installed `+"`pubmed`"+` CLI only for advanced PubMed flags not covered by the typed tools. Do not start with `+"`web_fetch`"+` on PubMed or publisher pages when the task is bibliographic verification.`,
-		versionStr, versionStr, now, runtime, workspacePath, workspacePath, workspacePath, toolsSection, workspacePath)
+		versionStr, versionStr, now, runtime, workspacePath, workspacePath, workspacePath, toolsSection, workspacePath, workspacePath, workspacePath)
 }
 
 func (cb *ContextBuilder) buildToolsSection() string {
-	if !cb.includePromptToolSummaries {
-		return ""
+	localSummaries := []string(nil)
+	if cb.includePromptToolSummaries && cb.tools != nil {
+		localSummaries = cb.tools.GetSummaries()
 	}
-	if cb.tools == nil {
-		return ""
-	}
-
-	summaries := cb.tools.GetSummaries()
-	if len(summaries) == 0 {
+	if len(localSummaries) == 0 && len(cb.hostedToolNotes) == 0 {
 		return ""
 	}
 
 	var sb strings.Builder
 	sb.WriteString("## Available Tools\n\n")
 	sb.WriteString("**CRITICAL**: You MUST use tools to perform actions. Do NOT pretend to execute commands or schedule tasks.\n\n")
-	sb.WriteString("You have access to the following tools:\n\n")
-	for _, s := range summaries {
-		sb.WriteString(s)
-		sb.WriteString("\n")
+	if len(localSummaries) > 0 {
+		sb.WriteString("You have access to the following tools:\n\n")
+		for _, s := range localSummaries {
+			sb.WriteString(s)
+			sb.WriteString("\n")
+		}
+	}
+	if len(cb.hostedToolNotes) > 0 {
+		if len(localSummaries) > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString("### Provider-hosted tools\n\n")
+		for _, note := range cb.hostedToolNotes {
+			sb.WriteString("- ")
+			sb.WriteString(note)
+			sb.WriteString("\n")
+		}
 	}
 
 	return sb.String()
@@ -152,6 +203,17 @@ func (cb *ContextBuilder) BuildSystemPrompt() string {
 	bootstrapContent := cb.LoadBootstrapFiles()
 	if bootstrapContent != "" {
 		parts = append(parts, bootstrapContent)
+	}
+
+	// Active user profile (injected after bootstrap so theme definitions are in context)
+	if cb.answerTheme != "" {
+		userSection := "## Active User\n"
+		if cb.senderName != "" {
+			userSection += fmt.Sprintf("Name: %s\n", cb.senderName)
+		}
+		userSection += fmt.Sprintf("Answer Theme: %s\n\nIMPORTANT: Follow the %s theme rules from the Answer Themes section above.",
+			cb.answerTheme, cb.answerTheme)
+		parts = append(parts, userSection)
 	}
 
 	// Skills - show summary, AI can read full content with read_file tool

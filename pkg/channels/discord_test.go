@@ -50,6 +50,20 @@ func TestNormalizeDiscordBotToken(t *testing.T) {
 	}
 }
 
+func TestDiscordOutboundContentOmitsRawTechnicalDetails(t *testing.T) {
+	const rawCanary = "RAW_CANARY_discord_render_5a72"
+	content := discordOutboundContent(bus.OutboundMessage{
+		Content: "The AI service is busy.",
+		Error:   &bus.OutboundError{TechnicalDetails: "Status: 429\nCode: " + rawCanary + "\nProvider request ID: https://" + rawCanary},
+	})
+	if strings.Contains(content, rawCanary) {
+		t.Fatalf("raw technical details leaked into Discord content: %q", content)
+	}
+	if !strings.Contains(content, "||Status: 429||") {
+		t.Fatalf("expected allowlisted status detail: %q", content)
+	}
+}
+
 func TestDiscordTypingStopsOnFirstReply(t *testing.T) {
 	ch := newTestDiscordChannel()
 	var mu sync.Mutex
@@ -482,6 +496,10 @@ func TestDiscordEnsureSlashCommandsCreatesSlashCommands(t *testing.T) {
 			if cmd.Options[1].Name != "prompt" || !cmd.Options[1].Required {
 				t.Fatalf("unexpected skill prompt option: %#v", cmd.Options[1])
 			}
+		case "theme":
+			if len(cmd.Options) != 1 || cmd.Options[0].Name != "style" || !cmd.Options[0].Required {
+				t.Fatalf("unexpected theme command options: %#v", cmd.Options)
+			}
 		default:
 			t.Fatalf("unexpected command name: %q", cmd.Name)
 		}
@@ -495,8 +513,8 @@ func TestDiscordEnsureSlashCommandsCreatesSlashCommands(t *testing.T) {
 	if err := ch.ensureSlashCommands(); err != nil {
 		t.Fatalf("ensureSlashCommands: %v", err)
 	}
-	if len(created) != 2 {
-		t.Fatalf("expected two create calls, got %d (%v)", len(created), created)
+	if len(created) != 3 {
+		t.Fatalf("expected three create calls, got %d (%v)", len(created), created)
 	}
 }
 

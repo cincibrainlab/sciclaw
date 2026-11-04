@@ -139,6 +139,9 @@ func (s *webServer) registerRoutes() {
 	s.mux.HandleFunc("/api/home/onboard", s.handleOnboard)
 	s.mux.HandleFunc("/api/system", s.handleSystem)
 	s.mux.HandleFunc("/api/system/", s.handleSystemAction)
+	s.mux.HandleFunc("/api/addons/enabled", s.handleAddonsEnabled)
+	s.mux.HandleFunc("/api/core/users", s.handleCoreUsers)
+	s.mux.HandleFunc("/addons/", s.handleAddonProxy)
 
 	// Static files
 	if s.static != nil {
@@ -415,12 +418,17 @@ func (s *webServer) handleChat(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	out, err := s.runCLIQuiet(120*time.Second, "agent", "-m", shellQuote(body.Message), "-s", "web:chat")
-	if err != nil {
-		jsonResp(w, map[string]interface{}{"response": "Error: " + err.Error() + "\n" + out})
+	out, _ := s.runCLIQuiet(120*time.Second, "agent", "--json", "-m", shellQuote(body.Message), "-s", "web:chat")
+	var result agentDirectResult
+	if json.Unmarshal([]byte(out), &result) == nil && strings.TrimSpace(result.Response) != "" {
+		response := map[string]interface{}{"response": result.Response, "mode": "full"}
+		if result.Error != nil {
+			response["error"] = result.Error
+		}
+		jsonResp(w, response)
 		return
 	}
-	jsonResp(w, map[string]interface{}{"response": out, "mode": "full"})
+	jsonResp(w, map[string]interface{}{"response": "The request could not be completed. Please try again, then contact an administrator if it continues."})
 }
 
 var lightweightGreetingPattern = regexp.MustCompile(`(?i)^\s*(hi|hello|hey|yo|sup|ping|test|thanks|thank you|how are you|are you there|who are you|what can you do|help|good (morning|afternoon|evening))([!.?\s]*)$`)
@@ -1511,19 +1519,29 @@ func (s *webServer) handleRouting(w http.ResponseWriter, r *http.Request) {
 			// Build routing add command from body
 			args := []string{"routing", "add"}
 			if ch, ok := body["channel"].(string); ok {
-				args = append(args, "--channel", ch)
+				args = append(args, "--channel", shellQuote(ch))
 			}
 			if cid, ok := body["chatId"].(string); ok {
-				args = append(args, "--chat-id", cid)
+				args = append(args, "--chat-id", shellQuote(cid))
 			}
 			if ws, ok := body["workspace"].(string); ok {
-				args = append(args, "--workspace", ws)
+				args = append(args, "--workspace", shellQuote(ws))
 			}
 			if label, ok := body["label"].(string); ok && label != "" {
 				args = append(args, "--label", shellQuote(label))
 			}
+			// --allow is required by the CLI; default to all senders
+			if allow, ok := body["allowedSenders"].(string); ok && allow != "" {
+				args = append(args, "--allow", shellQuote(allow))
+			} else {
+				args = append(args, "--allow", "*")
+			}
 			out, err := s.runCLI(10*time.Second, args...)
-			jsonResp(w, map[string]interface{}{"ok": err == nil, "output": out})
+			if err != nil || strings.Contains(out, "Usage:") {
+				jsonErr(w, out, http.StatusBadRequest)
+				return
+			}
+			jsonResp(w, map[string]interface{}{"ok": true, "output": out})
 		} else {
 			jsonErr(w, "method not allowed", 405)
 		}

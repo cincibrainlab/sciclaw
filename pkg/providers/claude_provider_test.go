@@ -247,6 +247,34 @@ func TestClaudeProvider_ChatRoundTrip_OAuthTokenAddsBetaHeader(t *testing.T) {
 	}
 }
 
+func TestClaudeProvider_ChatNormalizesHTTPError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("request-id", "req_claude")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}`))
+	}))
+	defer server.Close()
+
+	provider := NewClaudeProvider("test-token")
+	provider.client = createAnthropicTestClient(server.URL, "test-token")
+	_, err := provider.Chat(t.Context(), []Message{{Role: "user", Content: "Hello"}}, nil, "claude-sonnet-4.6", map[string]interface{}{})
+	if err == nil {
+		t.Fatal("Chat() error = nil")
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Chat() error type = %T, want APIError", err)
+	}
+	if apiErr.Provider != "Claude" || apiErr.StatusCode != http.StatusTooManyRequests || apiErr.Code != "rate_limit_error" || apiErr.Message != "slow down" || apiErr.RequestID != "req_claude" {
+		t.Fatalf("APIError = %#v", apiErr)
+	}
+	var sdkErr *anthropic.Error
+	if !errors.As(err, &sdkErr) {
+		t.Fatalf("Chat() does not retain anthropic.Error: %v", err)
+	}
+}
+
 func TestClaudeProvider_GetDefaultModel(t *testing.T) {
 	p := NewClaudeProvider("test-token")
 	if got := p.GetDefaultModel(); got != "claude-sonnet-4.6" {

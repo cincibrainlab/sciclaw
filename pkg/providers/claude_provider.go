@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -244,6 +245,10 @@ func isAnthropicOAuthToken(token string) bool {
 func wrapClaudeAPIError(err error, oauthToken bool) error {
 	if err == nil {
 		return nil
+	}
+	var sdkErr *anthropic.Error
+	if errors.As(err, &sdkErr) {
+		err = newAPIError("Claude", sdkErr.Response, []byte(sdkErr.RawJSON()), err)
 	}
 	msg := err.Error()
 	if oauthToken && strings.Contains(msg, "Invalid bearer token") {

@@ -295,8 +295,11 @@ func TestConvertConfig(t *testing.T) {
 		if len(warnings) != 0 {
 			t.Errorf("expected no warnings, got %v", warnings)
 		}
-		if cfg.Agents.Defaults.Model != "gpt-5.2" {
-			t.Errorf("default model should be gpt-5.2, got %q", cfg.Agents.Defaults.Model)
+		if cfg.Agents.Defaults.Model != "gpt-5.6-sol" {
+			t.Errorf("default model should be gpt-5.6-sol, got %q", cfg.Agents.Defaults.Model)
+		}
+		if cfg.Agents.Defaults.ReasoningEffort != "low" {
+			t.Errorf("default reasoning effort should be low, got %q", cfg.Agents.Defaults.ReasoningEffort)
 		}
 	})
 }
@@ -704,6 +707,51 @@ func TestRunMigratesPicoClawConfig(t *testing.T) {
 	}
 	if migrated.WorkspacePath() != paths.DefaultWorkspace() || migrated.SharedWorkspacePath() != paths.DefaultWorkspace() {
 		t.Fatalf("workspace defaults = %q / %q, want %q", migrated.WorkspacePath(), migrated.SharedWorkspacePath(), paths.DefaultWorkspace())
+	}
+}
+
+func TestRunPicoClawMigrationPreservesUnknownFieldsAndIgnoresEnvironment(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SCICLAW_HOME", filepath.Join(home, "sciclaw"))
+	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(home, ".sciclaw"))
+	t.Setenv("PICOCLAW_PROVIDERS_ANTHROPIC_API_KEY", "environment-key")
+	legacy := filepath.Join(home, ".picoclaw")
+	if err := os.MkdirAll(legacy, 0700); err != nil {
+		t.Fatal(err)
+	}
+	input := `{"agents":{"defaults":{"workspace":"~/.picoclaw/workspace","future_setting":12345678901234567890}},"providers":{"anthropic":{"api_key":"file-key"}},"future":{"nested":[true,"value"]}}`
+	if err := os.WriteFile(filepath.Join(legacy, "config.json"), []byte(input), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Run(Options{PicoClawHome: legacy, Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(paths.ConfigPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	var agents map[string]json.RawMessage
+	if err := json.Unmarshal(got["agents"], &agents); err != nil {
+		t.Fatal(err)
+	}
+	var defaults map[string]json.RawMessage
+	if err := json.Unmarshal(agents["defaults"], &defaults); err != nil {
+		t.Fatal(err)
+	}
+	var future map[string][]any
+	if err := json.Unmarshal(got["future"], &future); err != nil {
+		t.Fatal(err)
+	}
+	if string(defaults["future_setting"]) != "12345678901234567890" || len(future["nested"]) != 2 || future["nested"][0] != true || future["nested"][1] != "value" {
+		t.Fatalf("unknown fields lost: %s", data)
+	}
+	if !strings.Contains(string(got["providers"]), "file-key") || strings.Contains(string(data), "environment-key") {
+		t.Fatalf("environment changed imported config: %s", data)
 	}
 }
 

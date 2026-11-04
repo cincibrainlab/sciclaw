@@ -65,6 +65,17 @@ type AgentLoop struct {
 	turnCounter     uint64
 	running         atomic.Bool
 	summarizing     sync.Map // Tracks which sessions are currently being summarized
+	profileStore    ThemeResolver
+}
+
+// ThemeResolver looks up per-user answer theme preferences.
+type ThemeResolver interface {
+	AnswerTheme(senderID string) string
+}
+
+// SetProfileStore sets the per-user theme resolver.
+func (al *AgentLoop) SetProfileStore(store ThemeResolver) {
+	al.profileStore = store
 }
 
 type ToolProfile string
@@ -110,6 +121,8 @@ type processOptions struct {
 	NoHistory       bool   // If true, don't load session history (for heartbeat)
 	Ephemeral       bool   // If true, do not mutate session/state on disk
 	OnProgress      func(phase, detail string)
+	SenderID        string // Sender identifier for per-user profile lookup
+	SenderName      string // Sender display name (from channel metadata)
 }
 
 type userVisibleError interface {
@@ -133,12 +146,28 @@ func (e *incompleteTurnError) UserMessage() string {
 	return strings.TrimSpace(e.userMessage)
 }
 
+// IsIncompleteTurn reports whether err is a soft incomplete-turn failure that
+// may still carry a user-facing status message via UserMessage().
+func IsIncompleteTurn(err error) bool {
+	var incomplete *incompleteTurnError
+	return errors.As(err, &incomplete)
+}
+
+// NewIncompleteTurnError builds a soft incomplete-turn error for callers/tests
+// that need the UserMessage vs Error split without constructing the private type.
+func NewIncompleteTurnError(userMessage, reason string) error {
+	return &incompleteTurnError{userMessage: userMessage, reason: reason}
+}
+
 type llmIterationResult struct {
 	FinalContent string
+	Media        []bus.OutboundAttachment
 	Iterations   int
 	Usage        turnUsage
 	TurnErr      error
 }
+
+const codexImageGenerationToolNote = "`image_generation` (OpenAI Responses) — generate images when requested. Before choosing the output, read and follow the `image-generation` skill so the generated media preserves the user's requested final artifact."
 
 const defaultEmptyAssistantResponse = "I completed the turn but did not produce a user-facing reply. Ask me for a summary of what was done."
 
@@ -200,6 +229,8 @@ func createToolRegistry(workspace string, restrict bool, cfg *config.Config, msg
 	appendFileTool := tools.NewAppendFileTool(workspace, restrict)
 	appendFileTool.SetSharedWorkspacePolicy(sharedWorkspace, sharedReadOnly)
 	registry.Register(appendFileTool)
+
+	registry.Register(tools.NewRememberTool(workspace, restrict))
 
 	// Shell execution
 	execTool := tools.NewExecTool(workspace, restrict)
@@ -360,6 +391,11 @@ func NewAgentLoopWithOptions(cfg *config.Config, msgBus *bus.MessageBus, provide
 	contextBuilder := NewContextBuilder(workspace, cfg.SharedWorkspacePath())
 	contextBuilder.SetToolsRegistry(toolsRegistry)
 	contextBuilder.SetIncludePromptToolSummaries(false)
+	// Hosted Responses tools are appended by CodexProvider, not the local
+	// ToolRegistry. Surface them in the prompt catalog so the model knows.
+	if _, ok := provider.(*providers.CodexProvider); ok {
+		contextBuilder.SetHostedToolNotes(codexImageGenerationToolNote)
+	}
 	contextBuilder.SetVersion(Version)
 
 	var hookDispatcher *hooks.Dispatcher
@@ -464,7 +500,7 @@ func resolveModel(configured string, provider providers.LLMProvider) string {
 	// If provider default is a Claude model but configured model is GPT (or vice versa),
 	// use the provider default.
 	isClaudeProvider := strings.Contains(provDefault, "claude")
-	isGPTModel := strings.HasPrefix(lower, "gpt") || strings.HasPrefix(lower, "o1") || strings.HasPrefix(lower, "o3") || strings.HasPrefix(lower, "o4")
+	isGPTModel := openAIFamilyModel(configured)
 	isClaudeModel := strings.Contains(lower, "claude")
 
 	if isClaudeProvider && isGPTModel {
@@ -483,6 +519,21 @@ func resolveModel(configured string, provider providers.LLMProvider) string {
 	}
 
 	return configured
+}
+
+// openAIFamilyModel mirrors models.ResolveProvider's OpenAI routing heuristic so
+// reasoning_effort is only attached for GPT/o-series/Codex models.
+func openAIFamilyModel(model string) bool {
+	lower := strings.ToLower(strings.TrimSpace(model))
+	if lower == "" {
+		return false
+	}
+	return strings.Contains(lower, "gpt") ||
+		strings.Contains(lower, "o1") ||
+		strings.Contains(lower, "o3") ||
+		strings.Contains(lower, "o4") ||
+		strings.Contains(lower, "codex") ||
+		strings.HasPrefix(lower, "openai/")
 }
 
 func (al *AgentLoop) Run(ctx context.Context) error {
@@ -518,43 +569,50 @@ func (al *AgentLoop) Stop() {
 // HandleInbound processes one inbound message and publishes any response.
 // It is used both by the default bus consumer loop and routed dispatchers.
 func (al *AgentLoop) HandleInbound(ctx context.Context, msg bus.InboundMessage) {
-	response, err := al.processMessage(ctx, msg)
+	response, media, err := al.processMessageWithMedia(ctx, msg, nil)
+	var outboundError *bus.OutboundError
 	if err != nil && strings.TrimSpace(response) == "" {
-		if uerr, ok := err.(userVisibleError); ok && strings.TrimSpace(uerr.UserMessage()) != "" {
-			response = uerr.UserMessage()
+		if userMessage, presentation, ok := UserError(err); ok {
+			response, outboundError = userMessage, presentation
 		} else {
 			response = fmt.Sprintf("Error processing message: %v", err)
 		}
 	}
 	if err != nil && strings.TrimSpace(response) != "" {
+		_, outboundError, _ := UserError(err)
+		logFields := map[string]interface{}{
+			"channel":     msg.Channel,
+			"chat_id":     msg.ChatID,
+			"sender_id":   msg.SenderID,
+			"session_key": msg.SessionKey,
+			"error":       err.Error(),
+		}
+		if outboundError != nil {
+			logFields["error_reference"] = outboundError.ReferenceID
+		}
 		logger.WarnCF("agent", "Publishing user-visible response for incomplete/failed turn",
-			map[string]interface{}{
-				"channel":     msg.Channel,
-				"chat_id":     msg.ChatID,
-				"sender_id":   msg.SenderID,
-				"session_key": msg.SessionKey,
-				"error":       err.Error(),
-			})
+			logFields)
 	}
 
-	al.publishFinalResponse(ctx, msg, response)
+	al.publishFinalResponseWithError(ctx, msg, response, media, outboundError)
 }
 
 func (al *AgentLoop) RunJob(ctx context.Context, msg bus.InboundMessage, onProgress func(phase, detail string)) (string, error) {
-	response, err := al.processMessageWithProgress(ctx, msg, onProgress)
+	response, media, err := al.processMessageWithMedia(ctx, msg, onProgress)
+	var outboundError *bus.OutboundError
 	if err != nil && strings.TrimSpace(response) == "" {
-		if uerr, ok := err.(userVisibleError); ok && strings.TrimSpace(uerr.UserMessage()) != "" {
-			response = uerr.UserMessage()
+		if userMessage, presentation, ok := UserError(err); ok {
+			response, outboundError = userMessage, presentation
 		} else {
 			response = fmt.Sprintf("Error processing message: %v", err)
 		}
 	}
-	al.publishFinalResponse(ctx, msg, response)
+	al.publishFinalResponseWithError(ctx, msg, response, media, outboundError)
 	return response, err
 }
 
-func (al *AgentLoop) publishFinalResponse(ctx context.Context, msg bus.InboundMessage, response string) {
-	if response == "" {
+func (al *AgentLoop) publishFinalResponseWithError(ctx context.Context, msg bus.InboundMessage, response string, media []bus.OutboundAttachment, outboundError *bus.OutboundError) {
+	if response == "" && len(media) == 0 {
 		if msg.Channel != "system" {
 			logger.InfoCF("agent", "No outbound response generated",
 				map[string]interface{}{
@@ -577,10 +635,16 @@ func (al *AgentLoop) publishFinalResponse(ctx context.Context, msg bus.InboundMe
 	}
 
 	if !alreadySent {
+		content := response
+		if strings.TrimSpace(content) == "" && len(media) > 0 {
+			content = "Generated image."
+		}
 		al.bus.PublishOutbound(ctx, bus.OutboundMessage{
-			Channel: msg.Channel,
-			ChatID:  msg.ChatID,
-			Content: response,
+			Channel:     msg.Channel,
+			ChatID:      msg.ChatID,
+			Content:     content,
+			Attachments: media,
+			Error:       outboundError,
 		})
 	} else {
 		logger.InfoCF("agent", "Suppressing outbound response because message tool already sent content",
@@ -590,6 +654,7 @@ func (al *AgentLoop) publishFinalResponse(ctx context.Context, msg bus.InboundMe
 				"sender_id":        msg.SenderID,
 				"session_key":      msg.SessionKey,
 				"response_preview": utils.Truncate(response, 120),
+				"media_count":      len(media),
 			})
 	}
 }
@@ -652,10 +717,16 @@ func (al *AgentLoop) ProcessHeartbeat(ctx context.Context, content, channel, cha
 }
 
 func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) (string, error) {
-	return al.processMessageWithProgress(ctx, msg, nil)
+	response, _, err := al.processMessageWithMedia(ctx, msg, nil)
+	return response, err
 }
 
 func (al *AgentLoop) processMessageWithProgress(ctx context.Context, msg bus.InboundMessage, onProgress func(phase, detail string)) (string, error) {
+	response, _, err := al.processMessageWithMedia(ctx, msg, onProgress)
+	return response, err
+}
+
+func (al *AgentLoop) processMessageWithMedia(ctx context.Context, msg bus.InboundMessage, onProgress func(phase, detail string)) (string, []bus.OutboundAttachment, error) {
 	// Add message preview to log (show full content for error messages)
 	var logContent string
 	if strings.Contains(msg.Content, "Error:") || strings.Contains(msg.Content, "error") {
@@ -673,7 +744,8 @@ func (al *AgentLoop) processMessageWithProgress(ctx context.Context, msg bus.Inb
 
 	// Route system messages to processSystemMessage
 	if msg.Channel == "system" {
-		return al.processSystemMessage(ctx, msg)
+		response, err := al.processSystemMessage(ctx, msg)
+		return response, nil, err
 	}
 
 	if !al.toolProfile.isSideLane() && strings.TrimSpace(msg.SessionKey) != "" && len(msg.Media) > 0 {
@@ -691,8 +763,10 @@ func (al *AgentLoop) processMessageWithProgress(ctx context.Context, msg bus.Inb
 		SendResponse:    false,
 		Ephemeral:       al.toolProfile.isSideLane(),
 		OnProgress:      onProgress,
+		SenderID:        msg.Channel + ":" + msg.SenderID,
+		SenderName:      msg.Metadata["username"],
 	})
-	return result.FinalContent, err
+	return result.FinalContent, result.Media, err
 }
 
 func (al *AgentLoop) processSystemMessage(ctx context.Context, msg bus.InboundMessage) (string, error) {
@@ -887,6 +961,13 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (llm
 				"user_prompt_len": len(userMessageForPrompt),
 			})
 	}
+	// Clear per-turn sender context to prevent leaking between users/turns,
+	// then resolve per-user answer theme if available.
+	al.contextBuilder.SetSenderContext("", "", "")
+	if opts.SenderID != "" && al.profileStore != nil {
+		theme := al.profileStore.AnswerTheme(opts.SenderID)
+		al.contextBuilder.SetSenderContext(opts.SenderID, opts.SenderName, theme)
+	}
 	messages := al.contextBuilder.BuildMessages(
 		history,
 		summary,
@@ -955,6 +1036,7 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (llm
 	finalContent := iterResult.FinalContent
 	iteration := iterResult.Iterations
 	usage := iterResult.Usage
+	media := iterResult.Media
 	messageToolSent := al.messageToolSentInRound()
 
 	// If last tool had ForUser content and we already sent it, we might not need to send final response
@@ -973,7 +1055,7 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (llm
 					"session_key": opts.SessionKey,
 					"iterations":  iteration,
 				})
-		} else {
+		} else if len(media) == 0 {
 			finalContent = opts.DefaultResponse
 		}
 	}
@@ -989,6 +1071,7 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (llm
 				"session_key":       opts.SessionKey,
 				"iterations":        iteration,
 				"message_tool_sent": messageToolSent,
+				"media_count":       len(media),
 			})
 	}
 	sessionSaveStartedAt := time.Now()
@@ -1011,13 +1094,18 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (llm
 	}
 
 	// 8. Optional: send response via bus
-	if opts.SendResponse && strings.TrimSpace(finalContent) != "" {
+	if opts.SendResponse && (strings.TrimSpace(finalContent) != "" || len(media) > 0) {
 		outboundStartedAt := time.Now()
 		emitProgress(opts.OnProgress, "replying", "Replying")
+		content := finalContent
+		if strings.TrimSpace(content) == "" && len(media) > 0 {
+			content = "Generated image."
+		}
 		al.bus.PublishOutbound(ctx, bus.OutboundMessage{
-			Channel: opts.Channel,
-			ChatID:  opts.ChatID,
-			Content: finalContent,
+			Channel:     opts.Channel,
+			ChatID:      opts.ChatID,
+			Content:     content,
+			Attachments: media,
 		})
 		if localDiag != nil {
 			localDiag.OutboundMS = time.Since(outboundStartedAt).Milliseconds()
@@ -1085,6 +1173,7 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (llm
 
 	return llmIterationResult{
 		FinalContent: finalContent,
+		Media:        media,
 		Iterations:   iteration,
 		Usage:        usage,
 		TurnErr:      iterResult.TurnErr,
@@ -1267,6 +1356,7 @@ func addUsageFields(m map[string]interface{}, u *providers.UsageInfo) {
 func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.Message, opts processOptions, localDiag *localTurnDiagnostics) (llmIterationResult, error) {
 	iteration := 0
 	var finalContent string
+	var collectedMedia []bus.OutboundAttachment
 	var lastMessageToolContent string
 	var usage turnUsage
 	asyncToolUsed := false
@@ -1287,7 +1377,7 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 			if finalContent == "" {
 				if lastMessageToolContent != "" {
 					finalContent = lastMessageToolContent
-				} else {
+				} else if len(collectedMedia) == 0 {
 					finalContent = fmt.Sprintf("Iteration limit reached (%d) before task completion. Increase `agents.defaults.max_tool_iterations` or set it to 0 for no hard cap.", al.maxIterations)
 				}
 			}
@@ -1352,7 +1442,7 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 			"max_tokens":  maxTokens,
 			"temperature": 0.7,
 		}
-		if al.reasoningEffort != "" {
+		if al.reasoningEffort != "" && openAIFamilyModel(al.model) {
 			llmOpts["reasoning_effort"] = al.reasoningEffort
 		}
 		llmCallStartedAt := time.Now()
@@ -1370,25 +1460,34 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 		response, err := al.provider.Chat(ctx, messages, providerToolDefs, al.model, llmOpts)
 
 		if err != nil {
+			referenceID := "ERR-" + strings.TrimPrefix(opts.TurnID, "turn-")
 			if localDiag != nil {
 				localDiag.recordFailure("provider_chat", err.Error())
 			}
 			logger.ErrorCF("agent", "LLM call failed",
 				map[string]interface{}{
-					"iteration":   iteration,
-					"error":       err.Error(),
-					"duration":    time.Since(llmCallStartedAt).String(),
-					"duration_ms": time.Since(llmCallStartedAt).Milliseconds(),
+					"iteration":       iteration,
+					"turn_id":         opts.TurnID,
+					"error_reference": referenceID,
+					"error":           err.Error(),
+					"duration":        time.Since(llmCallStartedAt).String(),
+					"duration_ms":     time.Since(llmCallStartedAt).Milliseconds(),
 				})
 			return llmIterationResult{
 				Iterations: iteration,
 				Usage:      usage,
-			}, fmt.Errorf("LLM call failed: %w", err)
+			}, newProviderFailureError(fmt.Errorf("LLM call failed: %w", err), referenceID)
 		}
 		if localDiag != nil {
 			localDiag.recordLLMResponse(time.Since(llmCallStartedAt), response)
 		}
 		usage.add(response.Usage)
+		if len(response.Media) > 0 {
+			saved := al.persistProviderMedia(response.Media)
+			if len(saved) > 0 {
+				collectedMedia = append(collectedMedia, saved...)
+			}
+		}
 		llmCompleteFields := map[string]interface{}{
 			"turn_id":          opts.TurnID,
 			"iteration":        iteration,
@@ -1396,6 +1495,7 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 			"duration_ms":      time.Since(llmCallStartedAt).Milliseconds(),
 			"response_chars":   len(response.Content),
 			"tool_calls_count": len(response.ToolCalls),
+			"media_count":      len(response.Media),
 		}
 		if response.Diagnostics != nil {
 			if source := strings.TrimSpace(response.Diagnostics.ContentSource); source != "" {
@@ -1469,7 +1569,7 @@ Either call the appropriate tool now, or give an honest present-tense status of 
 				}
 				turnErr = &incompleteTurnError{
 					userMessage: finalContent,
-					reason:      fmt.Sprintf("task ended without verified completion (%s)", strings.Join(requirement.MissingLabels(effects), ", ")),
+					reason:      fmt.Sprintf("some requested steps were not finished yet (%s)", strings.Join(requirement.MissingLabels(effects), ", ")),
 				}
 			}
 			trimmedFinal := strings.TrimSpace(finalContent)
@@ -1701,6 +1801,7 @@ Either call the appropriate tool now, or give an honest present-tense status of 
 
 	return llmIterationResult{
 		FinalContent: finalContent,
+		Media:        collectedMedia,
 		Iterations:   iteration,
 		Usage:        usage,
 		TurnErr:      turnErr,
@@ -2513,7 +2614,7 @@ func buildCompletionGuardPrompt(requirement completionRequirement, effects *comp
 		missing = []string{"the requested side effects"}
 	}
 	return fmt.Sprintf(`Your last reply stopped the turn, but the requested work is not yet verified as complete.
-Missing verified outcomes: %s.
+Still needed: %s.
 Do not describe planned work as completed.
 Either use tools now to finish the missing work, or reply honestly that the task is still incomplete and state exactly what is still missing.`, strings.Join(missing, ", "))
 }
@@ -2536,7 +2637,7 @@ func buildIncompleteWorkFallback(requirement completionRequirement, effects *com
 		}
 		completed = strings.Join(ordered, ", ")
 	}
-	return fmt.Sprintf("I have not completed the requested work yet. Missing verified outcomes: %s. So far I only completed these tool steps: %s.", strings.Join(missing, ", "), completed)
+	return fmt.Sprintf("I have not finished everything yet. Still needed: %s. So far I only completed these tool steps: %s.", strings.Join(missing, ", "), completed)
 }
 
 func detectExecOutputPath(command string) string {

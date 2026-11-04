@@ -2,13 +2,14 @@ name: pr-check
 
 on:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   fmt-check:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -25,7 +26,7 @@ jobs:
     needs: fmt-check
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -40,7 +41,7 @@ jobs:
     needs: fmt-check
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -49,4 +50,3 @@ jobs:
 
       - name: Run go test
         run: go test ./...
-

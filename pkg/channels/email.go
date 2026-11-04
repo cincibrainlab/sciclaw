@@ -200,10 +200,14 @@ func parseRecipientAddresses(raw string) ([]string, error) {
 }
 
 func formatFromAddress(displayName, address string) string {
-	if displayName == "" {
-		return address
-	}
-	return (&mail.Address{Name: displayName, Address: address}).String()
+	// Always return the bare email address. Self-hosted Resend instances
+	// (e.g., resend.cincineuro.com) reject any display-name decoration
+	// in the from field, whether RFC 5322 quoted ("Name" <addr>) or
+	// unquoted (Name <addr>). Cloud Resend accepts both, but the bare
+	// address works everywhere. The display name is cosmetic anyway:
+	// Resend controls what the recipient sees in their MUA via the
+	// domain's DKIM/SPF settings, not the API payload.
+	return address
 }
 
 func emailBaseURL(raw string) string {

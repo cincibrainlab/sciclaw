@@ -1,10 +1,13 @@
 package providers
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/openai/openai-go/v3"
@@ -113,14 +116,84 @@ func TestBuildCodexParams_WithTools(t *testing.T) {
 		},
 	}
 	params := buildCodexParams([]Message{{Role: "user", Content: "Hi"}}, tools, "gpt-4o", map[string]interface{}{})
-	if len(params.Tools) != 1 {
-		t.Fatalf("len(Tools) = %d, want 1", len(params.Tools))
+	if len(params.Tools) != 2 {
+		t.Fatalf("len(Tools) = %d, want 2 (function + image_generation)", len(params.Tools))
 	}
 	if params.Tools[0].OfFunction == nil {
-		t.Fatal("Tool should be a function tool")
+		t.Fatal("first tool should be a function tool")
 	}
 	if params.Tools[0].OfFunction.Name != "get_weather" {
 		t.Errorf("Tool name = %q, want %q", params.Tools[0].OfFunction.Name, "get_weather")
+	}
+	if params.Tools[1].OfImageGeneration == nil {
+		t.Fatal("second tool should be image_generation")
+	}
+}
+
+func TestParseCodexResponse_ImageGenerationCall(t *testing.T) {
+	// 1x1 PNG
+	png := []byte{
+		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+		0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+		0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+		0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41,
+		0x54, 0x08, 0xd7, 0x63, 0xf8, 0xcf, 0xc0, 0x00,
+		0x00, 0x00, 0x03, 0x00, 0x01, 0x00, 0x05, 0xfe,
+		0xd4, 0xef, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+		0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+	}
+	b64 := base64.StdEncoding.EncodeToString(png)
+	respJSON := fmt.Sprintf(`{
+		"id": "resp_test",
+		"object": "response",
+		"status": "completed",
+		"output": [
+			{
+				"id": "ig_1",
+				"type": "image_generation_call",
+				"status": "completed",
+				"result": %q
+			},
+			{
+				"id": "msg_1",
+				"type": "message",
+				"role": "assistant",
+				"status": "completed",
+				"content": [
+					{"type": "output_text", "text": "Here is your image."}
+				]
+			}
+		],
+		"usage": {
+			"input_tokens": 10,
+			"output_tokens": 5,
+			"total_tokens": 15,
+			"input_tokens_details": {"cached_tokens": 0},
+			"output_tokens_details": {"reasoning_tokens": 0}
+		}
+	}`, b64)
+
+	var resp responses.Response
+	if err := json.Unmarshal([]byte(respJSON), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	result := parseCodexResponse(&resp)
+	if result.Content != "Here is your image." {
+		t.Errorf("Content = %q, want %q", result.Content, "Here is your image.")
+	}
+	if len(result.Media) != 1 {
+		t.Fatalf("len(Media) = %d, want 1", len(result.Media))
+	}
+	if result.Media[0].MIME != "image/png" {
+		t.Errorf("MIME = %q, want image/png", result.Media[0].MIME)
+	}
+	if len(result.Media[0].Data) != len(png) {
+		t.Fatalf("media bytes = %d, want %d", len(result.Media[0].Data), len(png))
+	}
+	if result.FinishReason != "stop" {
+		t.Errorf("FinishReason = %q, want stop", result.FinishReason)
 	}
 }
 
@@ -235,6 +308,18 @@ func TestCodexProvider_ChatRoundTrip(t *testing.T) {
 			http.Error(w, "missing account id", http.StatusBadRequest)
 			return
 		}
+		if r.Header.Get("originator") != codexCLIOriginator {
+			http.Error(w, "missing originator", http.StatusBadRequest)
+			return
+		}
+		if r.Header.Get("version") != codexCLIVersion {
+			http.Error(w, "missing version", http.StatusBadRequest)
+			return
+		}
+		if r.Header.Get("User-Agent") != codexCLIOriginator+"/"+codexCLIVersion {
+			http.Error(w, "missing user-agent", http.StatusBadRequest)
+			return
+		}
 
 		var body map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -304,10 +389,231 @@ func TestCodexProvider_ChatRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCodexProvider_ChatNormalizesHTTPError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("x-request-id", "req_codex")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"code":"rate_limit_exceeded","message":"try later"}}`))
+	}))
+	defer server.Close()
+
+	provider := NewCodexProvider("test-token", "")
+	provider.client = createOpenAITestClient(server.URL, "test-token", "")
+	_, err := provider.Chat(t.Context(), []Message{{Role: "user", Content: "Hello"}}, nil, "gpt-5.6-sol", map[string]interface{}{})
+	if err == nil {
+		t.Fatal("Chat() error = nil")
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Chat() error type = %T, want APIError", err)
+	}
+	if apiErr.Provider != "Codex" || apiErr.StatusCode != http.StatusTooManyRequests || apiErr.Code != "rate_limit_exceeded" || apiErr.Message != "try later" || apiErr.RequestID != "req_codex" {
+		t.Fatalf("APIError = %#v", apiErr)
+	}
+	var sdkErr *openai.Error
+	if !errors.As(err, &sdkErr) {
+		t.Fatalf("Chat() does not retain openai.Error: %v", err)
+	}
+}
+
+func TestCodexProvider_ChatNormalizesSSEError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "event: error\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"error\",\"sequence_number\":1,\"code\":\"invalid_prompt\",\"message\":\"prompt rejected\",\"param\":\"input\"}\n\n")
+	}))
+	defer server.Close()
+
+	provider := NewCodexProvider("test-token", "")
+	provider.client = createOpenAITestClient(server.URL, "test-token", "")
+	_, err := provider.Chat(t.Context(), []Message{{Role: "user", Content: "Hello"}}, nil, "gpt-5.6-sol", map[string]interface{}{})
+	if err == nil {
+		t.Fatal("Chat() error = nil")
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Chat() error type = %T, want APIError", err)
+	}
+	if apiErr.Provider != "Codex" || apiErr.StatusCode != 0 || apiErr.Code != "invalid_prompt" || apiErr.Message != "prompt rejected (param=input)" || apiErr.RequestID != "" {
+		t.Fatalf("APIError = %#v", apiErr)
+	}
+	if errors.Unwrap(apiErr) == nil {
+		t.Fatal("APIError does not retain the SSE error cause")
+	}
+	if !strings.Contains(apiErr.Body, `"code":"invalid_prompt"`) {
+		t.Fatalf("APIError body omitted raw SSE event: %q", apiErr.Body)
+	}
+}
+
 func TestCodexProvider_GetDefaultModel(t *testing.T) {
 	p := NewCodexProvider("test-token", "")
-	if got := p.GetDefaultModel(); got != "gpt-5.2" {
-		t.Errorf("GetDefaultModel() = %q, want %q", got, "gpt-5.2")
+	if got := p.GetDefaultModel(); got != "gpt-5.6-sol" {
+		t.Errorf("GetDefaultModel() = %q, want %q", got, "gpt-5.6-sol")
+	}
+}
+
+func TestCodexProvider_ChatRoundTrip_OutputTextDeltaFallback(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			http.Error(w, "not found: "+r.URL.Path, http.StatusNotFound)
+			return
+		}
+		var reqBody map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
+		}
+		if stream, ok := reqBody["stream"].(bool); !ok || !stream {
+			http.Error(w, "stream must be true", http.StatusBadRequest)
+			return
+		}
+
+		resp := map[string]interface{}{
+			"id":     "resp_test",
+			"object": "response",
+			"status": "completed",
+			"output": nil,
+		}
+		writeOutputTextDeltaSSE(w, "OK", resp)
+	}))
+	defer server.Close()
+
+	provider := NewCodexProvider("test-token", "acc-123")
+	provider.client = createOpenAITestClient(server.URL, "test-token", "acc-123")
+
+	resp, err := provider.Chat(t.Context(), []Message{{Role: "user", Content: "Hello"}}, nil, "gpt-5.6-sol", map[string]interface{}{})
+	if err != nil {
+		t.Fatalf("Chat() error: %v", err)
+	}
+	if resp.Content != "OK" {
+		t.Errorf("Content = %q, want %q", resp.Content, "OK")
+	}
+}
+
+func TestCodexProvider_Chat_IncompleteDoesNotTreatDeltaAsComplete(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			http.Error(w, "not found: "+r.URL.Path, http.StatusNotFound)
+			return
+		}
+		resp := map[string]interface{}{
+			"id":     "resp_trunc",
+			"object": "response",
+			"status": "incomplete",
+			"output": nil,
+		}
+		writeOutputTextDeltaIncompleteSSE(w, "mid-sentence fragment", resp)
+	}))
+	defer server.Close()
+
+	provider := NewCodexProvider("test-token", "acc-123")
+	provider.client = createOpenAITestClient(server.URL, "test-token", "acc-123")
+
+	resp, err := provider.Chat(t.Context(), []Message{{Role: "user", Content: "Hello"}}, nil, "gpt-5.6-sol", map[string]interface{}{})
+	if err == nil {
+		t.Fatal("expected incomplete stream to return an error")
+	}
+	if !strings.Contains(err.Error(), "incomplete") {
+		t.Fatalf("error = %q, want incomplete", err.Error())
+	}
+	if resp == nil {
+		t.Fatal("expected partial response payload alongside error")
+	}
+	if resp.FinishReason != "length" {
+		t.Fatalf("FinishReason = %q, want length", resp.FinishReason)
+	}
+	if resp.Content != "" {
+		t.Fatalf("Content = %q, want empty (delta fallback skipped for incomplete)", resp.Content)
+	}
+}
+
+func TestResolveCodexModel(t *testing.T) {
+	fallback := (&CodexProvider{}).GetDefaultModel()
+	tests := []struct {
+		name         string
+		input        string
+		wantModel    string
+		wantFallback bool
+		wantErr      bool
+	}{
+		{"empty", "", fallback, true, false},
+		{"sol", "gpt-5.6-sol", "gpt-5.6-sol", false, false},
+		{"luna", "gpt-5.6-luna", "gpt-5.6-luna", false, false},
+		{"prefixed", "openai/gpt-5.6-terra", "gpt-5.6-terra", false, false},
+		{"gpt52 remapped", "gpt-5.2", fallback, true, false},
+		{"gpt52 codex kept", "gpt-5.2-codex", "gpt-5.2-codex", false, false},
+		{"claude", "claude-sonnet-4.6", "", false, true},
+		{"anthropic ns", "anthropic/claude-sonnet-4.6", "", false, true},
+		{"o1", "o1-pro", "o1-pro", false, false},
+		{"o3", "o3-mini", "o3-mini", false, false},
+		{"codex mini", "codex-mini-latest", "codex-mini-latest", false, false},
+		{"unknown family", "banana-1", "", false, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotModel, reason, err := resolveCodexModel(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("resolveCodexModel(%q) expected error", tt.input)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveCodexModel(%q) unexpected error: %v", tt.input, err)
+			}
+			if gotModel != tt.wantModel {
+				t.Fatalf("resolveCodexModel(%q) model = %q, want %q", tt.input, gotModel, tt.wantModel)
+			}
+			if tt.wantFallback && reason == "" {
+				t.Fatalf("resolveCodexModel(%q) expected fallback reason", tt.input)
+			}
+			if !tt.wantFallback && reason != "" {
+				t.Fatalf("resolveCodexModel(%q) unexpected fallback reason: %q", tt.input, reason)
+			}
+		})
+	}
+}
+
+func TestCodexAPIErrorFields_NoSecretLeakage(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", nil)
+	apiErr := &openai.Error{
+		StatusCode: 400,
+		Type:       "invalid_request_error",
+		Code:       "unsupported_model",
+		Param:      "model",
+		Message:    "model not allowed",
+		Request:    req,
+		Response: &http.Response{
+			StatusCode: 400,
+			Header:     http.Header{"X-Request-Id": []string{"req_abc"}},
+		},
+	}
+	fields := codexAPIErrorFields(apiErr, "claude-sonnet-4.6", "gpt-5.6-sol", 2, 1, true)
+	if fields["status_code"] != 400 {
+		t.Fatalf("status_code = %v, want 400", fields["status_code"])
+	}
+	if fields["api_code"] != "unsupported_model" {
+		t.Fatalf("api_code = %v", fields["api_code"])
+	}
+	if fields["api_param"] != "model" {
+		t.Fatalf("api_param = %v", fields["api_param"])
+	}
+	if fields["request_id"] != "req_abc" {
+		t.Fatalf("request_id = %v", fields["request_id"])
+	}
+	if fields["hint"] == nil {
+		t.Fatal("expected 400 hint")
+	}
+	for k, v := range fields {
+		s := fmt.Sprintf("%v", v)
+		low := strings.ToLower(s)
+		if strings.Contains(low, "bearer") || strings.Contains(strings.ToLower(k), "authorization") {
+			t.Fatalf("fields leaked auth material: %s=%v", k, v)
+		}
+		if strings.Contains(s, "sk-") || strings.Contains(s, "eyJ") {
+			t.Fatalf("fields look like secrets: %s=%v", k, v)
+		}
 	}
 }
 
@@ -336,4 +642,46 @@ func createOpenAITestClient(baseURL, token, accountID string) *openai.Client {
 	}
 	c := openai.NewClient(opts...)
 	return &c
+}
+
+func writeOutputTextDeltaSSE(w http.ResponseWriter, delta string, response map[string]interface{}) {
+	deltaEvent := map[string]interface{}{
+		"type":            "response.output_text.delta",
+		"sequence_number": 1,
+		"delta":           delta,
+	}
+	completedEvent := map[string]interface{}{
+		"type":            "response.completed",
+		"sequence_number": 2,
+		"response":        response,
+	}
+	deltaBytes, _ := json.Marshal(deltaEvent)
+	completedBytes, _ := json.Marshal(completedEvent)
+	w.Header().Set("Content-Type", "text/event-stream")
+	_, _ = fmt.Fprintf(w, "event: response.output_text.delta\n")
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", string(deltaBytes))
+	_, _ = fmt.Fprintf(w, "event: response.completed\n")
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", string(completedBytes))
+	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+}
+
+func writeOutputTextDeltaIncompleteSSE(w http.ResponseWriter, delta string, response map[string]interface{}) {
+	deltaEvent := map[string]interface{}{
+		"type":            "response.output_text.delta",
+		"sequence_number": 1,
+		"delta":           delta,
+	}
+	incompleteEvent := map[string]interface{}{
+		"type":            "response.incomplete",
+		"sequence_number": 2,
+		"response":        response,
+	}
+	deltaBytes, _ := json.Marshal(deltaEvent)
+	incompleteBytes, _ := json.Marshal(incompleteEvent)
+	w.Header().Set("Content-Type", "text/event-stream")
+	_, _ = fmt.Fprintf(w, "event: response.output_text.delta\n")
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", string(deltaBytes))
+	_, _ = fmt.Fprintf(w, "event: response.incomplete\n")
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", string(incompleteBytes))
+	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 }

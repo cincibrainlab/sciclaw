@@ -306,7 +306,8 @@ func DefaultConfig() *Config {
 				SharedWorkspace:         "~/sciclaw/workspaces/default",
 				SharedWorkspaceReadOnly: false,
 				Provider:                "",
-				Model:                   "gpt-5.2",
+				Model:                   "gpt-5.6-sol",
+				ReasoningEffort:         "low",
 				MaxTokens:               8192,
 				Temperature:             0.7,
 				MaxToolIterations:       0, // 0 = no hard iteration cap

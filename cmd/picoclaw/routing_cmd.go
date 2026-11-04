@@ -266,6 +266,16 @@ func routingAddCmd() {
 		fmt.Printf("Error saving config: %v\n", err)
 		return
 	}
+	// Fire the addon hook inline (no-op in CLI processes since
+	// addonDispatcher is nil there) and nudge the gateway to reload routing.
+	// The gateway's watchRoutingReload goroutine will see the marker, reload
+	// the dispatcher, and fire the hook from its own process where the
+	// addon dispatcher is live. This is how addons actually receive
+	// routing_changed from CLI-initiated changes.
+	fireAddonHook("routing_changed", RoutingChangedPayload{Rules: projectRoutingMappings(cfg.Routing.Mappings)})
+	if err := requestRoutingReload(); err != nil {
+		fmt.Printf("warning: failed to nudge gateway reload: %v\n", err)
+	}
 
 	if updated {
 		fmt.Printf("Updated routing mapping for %s:%s\n", channel, chatID)
@@ -321,6 +331,16 @@ func routingRemoveCmd() {
 	if err := config.SaveConfig(getConfigPath(), cfg); err != nil {
 		fmt.Printf("Error saving config: %v\n", err)
 		return
+	}
+	// Fire the addon hook inline (no-op in CLI processes since
+	// addonDispatcher is nil there) and nudge the gateway to reload routing.
+	// The gateway's watchRoutingReload goroutine will see the marker, reload
+	// the dispatcher, and fire the hook from its own process where the
+	// addon dispatcher is live. This is how addons actually receive
+	// routing_changed from CLI-initiated changes.
+	fireAddonHook("routing_changed", RoutingChangedPayload{Rules: projectRoutingMappings(cfg.Routing.Mappings)})
+	if err := requestRoutingReload(); err != nil {
+		fmt.Printf("warning: failed to nudge gateway reload: %v\n", err)
 	}
 	fmt.Printf("Removed routing mapping for %s:%s\n", channel, chatID)
 }
@@ -381,6 +401,16 @@ func routingSetUsersCmd() {
 	if err := config.SaveConfig(getConfigPath(), cfg); err != nil {
 		fmt.Printf("Error saving config: %v\n", err)
 		return
+	}
+	// Fire the addon hook inline (no-op in CLI processes since
+	// addonDispatcher is nil there) and nudge the gateway to reload routing.
+	// The gateway's watchRoutingReload goroutine will see the marker, reload
+	// the dispatcher, and fire the hook from its own process where the
+	// addon dispatcher is live. This is how addons actually receive
+	// routing_changed from CLI-initiated changes.
+	fireAddonHook("routing_changed", RoutingChangedPayload{Rules: projectRoutingMappings(cfg.Routing.Mappings)})
+	if err := requestRoutingReload(); err != nil {
+		fmt.Printf("warning: failed to nudge gateway reload: %v\n", err)
 	}
 	fmt.Printf("Updated allowed_senders for %s:%s\n", channel, chatID)
 }
@@ -485,6 +515,16 @@ func routingSetRuntimeCmd() {
 	if err := config.SaveConfig(getConfigPath(), cfg); err != nil {
 		fmt.Printf("Error saving config: %v\n", err)
 		return
+	}
+	// Fire the addon hook inline (no-op in CLI processes since
+	// addonDispatcher is nil there) and nudge the gateway to reload routing.
+	// The gateway's watchRoutingReload goroutine will see the marker, reload
+	// the dispatcher, and fire the hook from its own process where the
+	// addon dispatcher is live. This is how addons actually receive
+	// routing_changed from CLI-initiated changes.
+	fireAddonHook("routing_changed", RoutingChangedPayload{Rules: projectRoutingMappings(cfg.Routing.Mappings)})
+	if err := requestRoutingReload(); err != nil {
+		fmt.Printf("warning: failed to nudge gateway reload: %v\n", err)
 	}
 	fmt.Printf("Updated runtime for %s:%s\n", channel, chatID)
 }

@@ -9,6 +9,86 @@ import (
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
+func TestBuildSystemPromptIncludesHostedToolNotes(t *testing.T) {
+	workspace := t.TempDir()
+	cb := NewContextBuilder(workspace)
+	cb.SetIncludePromptToolSummaries(false)
+	cb.SetHostedToolNotes("`image_generation` (OpenAI Responses) — generate images in chat")
+
+	prompt := cb.BuildSystemPrompt()
+	if !strings.Contains(prompt, "## Available Tools") {
+		t.Fatalf("expected Available Tools section for hosted notes")
+	}
+	if !strings.Contains(prompt, "### Provider-hosted tools") {
+		t.Fatalf("expected Provider-hosted tools subsection")
+	}
+	if !strings.Contains(prompt, "`image_generation` (OpenAI Responses)") {
+		t.Fatalf("expected image_generation hosted note in prompt")
+	}
+}
+
+func TestCodexImageGenerationToolNotePreservesFinalArtifactContract(t *testing.T) {
+	for _, required := range []string{
+		"read and follow the `image-generation` skill",
+		"preserves the user's requested final artifact",
+	} {
+		if !strings.Contains(codexImageGenerationToolNote, required) {
+			t.Fatalf("image generation note missing %q", required)
+		}
+	}
+	if strings.Contains(strings.ToLower(codexImageGenerationToolNote), "real experimental data") {
+		t.Fatal("image generation note still contains the removed provenance warning")
+	}
+}
+
+func TestWorkspaceTemplateOmitsRemovedImageGenerationWarning(t *testing.T) {
+	templatePath := filepath.Join("..", "workspacetpl", "templates", "workspace", "AGENTS.md")
+	data, err := os.ReadFile(templatePath)
+	if err != nil {
+		t.Fatalf("read workspace AGENTS template: %v", err)
+	}
+	text := string(data)
+	if strings.Contains(strings.ToLower(text), "real experimental data") {
+		t.Fatal("workspace template still contains the removed provenance warning")
+	}
+	if !strings.Contains(text, "`image-generation`") {
+		t.Fatal("workspace template missing canonical image-generation skill routing")
+	}
+}
+
+func TestImageGenerationSkillProtectsArtifactRoutes(t *testing.T) {
+	skillPath := filepath.Join("..", "..", "skills", "image-generation", "SKILL.md")
+	data, err := os.ReadFile(skillPath)
+	if err != nil {
+		t.Fatalf("read image-generation skill: %v", err)
+	}
+	text := string(data)
+	for _, required := range []string{
+		"### Standalone image",
+		"### Visual asset inside another artifact",
+		"### Editable presentation",
+		"### Complete image-generated slide",
+		"finished 16:9 slide as one image",
+		"read and follow the installed `pptx` skill",
+		"action title stating the takeaway",
+		"concise audience-facing wording",
+		"integrated exhibit or visual analogy that carries meaning",
+		"clear implication, intervention, or “so what”",
+		"readable presentation-scale hierarchy and spacing",
+		"Use source PowerPoint content when supplied",
+		"Do not return a wordless conceptual illustration",
+		"do not reconstruct an editable PowerPoint unless asked",
+		"successful stress-capacity pattern",
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("image-generation skill missing %q", required)
+		}
+	}
+	if strings.Contains(strings.ToLower(text), "real experimental data") {
+		t.Fatal("image-generation skill contains the removed provenance warning")
+	}
+}
+
 func TestBuildSystemPromptUsesSciClawIdentity(t *testing.T) {
 	workspace := t.TempDir()
 	cb := NewContextBuilder(workspace)
@@ -18,7 +98,7 @@ func TestBuildSystemPromptUsesSciClawIdentity(t *testing.T) {
 	if !strings.Contains(prompt, "# sciClaw") {
 		t.Fatalf("system prompt missing sciClaw identity header")
 	}
-	if !strings.Contains(prompt, "paired-scientist assistant") {
+	if !strings.Contains(prompt, "paired-scientist") {
 		t.Fatalf("system prompt missing paired-scientist identity description")
 	}
 	if !strings.Contains(prompt, "Reproducibility") {
@@ -29,6 +109,12 @@ func TestBuildSystemPromptUsesSciClawIdentity(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "start with the dedicated `pubmed_search` and `pubmed_fetch` tools") {
 		t.Fatalf("system prompt missing explicit typed PubMed guidance")
+	}
+	if !strings.Contains(prompt, "Use the remember tool for curated long-term memory") {
+		t.Fatalf("system prompt missing remember guidance")
+	}
+	if strings.Contains(prompt, "write here instead of MEMORY.md") {
+		t.Fatalf("system prompt still redirects execution logs into daily notes")
 	}
 }
 

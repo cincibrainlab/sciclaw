@@ -53,6 +53,22 @@ func (m *diagnosticMockProvider) GetDefaultModel() string {
 	return "mock-model"
 }
 
+func TestNewAgentLoopWithCodexProviderAssemblesImageGenerationRouting(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	provider := providers.NewCodexProvider("test-token", "test-account")
+
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	prompt := al.contextBuilder.BuildSystemPrompt()
+
+	if !strings.Contains(prompt, "read and follow the `image-generation` skill") {
+		t.Fatal("assembled Codex prompt missing canonical image-generation skill routing")
+	}
+	if strings.Contains(strings.ToLower(prompt), "real experimental data") {
+		t.Fatal("assembled Codex prompt contains the removed provenance warning")
+	}
+}
+
 func TestLocalTurnDiagnostics_RecordLLMResponseTracksFallbacks(t *testing.T) {
 	diag := newLocalTurnDiagnostics()
 	diag.recordLLMResponse(1500*time.Millisecond, &providers.LLMResponse{
@@ -116,6 +132,7 @@ func TestNewAgentLoopWithSideLaneProfileRestrictsTools(t *testing.T) {
 		"write_file",
 		"edit_file",
 		"append_file",
+		"remember",
 		"pubmed_export_ris",
 		"pdf_form_fill",
 		"spawn",
@@ -490,7 +507,7 @@ func TestRunLLMIteration_RejectsNarrativeCompletionForExplicitOutputTask(t *test
 	if !errors.As(err, &incomplete) {
 		t.Fatalf("expected incompleteTurnError, got %T", err)
 	}
-	if !strings.Contains(got, "I have not completed the requested work yet") {
+	if !strings.Contains(got, "I have not finished everything yet") {
 		t.Fatalf("expected honest incomplete fallback, got %q", got)
 	}
 	if !strings.Contains(got, "saved output files") {
@@ -498,6 +515,15 @@ func TestRunLLMIteration_RejectsNarrativeCompletionForExplicitOutputTask(t *test
 	}
 	if !strings.Contains(got, "mock_custom") {
 		t.Fatalf("expected completed tool list in fallback, got %q", got)
+	}
+	if incomplete.Error() != incomplete.reason && !strings.Contains(incomplete.Error(), "saved output files") {
+		t.Fatalf("Error() should expose missing-labels reason, got %q", incomplete.Error())
+	}
+	if incomplete.Error() == incomplete.UserMessage() {
+		t.Fatalf("Error() must not equal the full userMessage reply")
+	}
+	if !IsIncompleteTurn(err) {
+		t.Fatal("IsIncompleteTurn should be true")
 	}
 }
 
@@ -644,6 +670,74 @@ func TestProcessDirect_LocalModeEmitsRuntimeSummaryLog(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected Local runtime summary entry in log:\n%s", string(data))
+	}
+}
+
+func TestHandleInboundHidesProviderDiagnosticsButLogsThem(t *testing.T) {
+	const rawCanary = "RAW_CANARY_agent_inbound_4c19"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Request-Id", "req-agent-inbound")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"code":"rate_limit","message":"` + rawCanary + `"}}`))
+	}))
+	defer server.Close()
+
+	logPath := filepath.Join(t.TempDir(), "agent.log")
+	previousLevel := logger.GetLevel()
+	logger.SetLevel(logger.INFO)
+	defer logger.SetLevel(previousLevel)
+	if err := logger.EnableFileLogging(logPath); err != nil {
+		t.Fatalf("EnableFileLogging: %v", err)
+	}
+	defer logger.DisableFileLogging()
+
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	msgBus := bus.NewMessageBus()
+	al := NewAgentLoop(cfg, msgBus, providers.NewHTTPProvider("test-key", server.URL, ""))
+	defer al.Stop()
+
+	al.HandleInbound(context.Background(), bus.InboundMessage{
+		Channel:    "discord",
+		ChatID:     "room-1",
+		SenderID:   "user-1",
+		SessionKey: "discord:room-1",
+		Content:    "trigger provider failure",
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	outbound, ok := msgBus.SubscribeOutbound(ctx)
+	if !ok {
+		t.Fatal("expected outbound provider error")
+	}
+	if outbound.Error == nil || outbound.Error.ReferenceID == "" {
+		t.Fatalf("expected outbound error reference, got %#v", outbound)
+	}
+	if strings.Contains(outbound.Content, rawCanary) || strings.Contains(outbound.Error.TechnicalDetails, rawCanary) {
+		t.Fatalf("raw provider diagnostics leaked outbound: %#v", outbound)
+	}
+	if !strings.Contains(outbound.Content, outbound.Error.ReferenceID) {
+		t.Fatalf("outbound content omitted error reference %q: %q", outbound.Error.ReferenceID, outbound.Content)
+	}
+
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	found := false
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var entry logger.LogEntry
+		if err := json.Unmarshal([]byte(line), &entry); err != nil || entry.Message != "LLM call failed" {
+			continue
+		}
+		if entry.Fields["error_reference"] == outbound.Error.ReferenceID && strings.Contains(entry.Fields["error"].(string), rawCanary) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected structured log with raw diagnostics and reference:\n%s", data)
 	}
 }
 

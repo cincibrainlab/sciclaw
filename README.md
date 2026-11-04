@@ -9,13 +9,17 @@
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go&logoColor=white)](https://go.dev)
 [![Platforms](https://img.shields.io/badge/Platforms-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-blue)](https://github.com/drpedapati/sciclaw/releases)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+[![Discord](https://img.shields.io/discord/1488473301889191977?logo=discord&logoColor=white&label=Discord&color=5865F2)](https://discord.gg/UwGGGqU7yf)
 
 [Website](https://sciclaw.dev) ·
 [Documentation](https://sciclaw.dev/docs.html) ·
 [Manuscript (pending arXiv submission #7284050)](docs/assets/sciclaw-arxiv.pdf) ·
 [YouTube Tutorial](https://www.youtube.com/watch?v=P3pDulPnCzU) ·
 [Releases](https://github.com/drpedapati/sciclaw/releases) ·
+[Discord](https://discord.gg/UwGGGqU7yf) ·
 [Discussions](https://github.com/drpedapati/sciclaw/discussions)
+
+📬 [**Get email updates**](https://list.sciclaw.dev/subscription/form) — occasional release notes, no spam.
 
 </div>
 
@@ -33,6 +37,9 @@ The most natural way to use sciClaw is through **Telegram** or **Discord**. You 
 You:      "Find recent papers on TDP-43 proteinopathy in ALS"
 sciClaw:  [searches PubMed, returns 47 papers with citations, saves to workspace]
 
+You:      "Image, generate a schematic of TDP-43 condensate formation under stress"
+sciClaw:  [generates a figure via OpenAI image gen, saves it, attaches the PNG in chat]
+
 You:      "Draft a methods section using the attached protocol"
 sciClaw:  [produces a Word doc with tracked changes you review in Microsoft Word]
 ```
@@ -45,6 +52,23 @@ Discord on current `main`/dev builds also supports:
 - queued background jobs with status/cancel cards
 - `/btw` for explicit read-only side questions in the current workspace
 - `/skill` with workspace-aware autocomplete for explicit skill use
+- `/theme` to pick a response style (Clear, Formal, or Brief) that persists per user across sessions
+
+## Addons
+
+Addons are optional capabilities installed separately from the core binary. Each addon is a standalone repo with a manifest, a sidecar binary, and optional install scripts. The gateway reconciler spawns addon sidecars automatically and keeps them in sync.
+
+Two reference addons ship under the sciclaw org (private repos):
+- **sciclaw-addon-webtop**: per-user Ubuntu XFCE browser desktops via Docker.
+- **sciclaw-addon-jupyter**: per-user Jupyter Lab servers with rotating token auth.
+
+Addons share the same workspace and user identity as your chat channels. Install with:
+
+```bash
+sciclaw addon install <url> --version v0.1.0
+```
+
+Ten lifecycle commands: `install`, `enable`, `disable`, `uninstall`, `upgrade`, `verify`, `rollback`, `sbom`, `list`, `status`. The web UI injects sidebar tabs for each enabled addon. See the [dev log](docs/devlog.html) for implementation details.
 
 ## Install
 
@@ -155,7 +179,7 @@ sciClaw auto-detects the provider from the model name. Set credentials via the o
 
 | Provider | Models | Auth |
 |----------|--------|------|
-| **OpenAI** | gpt-5.2 (primary), gpt-5.2-chat-latest, gpt-5.2-pro | API key or device-code OAuth |
+| **OpenAI** | gpt-5.6-sol (primary @ low), gpt-5.6-terra (cheaper peer), gpt-5.5, gpt-5.4, gpt-5.2 | API key or device-code OAuth |
 | **Anthropic** | claude-sonnet-4.6, claude-opus-4-6, claude-haiku-4-5-20251001 | API key, token paste, or Claude.ai oat-token bridge |
 | **Gemini** | gemini-2.5-pro, gemini-2.5-flash | API key |
 | **OpenRouter** | All models via `openrouter/` prefix | API key |
@@ -177,6 +201,7 @@ Bundled skills include:
 ### Authoring & Visualization
 - **quarto-authoring** — Loop-driven `.qmd` authoring and rendering
 - **pandoc-docx** — Clean `.docx` manuscript generation from Markdown with NIH template auto-apply
+- **Chat image generation** — On OpenAI Codex/OAuth + GPT-5.x, ask “Image, generate …” to create figures via the Responses `image_generation` tool; PNGs are saved under `artifacts/generated/` and attached in Discord/Telegram
 - **imagemagick** — Reproducible image preprocessing (resize, crop, convert, DPI normalization) via `magick`
 - **beautiful-mermaid** — Publication-grade Mermaid diagrams
 - **explainer-site** — Technical, single-page "How X Works" explainer site generation
@@ -210,6 +235,7 @@ Discord-specific features on current `main`/dev builds:
 - background jobs for long-running requests, with queue-aware progress cards
 - `/btw` slash command for read-only side questions in the same workspace
 - `/skill` slash command with workspace-aware skill autocomplete
+- `/theme` slash command to pick Clear, Formal, or Brief response styles (persists per user)
 
 <details>
 <summary><strong>Telegram setup</strong> (easiest)</summary>
@@ -274,9 +300,9 @@ Example:
 ```bash
 sciclaw routing add \
   --channel discord \
-  --chat-id 1467290563052048476 \
+  --chat-id 123456789012345678 \
   --workspace /absolute/path/to/project-a \
-  --allow 8535331528,1467290563052048476 \
+  --allow 987654321098765432,123456789012345678 \
   --label project-a
 
 sciclaw routing enable
@@ -289,9 +315,9 @@ To let the bot respond to every message (no `@mention` needed), add `--no-mentio
 ```bash
 sciclaw routing add \
   --channel discord \
-  --chat-id 1467290563052048476 \
+  --chat-id 123456789012345678 \
   --workspace /absolute/path/to/project-a \
-  --allow 8535331528 \
+  --allow 987654321098765432 \
   --no-mention
 ```
 
@@ -348,7 +374,7 @@ Every IRL command is recorded in the active visible workspace, under `irl/comman
 
 `SCICLAW_HOME` overrides the visible root and `SCICLAW_STATE_HOME` overrides the machine-state root. `~/.picoclaw` remains PicoClaw-owned and is never used as a SciClaw runtime fallback.
 
-Legacy SciClaw layouts are migrated manually only. SciClaw does not import, merge, remove, or symlink `~/.picoclaw`; update active config/workspace paths yourself after reviewing the files you intend to move.
+To import PicoClaw configuration explicitly, run `sciclaw migrate --picoclaw-home ~/.picoclaw`. The command preserves config fields, maps the default PicoClaw workspace path to the SciClaw default, and never overwrites an existing SciClaw config. It does not migrate workspace files, sessions, or credentials stored outside the config, and leaves `~/.picoclaw` unchanged.
 
 ## Docker
 
@@ -427,9 +453,15 @@ Current sources of truth:
 | `sciclaw channels setup <channel>` | Configure a chat channel |
 | `sciclaw auth login\|logout\|status\|import-op` | Manage credentials |
 | `sciclaw skills list\|install` | Manage skills |
+| `sciclaw web` | Open the web management UI (routing, system config) |
+| `sciclaw prompt inspect --session <key>` | Token/turn breakdown of a session's prompt |
 | `sciclaw cron list\|add` | Manage scheduled jobs |
 
 </details>
+
+### ctxclaw
+
+`ctxclaw` is a standalone context-window optimizer installed automatically with sciClaw. It sits between the agent runtime and the model, compressing stale history to reclaim tokens in long-running sessions. Use `sciclaw prompt inspect` to see where tokens are going before optimizing. See [docs](https://sciclaw.dev/docs.html#ctxclaw) for details.
 
 ## License
 

@@ -10,6 +10,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,6 +27,7 @@ import (
 
 	"github.com/chzyer/readline"
 	"github.com/sipeed/picoclaw/cmd/picoclaw/tui"
+	"github.com/sipeed/picoclaw/pkg/addons"
 	"github.com/sipeed/picoclaw/pkg/agent"
 	"github.com/sipeed/picoclaw/pkg/auth"
 	"github.com/sipeed/picoclaw/pkg/bus"
@@ -40,6 +43,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/models"
 	"github.com/sipeed/picoclaw/pkg/paths"
 	"github.com/sipeed/picoclaw/pkg/phi"
+	"github.com/sipeed/picoclaw/pkg/profile"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/routing"
 	svcmgr "github.com/sipeed/picoclaw/pkg/service"
@@ -73,6 +77,11 @@ const primaryCLIName = "sciclaw"
 
 const docsURLBase = "https://drpedapati.github.io/sciclaw/docs.html"
 
+type agentDirectResult struct {
+	Response string             `json:"response"`
+	Error    *bus.OutboundError `json:"error,omitempty"`
+}
+
 var baselineScienceSkillNames = []string{
 	"scientific-writing",
 	"pubmed-cli",
@@ -80,6 +89,7 @@ var baselineScienceSkillNames = []string{
 	"quarto-authoring",
 	"pandoc-docx",
 	"imagemagick",
+	"image-generation",
 	"beautiful-mermaid",
 	"explainer-site",
 	"experiment-provenance",
@@ -161,7 +171,7 @@ func main() {
 	}
 
 	command := os.Args[1]
-	if shouldOfferConfigHealthRepair(command) {
+	if shouldOfferConfigHealthRepair(command) && !(command == "agent" && slices.Contains(os.Args[2:], "--json")) {
 		if err := maybeOfferConfigHealthRepair(); err != nil {
 			fmt.Printf("Warning: config health check failed: %v\n", err)
 		}
@@ -198,6 +208,8 @@ func main() {
 		cronCmd()
 	case "routing":
 		routingCmd()
+	case "addon", "addons":
+		addonCmd()
 	case "modes":
 		modesCmd()
 	case "models":
@@ -512,6 +524,7 @@ func printHelp() {
 	fmt.Println("  doctor      Check deployment health and dependencies")
 	fmt.Println("  cron        Manage scheduled tasks")
 	fmt.Println("  routing     Manage channel->workspace routing and ACLs")
+	fmt.Println("  addon       Install and manage sciClaw addons (webtop, jupyter, etc.)")
 	fmt.Println("  migrate     Migrate from OpenClaw to sciClaw")
 	fmt.Println("  skills      Manage skills (install, list, remove)")
 	fmt.Println("  backup      Backup key sciClaw config/workspace files")
@@ -1250,13 +1263,15 @@ func agentCmd() {
 	sessionKey := "cli:default"
 	modelOverride := ""
 	effortOverride := ""
+	jsonOutput := false
+	debugOutput := false
 
 	args := os.Args[2:]
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--debug", "-d":
 			logger.SetLevel(logger.DEBUG)
-			fmt.Println("🔍 Debug mode enabled")
+			debugOutput = true
 		case "-m", "--message":
 			if i+1 < len(args) {
 				message = args[i+1]
@@ -1277,12 +1292,21 @@ func agentCmd() {
 				effortOverride = args[i+1]
 				i++
 			}
+		case "--json":
+			jsonOutput = true
 		}
+	}
+	if jsonOutput {
+		if home, err := os.UserHomeDir(); err == nil {
+			_ = logger.EnableFileLogging(filepath.Join(home, ".picoclaw", "web.log"))
+		}
+	} else if debugOutput {
+		fmt.Println("🔍 Debug mode enabled")
 	}
 
 	cfg, err := loadConfig()
 	if err != nil {
-		fmt.Printf("Error loading config: %v\n", err)
+		printAgentStartupFailure(jsonOutput, err)
 		os.Exit(1)
 	}
 
@@ -1290,7 +1314,7 @@ func agentCmd() {
 
 	provider, err := providers.CreateProvider(cfg)
 	if err != nil {
-		fmt.Printf("Error creating provider: %v\n", err)
+		printAgentStartupFailure(jsonOutput, err)
 		os.Exit(1)
 	}
 
@@ -1309,15 +1333,49 @@ func agentCmd() {
 	if message != "" {
 		ctx := context.Background()
 		response, err := agentLoop.ProcessDirect(ctx, message, sessionKey)
-		if err != nil {
-			fmt.Printf("Error: %v\n", err)
-			os.Exit(1)
+		if jsonOutput {
+			printAgentDirectJSON(response, err)
+			if err != nil {
+				os.Exit(agentDirectExitCode(err))
+			}
+			return
 		}
-		fmt.Printf("\n%s %s\n", logo, response)
-	} else {
-		fmt.Printf("%s Interactive mode (Ctrl+C to exit)\n\n", logo)
-		interactiveMode(agentLoop, sessionKey)
+		printAgentDirectResult(logo, response, err)
+		if err != nil {
+			os.Exit(agentDirectExitCode(err))
+		}
+		return
 	}
+	if jsonOutput {
+		printAgentStartupFailure(true, errors.New("agent direct mode requires -m or --message"))
+		os.Exit(1)
+	}
+	fmt.Printf("%s Interactive mode (Ctrl+C to exit)\n\n", logo)
+	interactiveMode(agentLoop, sessionKey)
+}
+
+func printAgentStartupFailure(jsonOutput bool, err error) {
+	logger.ErrorCF("agent", "agent_startup_failed", map[string]interface{}{"error": err.Error()})
+	if jsonOutput {
+		printAgentDirectJSON("", err)
+		return
+	}
+	if message, _, ok := agent.UserError(err); ok {
+		fmt.Printf("\n%s %s\n\n", logo, message)
+		return
+	}
+	fmt.Printf("\n%s The agent could not start. Please contact an administrator.\n\n", logo)
+}
+
+func printAgentDirectJSON(response string, err error) {
+	result := agentDirectResult{Response: response}
+	if userMessage, userError, ok := agent.UserError(err); ok {
+		result.Response = userMessage
+		result.Error = userError
+	} else if err != nil {
+		result.Response = "The request could not be completed. Please try again, then contact an administrator if it continues."
+	}
+	_ = json.NewEncoder(os.Stdout).Encode(result)
 }
 
 func applyAgentCLIOverrides(cfg *config.Config, modelOverride, effortOverride string) {
@@ -1385,12 +1443,7 @@ func interactiveMode(agentLoop *agent.AgentLoop, sessionKey string) {
 
 		ctx := context.Background()
 		response, err := agentLoop.ProcessDirect(ctx, input, sessionKey)
-		if err != nil {
-			fmt.Printf("Error: %v\n", err)
-			continue
-		}
-
-		fmt.Printf("\n%s %s\n\n", logo, response)
+		printAgentDirectResult(logo, response, err)
 	}
 }
 
@@ -1420,13 +1473,36 @@ func simpleInteractiveMode(agentLoop *agent.AgentLoop, sessionKey string) {
 
 		ctx := context.Background()
 		response, err := agentLoop.ProcessDirect(ctx, input, sessionKey)
-		if err != nil {
-			fmt.Printf("Error: %v\n", err)
-			continue
-		}
+		printAgentDirectResult(logo, response, err)
+	}
+}
 
+// printAgentDirectResult shows the agent reply when present. Soft incomplete
+// turns already carry a human status in response — print that and skip a scary
+// "Error:" line. Hard failures still print Error: (even alongside partial text).
+// Callers must still non-zero-exit on err for one-shot agent -m.
+func printAgentDirectResult(logo, response string, err error) {
+	if strings.TrimSpace(response) != "" {
 		fmt.Printf("\n%s %s\n\n", logo, response)
 	}
+	if err == nil {
+		return
+	}
+	if agent.IsIncompleteTurn(err) && strings.TrimSpace(response) != "" {
+		return
+	}
+	if message, _, ok := agent.UserError(err); ok {
+		fmt.Printf("%s\n", message)
+		return
+	}
+	fmt.Printf("Error: %v\n", err)
+}
+
+func agentDirectExitCode(err error) int {
+	if err != nil {
+		return 1
+	}
+	return 0
 }
 
 func gatewayCmd() {
@@ -1539,6 +1615,80 @@ func gatewayCmd() {
 	msgBus := bus.NewMessageBus()
 	agentLoop := agent.NewAgentLoop(cfg, msgBus, provider)
 
+	// Initialize the addon hook dispatcher before any emission site can fire.
+	//
+	// The dispatcher is a no-op when the addon registry is empty, so it is
+	// safe to wire in unconditionally — core code pays nothing until the user
+	// installs an addon. Wave 4a wires the real SidecarRegistry into both
+	// the Dispatcher.Lookup callback and the addon Lifecycle so that
+	// `sciclaw addon enable <name>` actually spawns a process and hook
+	// events can find the live sidecar.
+	//
+	// Use the same add-on root as the CLI.
+	sciclawHome := sciclawHomeDir()
+	addonStore := addons.NewStore(sciclawHome)
+	addonSidecarRegistry = addons.NewSidecarRegistry()
+	// Create the gateway shutdown context early so the addon dispatcher
+	// can derive its per-call hook timeouts from it. When shutdown
+	// cancels this ctx below (via the defer), every in-flight hook
+	// delivery short-circuits instead of holding the shutdown path
+	// hostage to a 10s-per-call stack of addon timeouts.
+	gatewayCtx, gatewayCancel := context.WithCancel(context.Background())
+	defer gatewayCancel()
+	SetAddonDispatcher(&addons.Dispatcher{
+		Store:       addonStore,
+		SciclawHome: sciclawHome,
+		Lookup:      addonSidecarRegistry.Lookup,
+		Timeout:     5 * time.Second,
+		Log: func(name, event string, err error) {
+			if err != nil {
+				logger.WarnCF("addons", "hook dispatch error", map[string]interface{}{
+					"addon": name,
+					"event": event,
+					"error": err.Error(),
+				})
+			}
+		},
+	}, gatewayCtx)
+
+	// Wave 4d: reconciliation control loop. The CLI (`sciclaw addon enable
+	// …`) mutates registry.json in a short-lived process and does NOT own
+	// sidecars — this Reconciler is the long-lived process that turns those
+	// persisted state changes into real spawn/stop calls on the
+	// addonSidecarRegistry. A ticker drives eventual consistency, and the
+	// CLI also touches addons/reload via addons.TriggerReload so the loop
+	// kicks off an immediate pass and `addon enable` feels synchronous.
+	addonReconciler := &addons.Reconciler{
+		Store:        addonStore,
+		Registry:     addonSidecarRegistry,
+		SciclawHome:  sciclawHome,
+		Interval:     10 * time.Second,
+		StartTimeout: 10 * time.Second,
+		StopTimeout:  10 * time.Second,
+		Log: func(name, event string, err error) {
+			fields := map[string]interface{}{
+				"addon": name,
+				"event": event,
+			}
+			if err != nil {
+				fields["error"] = err.Error()
+				logger.WarnCF("addons", "reconcile", fields)
+				return
+			}
+			logger.InfoCF("addons", "reconcile", fields)
+		},
+	}
+
+	// Wire per-user profile store for answer theme resolution
+	gatewayProfileStore := profile.NewStore(filepath.Join(sciclawHome, "profiles"))
+	gatewayProfileStore.OnProfileUpdated = func(senderID string, p *profile.UserProfile) {
+		fireAddonHook("profile_updated", map[string]any{
+			"sender_id": senderID,
+			"profile":   p,
+		})
+	}
+	agentLoop.SetProfileStore(gatewayProfileStore)
+
 	// Print agent startup info
 	fmt.Println("\n📦 Agent Status:")
 	startupInfo := agentLoop.GetStartupInfo()
@@ -1635,6 +1785,9 @@ func gatewayCmd() {
 			dc.SetSlashSkillCatalogCallback(func(channelID, guildID, userID string) ([]channels.SlashSkillChoice, error) {
 				return listDiscordSlashSkills(cfg, channelID, guildID, userID)
 			})
+			dc.SetThemeHandler(func(senderID, displayName, theme string) error {
+				return gatewayProfileStore.SetAnswerTheme(senderID, displayName, theme)
+			})
 			logger.InfoC("tools", "Channel history tool attached to Discord")
 		}
 	}
@@ -1649,8 +1802,31 @@ func gatewayCmd() {
 	fmt.Println("✓ Gateway started")
 	fmt.Println("Press Ctrl+C to stop")
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// Reuse the gateway shutdown ctx that was created earlier for the
+	// addon dispatcher so hook deliveries and the reconciler share a
+	// single cancellation signal. Shadowing the name keeps the rest of
+	// the function unchanged.
+	ctx := gatewayCtx
+	cancel := gatewayCancel
+	_ = cancel // cancel is invoked via the earlier defer gatewayCancel()
+
+	// Start the addon reconciliation loop. Uses the same ctx that the
+	// shutdown sequence below cancels, so the reconciler goroutine exits
+	// before addonSidecarRegistry.StopAll runs and tears down the
+	// sidecars. Run returns ctx.Err() on cancel; that is expected, not an
+	// error condition, and is filtered below. The shutdown path blocks on
+	// addonReconcilerDone so a reconcile pass that is mid-spawn cannot
+	// race StopAll and leak a freshly-registered sidecar.
+	addonReconcilerDone := make(chan struct{})
+	go func() {
+		defer close(addonReconcilerDone)
+		if err := addonReconciler.Run(ctx); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			logger.WarnCF("addons", "reconciler exited", map[string]interface{}{
+				"error": err.Error(),
+			})
+		}
+	}()
+
 	var loopPool *routing.AgentLoopPool
 	var jobManager *routing.JobManager
 	btwLaneResolver := func(target routing.LoopTarget) (routing.JobRunner, error) {
@@ -1689,14 +1865,23 @@ func gatewayCmd() {
 			fmt.Println("✓ Discord background jobs enabled")
 		}
 	}
+	// watchRoutingReload is always started, even when routing is disabled,
+	// so CLI-initiated routing changes (which touch the reload marker and
+	// may also flip Routing.Enabled) reach addon hooks without requiring
+	// a gateway restart. A nil dispatcher means "only fire addon hooks,
+	// don't try to ReplaceResolver".
+	var routingDispatcher *routing.Dispatcher
 	if cfg.Routing.Enabled {
 		resolver, err := routing.NewResolver(cfg)
 		if err != nil {
 			fmt.Printf("Error initializing routing: %v\n", err)
 			os.Exit(1)
 		}
-		// Build a setup function that wires channel_history for each routed agent loop.
+		// Build a setup function that wires channel_history and profile store for each routed agent loop.
 		var poolSetup []routing.LoopSetupFunc
+		poolSetup = append(poolSetup, func(al *agent.AgentLoop) {
+			al.SetProfileStore(gatewayProfileStore)
+		})
 		if channelHistoryCB != nil {
 			poolSetup = append(poolSetup, func(al *agent.AgentLoop) {
 				attachChannelHistoryCallback(al, channelHistoryCB)
@@ -1706,19 +1891,20 @@ func gatewayCmd() {
 		if jobManager != nil {
 			jobManager.SetSideLaneResolver(loopPool.ResolveBTWJobHandler)
 		}
-		dispatcher := routing.NewDispatcher(msgBus, resolver, loopPool)
+		routingDispatcher = routing.NewDispatcher(msgBus, resolver, loopPool)
 		if jobManager != nil {
-			dispatcher.SetJobManager(jobManager)
+			routingDispatcher.SetJobManager(jobManager)
 		}
 		go func() {
-			if err := dispatcher.Run(ctx); err != nil {
+			if err := routingDispatcher.Run(ctx); err != nil {
 				logger.ErrorCF("routing", "route_invalid", map[string]interface{}{"reason": err.Error()})
 			}
 		}()
-		go watchRoutingReload(ctx, dispatcher)
 		fmt.Printf("✓ Routing enabled: %d mapping(s)\n", len(cfg.Routing.Mappings))
-		fmt.Printf("✓ Routing reload trigger: %s\n", routingReloadTriggerPath())
-	} else {
+	}
+	go watchRoutingReload(ctx, routingDispatcher)
+	fmt.Printf("✓ Routing reload trigger: %s\n", routingReloadTriggerPath())
+	if !cfg.Routing.Enabled {
 		if jobManager != nil {
 			go runGatewayDefaultDispatch(ctx, msgBus, agentLoop, jobManager, routing.LoopTarget{
 				Workspace: cfg.WorkspacePath(),
@@ -1761,6 +1947,30 @@ func gatewayCmd() {
 	}
 	agentLoop.Stop()
 	channelManager.StopAll(ctx)
+	// Wait for the reconciler goroutine to exit BEFORE StopAll, so an
+	// in-flight reconcile pass cannot race StopAll's registry snapshot and
+	// leave a freshly-spawned sidecar running. ctx was just cancelled above,
+	// so Run will return promptly; the 5s cap is defense-in-depth.
+	if addonReconcilerDone != nil {
+		select {
+		case <-addonReconcilerDone:
+		case <-time.After(5 * time.Second):
+			logger.WarnCF("addons", "reconciler shutdown timeout", nil)
+		}
+	}
+	// Stop all live addon sidecars before exiting. Uses a fresh bounded
+	// context because the gateway ctx was just cancelled above — StopAll
+	// must still be able to reach its 10s deadline.
+	if addonSidecarRegistry != nil {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		addonSidecarRegistry.StopAll(stopCtx, func(name string, err error) {
+			logger.WarnCF("addons", "sidecar stop error on shutdown", map[string]interface{}{
+				"addon": name,
+				"error": err.Error(),
+			})
+		})
+		stopCancel()
+	}
 	_ = os.Remove(gatewayStatusPath)
 	logger.DisableFileLogging()
 	fmt.Println("✓ Gateway stopped")
@@ -2738,6 +2948,14 @@ func routingReloadTriggerPath() string {
 	return paths.RoutingReloadPath()
 }
 
+// watchRoutingReload polls the reload marker every 2s and reacts to mtime
+// changes. If dispatcher is non-nil, it replaces the resolver so live
+// routing picks up the new mappings without a gateway restart. Regardless
+// of dispatcher state, it fires the routing_changed addon hook so addons
+// see the change. This is always started at gateway boot, even when
+// routing is currently disabled, because the user may enable routing
+// at runtime and CLI addon hooks should reach addons as soon as routing
+// marker updates appear.
 func watchRoutingReload(ctx context.Context, dispatcher *routing.Dispatcher) {
 	triggerPath := routingReloadTriggerPath()
 	lastSeen := time.Time{}
@@ -2769,18 +2987,30 @@ func watchRoutingReload(ctx context.Context, dispatcher *routing.Dispatcher) {
 				})
 				continue
 			}
-			resolver, err := routing.NewResolver(cfg)
-			if err != nil {
-				logger.ErrorCF("routing", "route_reload_failure", map[string]interface{}{
-					"reason": err.Error(),
-				})
-				continue
-			}
 
-			dispatcher.ReplaceResolver(resolver)
+			// If a dispatcher exists, rebuild the resolver and swap it in
+			// so routing dispatch picks up the new mappings.
+			if dispatcher != nil {
+				resolver, rerr := routing.NewResolver(cfg)
+				if rerr != nil {
+					logger.ErrorCF("routing", "route_reload_failure", map[string]interface{}{
+						"reason": rerr.Error(),
+					})
+					continue
+				}
+				dispatcher.ReplaceResolver(resolver)
+			}
 			logger.InfoCF("routing", "route_reload_success", map[string]interface{}{
-				"mappings": len(cfg.Routing.Mappings),
+				"mappings":   len(cfg.Routing.Mappings),
+				"dispatcher": dispatcher != nil,
 			})
+
+			// Fire routing_changed addon hook from inside the gateway
+			// process, where addonDispatcher is actually initialized.
+			// CLI-initiated routing changes reach addons via this path
+			// (CLI writes config.json + touches routing.reload → this
+			// watcher picks it up → fires the hook to subscribed addons).
+			fireAddonHook("routing_changed", RoutingChangedPayload{Rules: projectRoutingMappings(cfg.Routing.Mappings)})
 		}
 	}
 }
