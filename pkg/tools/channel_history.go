@@ -9,19 +9,20 @@ import (
 
 // ChannelHistoryMessage is a single message returned by the fetch callback.
 type ChannelHistoryMessage struct {
-	ID        string
-	Author    string
-	Content   string
-	Media     []string
-	MediaIDs  []string
-	Timestamp string
+	ID         string
+	Author     string
+	Content    string
+	Media      []string
+	MediaIDs   []string
+	MediaNames []string
+	Timestamp  string
 }
 
 // FetchChannelHistoryCallback fetches recent messages from a channel.
 // channelID is the platform-specific channel/chat ID.
 // limit is the max number of messages to return (capped by the callback).
 // beforeID, if non-empty, fetches messages before this message ID (for pagination).
-type FetchChannelHistoryCallback func(ctx context.Context, channelID string, limit int, beforeID string, attachmentOffset int) ([]ChannelHistoryMessage, error)
+type FetchChannelHistoryCallback func(ctx context.Context, channelID string, limit int, beforeID string, attachmentOffset int, attachmentSnapshot string) ([]ChannelHistoryMessage, error)
 
 type ChannelHistoryTool struct {
 	fetchCallback  FetchChannelHistoryCallback
@@ -49,6 +50,10 @@ func (t *ChannelHistoryTool) Parameters() map[string]interface{} {
 			"limit": map[string]interface{}{
 				"type":        "integer",
 				"description": "Number of messages to fetch (default 50, max 100)",
+			},
+			"attachment_snapshot": map[string]interface{}{
+				"type":        "string",
+				"description": "Snapshot returned by channel_history for an attachment continuation",
 			},
 			"attachment_offset": map[string]interface{}{
 				"type":        "integer",
@@ -111,7 +116,11 @@ func (t *ChannelHistoryTool) Execute(ctx context.Context, args map[string]interf
 	if offset, ok := args["attachment_offset"].(float64); ok && offset > 0 && offset <= 100000 {
 		attachmentOffset = int(offset)
 	}
-	messages, err := fetchCallback(ctx, defaultChatID, limit, beforeID, attachmentOffset)
+	attachmentSnapshot, _ := args["attachment_snapshot"].(string)
+	if attachmentOffset > 0 && attachmentSnapshot == "" {
+		return ErrorResult("attachment_offset requires the attachment_snapshot returned by the previous request")
+	}
+	messages, err := fetchCallback(ctx, defaultChatID, limit, beforeID, attachmentOffset, attachmentSnapshot)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("failed to fetch channel history: %v", err))
 	}
