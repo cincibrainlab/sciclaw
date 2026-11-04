@@ -232,8 +232,7 @@ func (c *SlackChannel) handleMessageEvent(ev *slackevents.MessageEvent) {
 	var mediaPaths []string
 	localFiles := []string{} // 跟踪需要清理的本地文件
 
-	// 确保临时文件在函数返回时被清理
-	defer func() {
+	cleanupFiles := func() {
 		for _, file := range localFiles {
 			if err := os.Remove(file); err != nil {
 				logger.DebugCF("slack", "Failed to cleanup temp file", map[string]interface{}{
@@ -241,6 +240,11 @@ func (c *SlackChannel) handleMessageEvent(ev *slackevents.MessageEvent) {
 					"error": err.Error(),
 				})
 			}
+		}
+	}
+	defer func() {
+		if cleanupFiles != nil {
+			cleanupFiles()
 		}
 	}()
 
@@ -288,7 +292,8 @@ func (c *SlackChannel) handleMessageEvent(ev *slackevents.MessageEvent) {
 		"has_thread": threadTS != "",
 	})
 
-	c.HandleMessage(senderID, chatID, content, mediaPaths, metadata)
+	c.handleMessage(c.ctx, senderID, chatID, content, mediaPaths, metadata, cleanupFiles)
+	cleanupFiles = nil
 }
 
 func (c *SlackChannel) handleAppMention(ev *slackevents.AppMentionEvent) {

@@ -9,6 +9,8 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -2260,17 +2262,45 @@ func attachChannelHistoryCallback(al *agent.AgentLoop, cb tools.FetchChannelHist
 		if err != nil {
 			return nil, err
 		}
+		// Bound each history request independently of the number of fetched messages.
+		const maxHistoryAttachments = 4
+		historyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		var nonce [16]byte
+		if _, err := rand.Read(nonce[:]); err != nil {
+			return nil, err
+		}
+		historyChannel := "discord-history-" + hex.EncodeToString(nonce[:])
+		remaining := maxHistoryAttachments
 		for i := range messages {
 			msg := &messages[i]
-			inbound := bus.InboundMessage{Channel: "discord", ChatID: channelID, Content: msg.Content, Media: msg.Media, Metadata: map[string]string{"message_id": msg.ID}}
-			if err := routing.PrepareInboundMedia(ctx, al.Workspace(), &inbound, rewrites); err != nil {
+			if len(msg.Media) == 0 {
+				continue
+			}
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			if remaining == 0 || historyCtx.Err() != nil {
+				msg.Content += "\nAttachments not staged: history attachment limit reached."
+				continue
+			}
+			media := msg.Media
+			if len(media) > remaining {
+				media = media[:remaining]
+			}
+			remaining -= len(media)
+			inbound := bus.InboundMessage{Channel: historyChannel, ChatID: channelID, Content: msg.Content, Media: media, Metadata: map[string]string{"message_id": msg.ID}}
+			if err := routing.PrepareInboundMedia(historyCtx, al.Workspace(), &inbound, rewrites); err != nil {
 				if ctx.Err() != nil {
 					return nil, ctx.Err()
 				}
 				msg.Content += "\nAttachments could not be staged locally."
-				continue
+			} else {
+				msg.Content = inbound.Content
 			}
-			msg.Content = inbound.Content
+			if len(media) < len(msg.Media) {
+				msg.Content += "\nSome attachments not staged: history attachment limit reached."
+			}
 		}
 		return messages, nil
 	})
@@ -2932,7 +2962,12 @@ func runGatewayDefaultDispatch(ctx context.Context, msgBus *bus.MessageBus, agen
 			if !ok {
 				continue
 			}
-			if err := routing.PrepareInboundMedia(ctx, target.Workspace, &msg, inboundMediaURLRewrites); err != nil {
+			stageErr := routing.PrepareInboundMedia(ctx, target.Workspace, &msg, inboundMediaURLRewrites)
+			if msg.Cleanup != nil {
+				msg.Cleanup()
+				msg.Cleanup = nil
+			}
+			if err := stageErr; err != nil {
 				if !constants.IsInternalChannel(msg.Channel) {
 					_ = msgBus.PublishOutbound(ctx, bus.OutboundMessage{
 						Channel: msg.Channel,
