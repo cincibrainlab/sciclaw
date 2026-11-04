@@ -28,6 +28,7 @@ func TestDockerEntrypointPreservesWorkspaceSkills(t *testing.T) {
 	}
 	write(filepath.Join(workspace, skills[0], "SKILL.md"), "custom", 0644)
 	write(filepath.Join(workspace, skills[0], "extra.txt"), "extra", 0644)
+	write(filepath.Join(workspace, skills[1], "extra.txt"), "keep", 0644)
 	write(filepath.Join(workspace, "move-task-phase-0-to-1", "SKILL.md"), "legacy", 0644)
 	write(filepath.Join(bin, "sciclaw"), "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$GATEWAY_ARGS\"\n", 0755)
 
@@ -66,6 +67,7 @@ func TestDockerEntrypointPreservesWorkspaceSkills(t *testing.T) {
 			filepath.Join(workspace, skills[0], "SKILL.md"):                "custom",
 			filepath.Join(workspace, skills[0], "extra.txt"):               "extra",
 			filepath.Join(workspace, skills[1], "SKILL.md"):                seededWant,
+			filepath.Join(workspace, skills[1], "extra.txt"):               "keep",
 			filepath.Join(workspace, skills[2], "SKILL.md"):                "built-in",
 			filepath.Join(workspace, "move-task-phase-0-to-1", "SKILL.md"): "legacy",
 			filepath.Join(tmp, "args"):                                     "gateway\n--test\n",
@@ -153,7 +155,8 @@ func TestDockerEntrypointFailsOnIncompleteSkillCopy(t *testing.T) {
 		t.Fatalf("start succeeded after failed copy: %s", output)
 	}
 	dir := filepath.Join(workspace, "gitea-create-change-request")
-	if _, err := os.Stat(dir); !os.IsNotExist(err) {
-		t.Fatalf("failed copy left skill directory: %v", err)
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("failed copy left partial files: %v, %v", entries, err)
 	}
 }
