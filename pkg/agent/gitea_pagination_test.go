@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -38,6 +40,10 @@ func TestGiteaListResultLimit(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := config.DefaultConfig()
 			cfg.Agents.Defaults.Workspace = t.TempDir()
+			// Audit writes can outlive the test and race TempDir cleanup.
+			if err := os.WriteFile(filepath.Join(cfg.Agents.Defaults.Workspace, "hooks.yaml"), []byte("audit:\n  enabled: false\n"), 0644); err != nil {
+				t.Fatal(err)
+			}
 			arguments := map[string]interface{}{"method": tc.method}
 			if tc.explicit {
 				arguments["page"] = 2
@@ -47,6 +53,9 @@ func TestGiteaListResultLimit(t *testing.T) {
 				{Content: "done"},
 			}}
 			al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+			if al.hookAuditPath != "" {
+				t.Fatal("pagination test must not start an asynchronous hook audit writer")
+			}
 			al.localMode = tc.local
 			al.tools.Register(&paginationResultTool{content: strings.Repeat("x", tc.size)})
 			_, err := al.ProcessDirectWithChannel(context.Background(), "inspect project", "test-session", "test", "chat", "user")
