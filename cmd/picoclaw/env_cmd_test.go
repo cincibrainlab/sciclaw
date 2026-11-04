@@ -21,6 +21,7 @@ func TestDockerGatewayArgsMountSeparateRoots(t *testing.T) {
 	args := dockerGatewayArgs("example/sciclaw:test", "/host/sciclaw", "/host/.sciclaw")
 	for _, mount := range []string{
 		"/host/sciclaw:/root/sciclaw",
+		"/host/sciclaw:/host/sciclaw",
 		"/host/.sciclaw:/root/.sciclaw",
 	} {
 		if !slices.Contains(args, mount) {

@@ -580,7 +580,7 @@ import os
 import subprocess
 
 home = os.path.expanduser("~")
-cfg_path = os.path.join(home, "sciclaw", "config.json")
+cfg_path = os.path.join(home, ".sciclaw", "config.json")
 auth_path = os.path.join(home, ".sciclaw", "auth.json")
 svc_path = os.path.join(home, ".config", "systemd", "user", "sciclaw-gateway.service")
 

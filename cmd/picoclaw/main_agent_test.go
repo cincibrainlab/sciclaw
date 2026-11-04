@@ -461,6 +461,25 @@ func TestAgentCmdRetryHelper(t *testing.T) {
 	os.Exit(0)
 }
 
+func TestOnboardRejectsPicoClawWorkspace(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SCICLAW_HOME", filepath.Join(home, "sciclaw"))
+	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(home, ".sciclaw"))
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = filepath.Join(home, ".picoclaw", "custom")
+	if err := config.SaveConfig(paths.ConfigPath(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	args := os.Args
+	os.Args = []string{"sciclaw", "onboard", "--yes"}
+	t.Cleanup(func() { os.Args = args })
+	onboard()
+	if _, err := os.Stat(cfg.WorkspacePath()); !os.IsNotExist(err) {
+		t.Fatalf("workspace was created: %v", err)
+	}
+}
+
 func TestAgentOneShotExitCode_NonZeroOnIncomplete(t *testing.T) {
 	err := agent.NewIncompleteTurnError("status", "some requested steps were not finished yet (saved output files)")
 	if agentDirectExitCode(err) != 1 {

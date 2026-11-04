@@ -72,6 +72,16 @@ func TestVMCloudInitInstallsCoreCompanions(t *testing.T) {
 	}
 }
 
+func TestVMRuntimeSnapshotUsesPrivateConfig(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "deploy", "vm"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `cfg_path = os.path.join(home, ".sciclaw", "config.json")`) {
+		t.Fatal("VM snapshot must read the private SciClaw config")
+	}
+}
+
 func repoRoot(t *testing.T) string {
 	t.Helper()
 	root, err := os.Getwd()

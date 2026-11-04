@@ -604,6 +604,10 @@ func onboard() {
 	}
 
 	workspace := cfg.WorkspacePath()
+	if err := paths.ValidateWorkspace(workspace); err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return
+	}
 	os.MkdirAll(workspace, 0755)
 	os.MkdirAll(filepath.Join(workspace, "memory"), 0755)
 	os.MkdirAll(filepath.Join(workspace, "skills"), 0755)
