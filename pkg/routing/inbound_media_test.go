@@ -217,11 +217,19 @@ func TestPrepareInboundMedia_RejectsOversizedLocalFiles(t *testing.T) {
 
 func TestRewriteInboundMediaURL_InvalidTargetsLeaveSourceUnchanged(t *testing.T) {
 	source := "http://localhost:13001/attachments/report.pdf?token=1"
-	for _, target := range []string{"http://:3001", "ftp://server:3001", "http://server:3001/path", "http://user@server:3001", "http://server:3001#fragment", "http://server:3001?"} {
+	for _, target := range []string{"http://:3001", "http://server:65536", "http://server:99999", "ftp://server:3001", "http://server:3001/path", "http://user@server:3001", "http://server:3001#fragment", "http://server:3001?"} {
 		t.Run(target, func(t *testing.T) {
 			if got := rewriteInboundMediaURL(source, map[string]string{"http://localhost:13001": target}); got != source {
 				t.Fatalf("got %q, want %q", got, source)
 			}
 		})
+	}
+}
+
+func TestRewriteInboundMediaURL_MaximumPort(t *testing.T) {
+	source := "http://localhost:13001/attachments/report.pdf?token=1"
+	got := rewriteInboundMediaURL(source, map[string]string{"http://localhost:13001": "http://server:65535"})
+	if got != "http://server:65535/attachments/report.pdf?token=1" {
+		t.Fatalf("got %q", got)
 	}
 }
