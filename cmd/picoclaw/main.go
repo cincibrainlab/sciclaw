@@ -9,8 +9,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -2257,57 +2255,56 @@ func attachChannelHistoryCallback(al *agent.AgentLoop, cb tools.FetchChannelHist
 	if al == nil || cb == nil {
 		return
 	}
-	al.SetChannelHistoryCallback(func(ctx context.Context, channelID string, limit int, beforeID string) ([]tools.ChannelHistoryMessage, error) {
-		messages, err := cb(ctx, channelID, limit, beforeID)
+	al.SetChannelHistoryCallback(func(ctx context.Context, channelID string, limit int, beforeID string, attachmentOffset int) ([]tools.ChannelHistoryMessage, error) {
+		messages, err := cb(ctx, channelID, limit, beforeID, attachmentOffset)
 		if err != nil {
 			return nil, err
 		}
-		// Bound each history request independently of the number of fetched messages.
-		const maxHistoryAttachments = 4
-		historyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		defer cancel()
-		var nonce [16]byte
-		if _, err := rand.Read(nonce[:]); err != nil {
-			return nil, err
-		}
-		historyChannel := "discord-history-" + hex.EncodeToString(nonce[:])
-		remaining := maxHistoryAttachments
-		for i := range messages {
-			msg := &messages[i]
-			if len(msg.Media) == 0 {
+		return prepareHistoryMessages(ctx, al.Workspace(), channelID, messages, attachmentOffset, rewrites, 15*time.Second)
+	})
+}
+
+func prepareHistoryMessages(ctx context.Context, workspace, channelID string, messages []tools.ChannelHistoryMessage, attachmentOffset int, rewrites map[string]string, timeout time.Duration) ([]tools.ChannelHistoryMessage, error) {
+	const maxHistoryAttachments = 4
+	historyCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	seen, attempted := 0, 0
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := &messages[i]
+		for j, source := range msg.Media {
+			index := seen
+			seen++
+			if index < attachmentOffset {
 				continue
 			}
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
-			if remaining == 0 || historyCtx.Err() != nil {
-				msg.Content += "\nAttachments not staged: history attachment limit reached."
+			if attempted >= maxHistoryAttachments || historyCtx.Err() != nil {
+				msg.Content += fmt.Sprintf("\nAttachment not staged; retry channel_history with the same limit and before and attachment_offset=%d.", index)
 				continue
 			}
-			media := msg.Media
-			if len(media) > remaining {
-				media = media[:remaining]
+			attempted++
+			mediaID := ""
+			if j < len(msg.MediaIDs) {
+				mediaID = msg.MediaIDs[j]
 			}
-			remaining -= len(media)
-			inbound := bus.InboundMessage{Channel: historyChannel, ChatID: channelID, Content: msg.Content, Media: media, Metadata: map[string]string{"message_id": msg.ID}}
-			if err := routing.PrepareInboundMedia(historyCtx, al.Workspace(), &inbound, rewrites); err != nil {
-				if ctx.Err() != nil {
-					return nil, ctx.Err()
-				}
-				msg.Content += "\nAttachments could not be staged locally."
-			} else {
-				msg.Content = inbound.Content
+			local, err := stageHistoryAttachment(historyCtx, workspace, channelID, msg.ID, j, mediaID, source, rewrites)
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
 			}
-			if len(media) < len(msg.Media) {
-				msg.Content += "\nSome attachments not staged: history attachment limit reached."
+			if err != nil {
+				msg.Content += fmt.Sprintf("\nAttachment could not be staged; retry with attachment_offset=%d.", index)
+				continue
 			}
+			msg.Content += "\nAttachment staged locally and available to tools: " + local
 		}
-		return messages, nil
-	})
+	}
+	return messages, nil
 }
 
 func discordHistoryCallback(fetch func(string, int, string) ([]*discordgo.Message, error)) tools.FetchChannelHistoryCallback {
-	return func(ctx context.Context, channelID string, limit int, beforeID string) ([]tools.ChannelHistoryMessage, error) {
+	return func(ctx context.Context, channelID string, limit int, beforeID string, attachmentOffset int) ([]tools.ChannelHistoryMessage, error) {
 		msgs, err := fetch(channelID, limit, beforeID)
 		if err != nil {
 			return nil, err
@@ -2319,7 +2316,7 @@ func discordHistoryCallback(fetch func(string, int, string) ([]*discordgo.Messag
 			if msg.Author != nil {
 				author = msg.Author.Username
 			}
-			var media []string
+			var media, mediaIDs []string
 			for _, attachment := range msg.Attachments {
 				if attachment == nil {
 					continue
@@ -2330,6 +2327,7 @@ func discordHistoryCallback(fetch func(string, int, string) ([]*discordgo.Messag
 				}
 				if attachmentURL != "" {
 					media = append(media, attachmentURL)
+					mediaIDs = append(mediaIDs, attachment.ID)
 				}
 			}
 			result[len(msgs)-1-i] = tools.ChannelHistoryMessage{
@@ -2337,6 +2335,7 @@ func discordHistoryCallback(fetch func(string, int, string) ([]*discordgo.Messag
 				Author:    author,
 				Content:   msg.Content,
 				Media:     media,
+				MediaIDs:  mediaIDs,
 				Timestamp: msg.Timestamp.Format("2006-01-02 15:04"),
 			}
 		}
