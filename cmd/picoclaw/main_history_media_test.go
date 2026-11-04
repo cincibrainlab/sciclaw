@@ -61,14 +61,14 @@ func TestHistoryAttachmentStageFailureReported(t *testing.T) {
 	cfg.Agents.Defaults.Workspace = t.TempDir()
 	provider := &channelHistoryScriptProvider{t: t}
 	al := agent.NewAgentLoopWithOptions(cfg, bus.NewMessageBus(), provider, agent.LoopOptions{ToolProfile: agent.ToolProfileSideLane})
-	attachChannelHistoryCallback(al, func(context.Context, string, int, string, int) ([]tools.ChannelHistoryMessage, error) {
+	attachChannelHistoryCallback(al, func(context.Context, string, int, string, int, string) ([]tools.ChannelHistoryMessage, error) {
 		return []tools.ChannelHistoryMessage{{ID: "1", Content: "message", Media: []string{filepath.Join(t.TempDir(), "missing")}}}, nil
 	}, nil)
 	_, err := al.RunJob(context.Background(), bus.InboundMessage{Channel: "discord", ChatID: "room", SenderID: "user", Content: "summarize"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(provider.toolResultLog, "Attachment could not be staged") {
+	if !strings.Contains(provider.toolResultLog, "could not be staged") {
 		t.Fatalf("missing failure: %s", provider.toolResultLog)
 	}
 }
@@ -88,14 +88,14 @@ func TestHistoryPaginationCacheAndNoOverwrite(t *testing.T) {
 	makeMessages := func() []tools.ChannelHistoryMessage {
 		return []tools.ChannelHistoryMessage{
 			{ID: "oldest", Media: []string{server.URL + "/old.txt"}},
-			{ID: "newest", Media: []string{server.URL + "/file-0.txt", server.URL + "/file-1.txt", server.URL + "/file-2.txt", server.URL + "/file-3.txt", server.URL + "/file-4.txt"}},
+			{ID: "newest", Media: []string{server.URL + "/file-0.txt", server.URL + "/file-1.txt", server.URL + "/file-2.txt", server.URL + "/file-3.txt", server.URL + "/file-4.txt"}, MediaNames: []string{"file-0.txt", "file-1.txt", "file-2.txt", "file-3.txt", "file-4.txt"}, MediaIDs: []string{"0", "1", "2", "3", "4"}},
 		}
 	}
 	messages, err := prepareHistoryMessages(context.Background(), workspace, "room", makeMessages(), 0, nil, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if requests.Load() != 4 || !strings.Contains(messages[1].Content, "attachment_offset=4") || !strings.Contains(messages[0].Content, "attachment_offset=5") {
+	if requests.Load() != 4 || !strings.Contains(messages[1].Content, "attachment_offset=4") || !strings.Contains(messages[1].Content, `"file-4.txt" (id: 4)`) || !strings.Contains(messages[0].Content, "attachment_offset=5") {
 		t.Fatalf("requests=%d messages=%+v", requests.Load(), messages)
 	}
 	files, err := filepath.Glob(filepath.Join(workspace, ".sciclaw", "inbound", "discord-history", "*", "file-0.txt"))
@@ -194,5 +194,56 @@ func TestHistoryCacheConcurrentStagesDoNotOverwrite(t *testing.T) {
 	data, err := os.ReadFile(files[0])
 	if err != nil || string(data) != "contents" {
 		t.Fatalf("content %q: %v", data, err)
+	}
+}
+
+func TestHistorySnapshotPinsNewMessagesAndRejectsChanges(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("data")) }))
+	defer server.Close()
+	old := &discordgo.Message{ID: "100", Attachments: []*discordgo.MessageAttachment{{ID: "a", Filename: "one.txt", URL: server.URL + "/one.txt"}, {ID: "b", Filename: "two.txt", URL: server.URL + "/two.txt"}}}
+	newest := &discordgo.Message{ID: "101", Attachments: []*discordgo.MessageAttachment{{ID: "c", Filename: "three.txt", URL: server.URL + "/three.txt"}, {ID: "d", Filename: "four.txt", URL: server.URL + "/four.txt"}, {ID: "e", Filename: "five.txt", URL: server.URL + "/five.txt"}}}
+	added := false
+	fetch := discordHistoryCallback(func(_ string, _ int, before string) ([]*discordgo.Message, error) {
+		if added && before == "" {
+			return []*discordgo.Message{{ID: "102"}, newest}, nil
+		}
+		if before != "" && before != "102" {
+			t.Fatalf("before=%q, want anchor+1", before)
+		}
+		return []*discordgo.Message{newest, old}, nil
+	})
+	cb := historyStagingCallback(t.TempDir(), fetch, nil)
+	first, err := cb(context.Background(), "room", 2, "", 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := historyAttachmentSnapshot(first)
+	if !strings.Contains(first[0].Content, "attachment_offset=4") || !strings.Contains(first[1].Content, "attachment_snapshot="+token) {
+		t.Fatalf("first page %+v", first)
+	}
+	added = true
+	second, err := cb(context.Background(), "room", 2, "", 4, token)
+	if err != nil || !strings.Contains(second[0].Content, "two.txt") || !strings.Contains(second[0].Content, "staged locally") {
+		t.Fatalf("second page %+v err=%v", second, err)
+	}
+	old.Attachments = old.Attachments[:1]
+	if _, err := cb(context.Background(), "room", 2, "", 4, token); err == nil || !strings.Contains(err.Error(), "changed") {
+		t.Fatalf("changed page err=%v", err)
+	}
+}
+
+func TestHistoryIdentifiesUnstagedAndUnavailableAttachments(t *testing.T) {
+	fetch := discordHistoryCallback(func(string, int, string) ([]*discordgo.Message, error) {
+		return []*discordgo.Message{{ID: "101", Attachments: []*discordgo.MessageAttachment{{ID: "x", Filename: "missing.pdf"}, {ID: "y", Filename: "failed.pdf", URL: "http://127.0.0.1:1/failed.pdf"}}}}, nil
+	})
+	cb := historyStagingCallback(t.TempDir(), fetch, nil)
+	messages, err := cb(context.Background(), "room", 1, "", 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"missing.pdf", "id: x", "no download URL", "failed.pdf", "id: y", "could not be staged"} {
+		if !strings.Contains(messages[0].Content, want) {
+			t.Fatalf("missing %q in %s", want, messages[0].Content)
+		}
 	}
 }

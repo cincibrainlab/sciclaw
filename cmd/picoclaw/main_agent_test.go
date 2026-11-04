@@ -107,7 +107,7 @@ func TestAttachChannelHistoryCallback_WiresSideLaneLoop(t *testing.T) {
 		ToolProfile: agent.ToolProfileSideLane,
 	})
 
-	attachChannelHistoryCallback(al, func(ctx context.Context, channelID string, limit int, beforeID string, attachmentOffset int) ([]tools.ChannelHistoryMessage, error) {
+	attachChannelHistoryCallback(al, func(ctx context.Context, channelID string, limit int, beforeID string, attachmentOffset int, attachmentSnapshot string) ([]tools.ChannelHistoryMessage, error) {
 		if channelID != "room-1" {
 			t.Fatalf("channelID = %q, want room-1", channelID)
 		}

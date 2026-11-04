@@ -9,7 +9,7 @@ import (
 func TestFilteredClonesChannelHistoryToolContext(t *testing.T) {
 	registry := NewToolRegistry()
 	channelHistory := NewChannelHistoryTool()
-	channelHistory.SetFetchCallback(func(ctx context.Context, channelID string, limit int, beforeID string, attachmentOffset int) ([]ChannelHistoryMessage, error) {
+	channelHistory.SetFetchCallback(func(ctx context.Context, channelID string, limit int, beforeID string, attachmentOffset int, attachmentSnapshot string) ([]ChannelHistoryMessage, error) {
 		return []ChannelHistoryMessage{{
 			ID:        "1",
 			Author:    "tester",
@@ -58,13 +58,13 @@ func TestFilteredClonesChannelHistoryToolContext(t *testing.T) {
 func TestChannelHistoryPassesAttachmentOffset(t *testing.T) {
 	history := NewChannelHistoryTool()
 	history.SetContext("discord", "room")
-	history.SetFetchCallback(func(ctx context.Context, channelID string, limit int, beforeID string, offset int) ([]ChannelHistoryMessage, error) {
+	history.SetFetchCallback(func(ctx context.Context, channelID string, limit int, beforeID string, offset int, snapshot string) ([]ChannelHistoryMessage, error) {
 		if offset != 4 || limit != 1 || beforeID != "earlier" {
 			t.Fatalf("offset=%d limit=%d before=%q", offset, limit, beforeID)
 		}
 		return []ChannelHistoryMessage{{Content: "page"}}, nil
 	})
-	result := history.Execute(context.Background(), map[string]interface{}{"attachment_offset": float64(4), "limit": float64(1), "before": "earlier"})
+	result := history.Execute(context.Background(), map[string]interface{}{"attachment_offset": float64(4), "attachment_snapshot": "token", "limit": float64(1), "before": "earlier"})
 	if result.IsError || !strings.Contains(result.ForLLM, "page") {
 		t.Fatalf("result: %+v", result)
 	}

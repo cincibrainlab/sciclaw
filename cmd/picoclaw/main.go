@@ -9,6 +9,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -2255,13 +2256,54 @@ func attachChannelHistoryCallback(al *agent.AgentLoop, cb tools.FetchChannelHist
 	if al == nil || cb == nil {
 		return
 	}
-	al.SetChannelHistoryCallback(func(ctx context.Context, channelID string, limit int, beforeID string, attachmentOffset int) ([]tools.ChannelHistoryMessage, error) {
-		messages, err := cb(ctx, channelID, limit, beforeID, attachmentOffset)
+	al.SetChannelHistoryCallback(historyStagingCallback(al.Workspace(), cb, rewrites))
+}
+
+func historyStagingCallback(workspace string, cb tools.FetchChannelHistoryCallback, rewrites map[string]string) tools.FetchChannelHistoryCallback {
+	return func(ctx context.Context, channelID string, limit int, beforeID string, attachmentOffset int, attachmentSnapshot string) ([]tools.ChannelHistoryMessage, error) {
+		messages, err := cb(ctx, channelID, limit, beforeID, attachmentOffset, attachmentSnapshot)
 		if err != nil {
 			return nil, err
 		}
-		return prepareHistoryMessages(ctx, al.Workspace(), channelID, messages, attachmentOffset, rewrites, 15*time.Second)
-	})
+		if len(messages) == 0 {
+			if attachmentSnapshot != "" {
+				return nil, fmt.Errorf("history attachments changed; restart channel_history without attachment_offset or attachment_snapshot")
+			}
+			return messages, nil
+		}
+		snapshot := historyAttachmentSnapshot(messages)
+		if attachmentSnapshot != "" && attachmentSnapshot != snapshot {
+			return nil, fmt.Errorf("history attachments changed; restart channel_history without attachment_offset or attachment_snapshot")
+		}
+		messages, err = prepareHistoryMessages(ctx, workspace, channelID, messages, attachmentOffset, rewrites, 15*time.Second)
+		if err == nil {
+			messages[len(messages)-1].Content += "\nFor attachment retries use attachment_snapshot=" + snapshot + " with the same limit and before."
+		}
+		return messages, err
+	}
+}
+
+func historyAttachmentSnapshot(messages []tools.ChannelHistoryMessage) string {
+	type entry struct {
+		ID        string
+		IDs       []string
+		Sources   []string
+		Available []bool
+	}
+	entries := make([]entry, 0, len(messages))
+	for _, m := range messages {
+		sources := make([]string, len(m.Media))
+		available := make([]bool, len(m.Media))
+		for i, source := range m.Media {
+			available[i] = source != ""
+			if i >= len(m.MediaIDs) || m.MediaIDs[i] == "" {
+				sources[i] = source
+			}
+		}
+		entries = append(entries, entry{m.ID, m.MediaIDs, sources, available})
+	}
+	data, _ := json.Marshal(entries)
+	return fmt.Sprintf("%s:%x", messages[len(messages)-1].ID, sha256.Sum256(data))
 }
 
 func prepareHistoryMessages(ctx context.Context, workspace, channelID string, messages []tools.ChannelHistoryMessage, attachmentOffset int, rewrites map[string]string, timeout time.Duration) ([]tools.ChannelHistoryMessage, error) {
@@ -2274,6 +2316,18 @@ func prepareHistoryMessages(ctx context.Context, workspace, channelID string, me
 		for j, source := range msg.Media {
 			index := seen
 			seen++
+			name, mediaID := "attachment", ""
+			if j < len(msg.MediaNames) && msg.MediaNames[j] != "" {
+				name = msg.MediaNames[j]
+			}
+			if j < len(msg.MediaIDs) {
+				mediaID = msg.MediaIDs[j]
+			}
+			label := fmt.Sprintf("%q (id: %s)", name, mediaID)
+			if source == "" {
+				msg.Content += "\nAttachment " + label + " has no download URL."
+				continue
+			}
 			if index < attachmentOffset {
 				continue
 			}
@@ -2281,30 +2335,34 @@ func prepareHistoryMessages(ctx context.Context, workspace, channelID string, me
 				return nil, ctx.Err()
 			}
 			if attempted >= maxHistoryAttachments || historyCtx.Err() != nil {
-				msg.Content += fmt.Sprintf("\nAttachment not staged; retry channel_history with the same limit and before and attachment_offset=%d.", index)
+				msg.Content += fmt.Sprintf("\nAttachment %s not staged; retry channel_history with the same limit and before and attachment_offset=%d.", label, index)
 				continue
 			}
 			attempted++
-			mediaID := ""
-			if j < len(msg.MediaIDs) {
-				mediaID = msg.MediaIDs[j]
-			}
 			local, err := stageHistoryAttachment(historyCtx, workspace, channelID, msg.ID, j, mediaID, source, rewrites)
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
 			if err != nil {
-				msg.Content += fmt.Sprintf("\nAttachment could not be staged; retry with attachment_offset=%d.", index)
+				msg.Content += fmt.Sprintf("\nAttachment %s could not be staged; retry with attachment_offset=%d.", label, index)
 				continue
 			}
-			msg.Content += "\nAttachment staged locally and available to tools: " + local
+			msg.Content += "\nAttachment " + label + " staged locally and available to tools: " + local
 		}
 	}
 	return messages, nil
 }
 
 func discordHistoryCallback(fetch func(string, int, string) ([]*discordgo.Message, error)) tools.FetchChannelHistoryCallback {
-	return func(ctx context.Context, channelID string, limit int, beforeID string, attachmentOffset int) ([]tools.ChannelHistoryMessage, error) {
+	return func(ctx context.Context, channelID string, limit int, beforeID string, attachmentOffset int, attachmentSnapshot string) ([]tools.ChannelHistoryMessage, error) {
+		if attachmentSnapshot != "" {
+			anchor, _, ok := strings.Cut(attachmentSnapshot, ":")
+			id, err := strconv.ParseUint(anchor, 10, 64)
+			if !ok || err != nil || id == ^uint64(0) {
+				return nil, fmt.Errorf("invalid attachment snapshot")
+			}
+			beforeID = strconv.FormatUint(id+1, 10)
+		}
 		msgs, err := fetch(channelID, limit, beforeID)
 		if err != nil {
 			return nil, err
@@ -2316,7 +2374,7 @@ func discordHistoryCallback(fetch func(string, int, string) ([]*discordgo.Messag
 			if msg.Author != nil {
 				author = msg.Author.Username
 			}
-			var media, mediaIDs []string
+			var media, mediaIDs, mediaNames []string
 			for _, attachment := range msg.Attachments {
 				if attachment == nil {
 					continue
@@ -2325,18 +2383,18 @@ func discordHistoryCallback(fetch func(string, int, string) ([]*discordgo.Messag
 				if attachmentURL == "" {
 					attachmentURL = attachment.ProxyURL
 				}
-				if attachmentURL != "" {
-					media = append(media, attachmentURL)
-					mediaIDs = append(mediaIDs, attachment.ID)
-				}
+				media = append(media, attachmentURL)
+				mediaIDs = append(mediaIDs, attachment.ID)
+				mediaNames = append(mediaNames, attachment.Filename)
 			}
 			result[len(msgs)-1-i] = tools.ChannelHistoryMessage{
-				ID:        msg.ID,
-				Author:    author,
-				Content:   msg.Content,
-				Media:     media,
-				MediaIDs:  mediaIDs,
-				Timestamp: msg.Timestamp.Format("2006-01-02 15:04"),
+				ID:         msg.ID,
+				Author:     author,
+				Content:    msg.Content,
+				Media:      media,
+				MediaIDs:   mediaIDs,
+				MediaNames: mediaNames,
+				Timestamp:  msg.Timestamp.Format("2006-01-02 15:04"),
 			}
 		}
 		return result, nil
