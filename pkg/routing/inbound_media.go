@@ -60,14 +60,12 @@ func prepareInboundMediaLimit(ctx context.Context, workspace string, msg *bus.In
 		ctx = context.Background()
 	}
 
-	stageDir := filepath.Join(
-		workspace,
-		".sciclaw",
-		"inbound",
-		sanitizePathSegment(msg.Channel),
-		inboundMediaMessageDir(msg),
-	)
-	if err := os.MkdirAll(stageDir, 0755); err != nil {
+	channelDir := filepath.Join(workspace, ".sciclaw", "inbound", sanitizePathSegment(msg.Channel))
+	if err := os.MkdirAll(channelDir, 0755); err != nil {
+		return fmt.Errorf("create inbound media staging dir: %w", err)
+	}
+	stageDir, err := os.MkdirTemp(channelDir, inboundMediaMessageDir(msg)+"-")
+	if err != nil {
 		return fmt.Errorf("create inbound media staging dir: %w", err)
 	}
 

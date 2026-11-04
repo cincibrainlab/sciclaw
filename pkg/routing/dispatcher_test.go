@@ -208,7 +208,11 @@ func TestDispatcherDispatchResolved_CleansTemporaryMediaAfterStaging(t *testing.
 	if !cleaned {
 		t.Fatal("cleanup was not called")
 	}
-	if data, err := os.ReadFile(filepath.Join(target.Workspace, ".sciclaw", "inbound", "telegram", "1", "photo.jpg")); err != nil || string(data) != "photo" {
+	matches, err := filepath.Glob(filepath.Join(target.Workspace, ".sciclaw", "inbound", "telegram", "1-*", "photo.jpg"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("staged paths = %v, error = %v", matches, err)
+	}
+	if data, err := os.ReadFile(matches[0]); err != nil || string(data) != "photo" {
 		t.Fatalf("staged content %q: %v", data, err)
 	}
 	if _, err := os.Stat(source); !os.IsNotExist(err) {

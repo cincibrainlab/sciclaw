@@ -66,7 +66,7 @@ func TestRunGatewayDefaultDispatch_StagesInboundMediaBeforeJob(t *testing.T) {
 		if len(got.Media) != 1 {
 			t.Fatalf("media = %#v", got.Media)
 		}
-		if !strings.HasPrefix(got.Media[0], filepath.Join(workspace, ".sciclaw", "inbound", "discord", "message-1")+string(filepath.Separator)) {
+		if !strings.HasPrefix(filepath.Dir(got.Media[0]), filepath.Join(workspace, ".sciclaw", "inbound", "discord", "message-1-")) {
 			t.Fatalf("media path = %q, want a canonical path under %q", got.Media[0], workspace)
 		}
 		bytes, err := os.ReadFile(got.Media[0])
@@ -110,8 +110,15 @@ func TestRunGatewayDefaultDispatch_StagesWithoutJobManager(t *testing.T) {
 		for _, msg := range messages {
 			contents.WriteString(msg.Content)
 		}
-		relative := ".sciclaw/inbound/discord/msg-1/file.txt"
-		if !strings.Contains(contents.String(), relative) {
+		matches, err := filepath.Glob(filepath.Join(cfg.WorkspacePath(), ".sciclaw", "inbound", "discord", "msg-1-*", "file.txt"))
+		if err != nil || len(matches) != 1 {
+			t.Fatalf("staged paths = %v, error = %v", matches, err)
+		}
+		relative, err := filepath.Rel(cfg.WorkspacePath(), matches[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(contents.String(), filepath.ToSlash(relative)) {
 			t.Fatalf("prompt missing staged path: %s", contents.String())
 		}
 		data, err := os.ReadFile(filepath.Join(cfg.WorkspacePath(), filepath.FromSlash(relative)))
@@ -145,7 +152,11 @@ func TestRunGatewayDefaultDispatch_CleansTemporaryMediaAfterStaging(t *testing.T
 		if _, err := os.Stat(file); !os.IsNotExist(err) {
 			t.Fatalf("temporary file still exists: %v", err)
 		}
-		data, err := os.ReadFile(filepath.Join(cfg.WorkspacePath(), ".sciclaw", "inbound", "telegram", "msg-1", "telegram.jpg"))
+		matches, err := filepath.Glob(filepath.Join(cfg.WorkspacePath(), ".sciclaw", "inbound", "telegram", "msg-1-*", "telegram.jpg"))
+		if err != nil || len(matches) != 1 {
+			t.Fatalf("staged paths = %v, error = %v", matches, err)
+		}
+		data, err := os.ReadFile(matches[0])
 		if err != nil || string(data) != "telegram photo" {
 			t.Fatalf("staged content %q: %v", data, err)
 		}
@@ -213,5 +224,51 @@ func TestRunGatewayDefaultDispatch_CancelledStagingDoesNotDispatch(t *testing.T)
 	case <-provider.messages:
 		t.Fatal("cancelled message dispatched")
 	default:
+	}
+}
+
+func TestRunGatewayDefaultDispatch_IsolatesAttachmentsAcrossChats(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/first/") {
+			_, _ = w.Write([]byte("first chat"))
+			return
+		}
+		_, _ = w.Write([]byte("second chat"))
+	}))
+	defer server.Close()
+	messageBus := bus.NewMessageBus()
+	defer messageBus.Close()
+	runner := &captureJobRunner{received: make(chan bus.InboundMessage, 2)}
+	jobManager, err := routing.NewJobManager(filepath.Join(t.TempDir(), "jobs.json"), config.JobsConfig{Enabled: true}, messageBus, nil, func(routing.LoopTarget) (routing.JobRunner, error) { return runner, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go runGatewayDefaultDispatch(ctx, messageBus, nil, jobManager, routing.LoopTarget{Workspace: workspace, Runtime: routing.RuntimeProfile{Mode: config.ModeCloud}}, nil)
+	var paths []string
+	for _, item := range []struct{ chat, url string }{{"chat-a", "/first/report.txt"}, {"chat-b", "/second/report.txt"}} {
+		if err := messageBus.PublishInbound(ctx, bus.InboundMessage{Channel: "discord", ChatID: item.chat, SenderID: "user", Content: "review", Media: []string{server.URL + item.url}, Metadata: map[string]string{"message_id": "same-id"}}); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case msg := <-runner.received:
+			if len(msg.Media) != 1 {
+				t.Fatalf("media = %v", msg.Media)
+			}
+			paths = append(paths, msg.Media[0])
+		case <-ctx.Done():
+			t.Fatal("timed out waiting for job")
+		}
+	}
+	if paths[0] == paths[1] {
+		t.Fatalf("two chats share path %q", paths[0])
+	}
+	for i, want := range []string{"first chat", "second chat"} {
+		data, err := os.ReadFile(paths[i])
+		if err != nil || string(data) != want {
+			t.Fatalf("path %q contents = %q, err = %v; want %q", paths[i], data, err, want)
+		}
 	}
 }
