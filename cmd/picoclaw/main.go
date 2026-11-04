@@ -1297,8 +1297,8 @@ func agentCmd() {
 		}
 	}
 	if jsonOutput {
-		if home, err := os.UserHomeDir(); err == nil {
-			_ = logger.EnableFileLogging(filepath.Join(home, ".picoclaw", "web.log"))
+		if paths.ValidateHomes() == nil && os.MkdirAll(paths.LogsDir(), 0700) == nil {
+			_ = logger.EnableFileLogging(paths.WebLogPath())
 		}
 	} else if debugOutput {
 		fmt.Println("🔍 Debug mode enabled")

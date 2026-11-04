@@ -6,6 +6,9 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	if os.Getenv("GO_WANT_AGENT_CMD_JSON_HELPER") == "1" {
+		os.Exit(m.Run())
+	}
 	stateHome, err := os.MkdirTemp("", "sciclaw-command-state-*")
 	if err != nil {
 		panic(err)
