@@ -248,7 +248,7 @@ func TestNewManager_EmptyWorkspace(t *testing.T) {
 	}
 }
 
-func TestNewManager_IgnoresLegacyVisibleStateFile(t *testing.T) {
+func TestNewManager_LoadsLegacyVisibleStateFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	var err error
 
@@ -266,11 +266,11 @@ func TestNewManager_IgnoresLegacyVisibleStateFile(t *testing.T) {
 	}
 
 	sm := newTestManager(t, tmpDir)
-	if sm.GetLastChannel() != "" {
-		t.Fatalf("legacy visible state was loaded: %q", sm.GetLastChannel())
+	if sm.GetLastChannel() != "legacy-channel" {
+		t.Fatalf("legacy channel not loaded: %q", sm.GetLastChannel())
 	}
-	if sm.GetLastChatID() != "" {
-		t.Fatalf("legacy visible state was loaded: %q", sm.GetLastChatID())
+	if sm.GetLastChatID() != "legacy-chat" {
+		t.Fatalf("legacy chat not loaded: %q", sm.GetLastChatID())
 	}
 }
 

@@ -171,6 +171,57 @@ func TestValidateHomesAndWorkspaceRejectPicoClawTree(t *testing.T) {
 	}
 }
 
+func TestValidateHomesRejectsManagedDirectoriesLinkedIntoPicoClaw(t *testing.T) {
+	for _, name := range []string{"profile", "logs"} {
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			visible, state := filepath.Join(home, "visible"), filepath.Join(home, "state")
+			t.Setenv("SCICLAW_HOME", visible)
+			t.Setenv("SCICLAW_STATE_HOME", state)
+			legacy := filepath.Join(home, ".picoclaw")
+			if err := os.MkdirAll(legacy, 0755); err != nil {
+				t.Fatal(err)
+			}
+			parent := visible
+			if name == "logs" {
+				parent = state
+			}
+			if err := os.MkdirAll(parent, 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(legacy, filepath.Join(parent, name)); err != nil {
+				t.Fatal(err)
+			}
+			if err := ValidateHomes(); err == nil {
+				t.Fatal("expected linked managed directory to be rejected")
+			}
+		})
+	}
+}
+
+func TestValidateWorkspaceRejectsLinkedSessionDirectory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SCICLAW_HOME", filepath.Join(home, "visible"))
+	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(home, "state"))
+	workspace := filepath.Join(home, "project")
+	dir := WorkspaceStateDir(workspace)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(home, ".picoclaw")
+	if err := os.MkdirAll(legacy, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(legacy, filepath.Join(dir, "sessions")); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateWorkspace(workspace); err == nil {
+		t.Fatal("expected linked session directory to be rejected")
+	}
+}
+
 func TestValidateHomesRejectsEqualAndNestedRoots(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

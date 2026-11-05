@@ -738,6 +738,39 @@ func TestOpenClawMigrationPreservesCustomWorkspace(t *testing.T) {
 	}
 }
 
+func TestOpenClawMigrationMapsAbsoluteSourceWorkspace(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SCICLAW_HOME", filepath.Join(home, "visible"))
+	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(home, "state"))
+	t.Setenv("PICOCLAW_HOME", "")
+	source := filepath.Join(home, "custom-openclaw")
+	workspace := filepath.Join(source, "workspace")
+	if err := os.MkdirAll(workspace, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "HEARTBEAT.md"), []byte("source"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	data := `{"agents":{"defaults":{"workspace":"` + workspace + `"}}}`
+	if err := os.WriteFile(filepath.Join(source, "openclaw.json"), []byte(data), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Run(Options{OpenClawHome: source, Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadConfig(paths.ConfigPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.WorkspacePath() != paths.DefaultWorkspace() {
+		t.Fatalf("workspace = %q", cfg.WorkspacePath())
+	}
+	if _, err := os.Stat(filepath.Join(cfg.WorkspacePath(), "HEARTBEAT.md")); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRunPicoClawMigrationRefusesExistingConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -937,6 +970,39 @@ func TestRunReturnsErrorWhenExecutionHasCopyFailure(t *testing.T) {
 	}
 	if result == nil || len(result.Errors) == 0 {
 		t.Fatalf("expected partial result errors, got %#v", result)
+	}
+}
+
+func TestFailedFullMigrationCanBeRetried(t *testing.T) {
+	source, visible := t.TempDir(), t.TempDir()
+	t.Setenv("SCICLAW_HOME", visible)
+	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(t.TempDir(), "state"))
+	t.Setenv("PICOCLAW_HOME", "")
+	if err := os.MkdirAll(filepath.Join(source, "workspace"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "workspace", "AGENTS.md"), []byte("source"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "openclaw.json"), []byte(`{}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	blocker := filepath.Join(visible, "profile", "AGENTS.md")
+	if err := os.MkdirAll(blocker, 0755); err != nil {
+		t.Fatal(err)
+	}
+	opts := Options{OpenClawHome: source, Force: true}
+	if _, err := Run(opts); err == nil {
+		t.Fatal("expected copy failure")
+	}
+	if _, err := os.Stat(paths.ConfigPath()); !os.IsNotExist(err) {
+		t.Fatalf("failed migration created config: %v", err)
+	}
+	if err := os.Remove(blocker); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Run(opts); err != nil {
+		t.Fatalf("retry failed: %v", err)
 	}
 }
 

@@ -67,7 +67,15 @@ func NewManager(workspace string) *Manager {
 		loopDone:  make(chan struct{}),
 	}
 
-	loadedState, err := loadBootstrapWithTimeout(stateFile, stateBootstrapTimeout)
+	var legacy []string
+	if paths.ValidateWorkspace(workspace) == nil {
+		for _, path := range []string{filepath.Join(workspace, "state", "state.json"), filepath.Join(workspace, "state.json")} {
+			if !paths.IsPicoClawPath(path) {
+				legacy = append(legacy, path)
+			}
+		}
+	}
+	loadedState, err := loadBootstrapWithTimeout(stateFile, stateBootstrapTimeout, legacy...)
 	if err != nil {
 		log.Printf("[WARN] state: bootstrap skipped for %s: %v", workspace, err)
 	} else if loadedState != nil {
@@ -283,9 +291,18 @@ func (sm *Manager) load() error {
 	return nil
 }
 
-func loadBootstrapWithTimeout(stateFile string, timeout time.Duration) (*State, error) {
+func loadBootstrapWithTimeout(stateFile string, timeout time.Duration, legacy ...string) (*State, error) {
+	load := func() (*State, error) {
+		for _, path := range append([]string{stateFile}, legacy...) {
+			st, err := loadStateFromPath(path)
+			if st != nil || err != nil {
+				return st, err
+			}
+		}
+		return nil, nil
+	}
 	if timeout <= 0 {
-		return loadStateFromPath(stateFile)
+		return load()
 	}
 
 	type result struct {
@@ -295,7 +312,7 @@ func loadBootstrapWithTimeout(stateFile string, timeout time.Duration) (*State, 
 
 	done := make(chan result, 1)
 	go func() {
-		st, err := loadStateFromPath(stateFile)
+		st, err := load()
 		done <- result{
 			state: st,
 			err:   err,

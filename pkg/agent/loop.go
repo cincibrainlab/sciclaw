@@ -381,7 +381,11 @@ func NewAgentLoopWithOptions(cfg *config.Config, msgBus *bus.MessageBus, provide
 	} else {
 		workspaceState = securedState
 	}
-	sessionsManager := session.NewSessionManager(filepath.Join(workspaceState, "sessions"))
+	var legacySessions []string
+	if paths.ValidateWorkspace(workspace) == nil && !paths.IsPicoClawPath(filepath.Join(workspace, "sessions")) {
+		legacySessions = append(legacySessions, filepath.Join(workspace, "sessions"))
+	}
+	sessionsManager := session.NewSessionManager(filepath.Join(workspaceState, "sessions"), legacySessions...)
 	discordArchiveMgr := discordarchive.NewManager(workspace, sessionsManager, cfg.Channels.Discord.Archive)
 
 	// Create state manager for atomic state persistence

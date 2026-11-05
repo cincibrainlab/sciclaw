@@ -156,6 +156,11 @@ func ValidateHomes() error {
 	if pathsOverlap(userHome, stateHome) || pathsOverlap(resolvePhysicalPath(userHome), resolvePhysicalPath(stateHome)) {
 		return fmt.Errorf("SCICLAW_HOME and SCICLAW_STATE_HOME must be separate, non-nested directories")
 	}
+	for _, path := range []string{ConfigPath(), AuthPath(), ProfileDir(), GlobalSkillsDir(), TemplatesDir(), BackupsDir(), AddonsDir(), DefaultWorkspace(), LogsDir(), RuntimeDir(), CacheDir(), TempDir(), WorkspacesStateDir(), GatewayLogPath(), GatewayErrorLogPath(), WebLogPath(), WebErrorLogPath(), GatewayStatusPath(), RoutingReloadPath(), JobsPath(), InteractiveHistoryPath()} {
+		if IsPicoClawPath(path) {
+			return fmt.Errorf("SciClaw managed path must not point into ~/.picoclaw: %s", path)
+		}
+	}
 	return nil
 }
 
@@ -166,6 +171,11 @@ func ValidateWorkspace(workspacePath string) error {
 	stateHome := StateHome()
 	if pathsOverlap(cleanAbsolute(workspacePath), cleanAbsolute(stateHome)) || pathsOverlap(resolvePhysicalPath(workspacePath), resolvePhysicalPath(stateHome)) {
 		return fmt.Errorf("SciClaw workspace must not overlap SCICLAW_STATE_HOME: %s", workspacePath)
+	}
+	for _, path := range []string{WorkspaceStateDir(workspacePath), filepath.Join(WorkspaceStateDir(workspacePath), "sessions"), filepath.Join(WorkspaceStateDir(workspacePath), "state"), filepath.Join(WorkspaceStateDir(workspacePath), "inbound"), filepath.Join(WorkspaceStateDir(workspacePath), "hooks"), filepath.Join(WorkspaceStateDir(workspacePath), ".venv")} {
+		if IsPicoClawPath(path) {
+			return fmt.Errorf("SciClaw workspace state must not point into ~/.picoclaw: %s", path)
+		}
 	}
 	return nil
 }
