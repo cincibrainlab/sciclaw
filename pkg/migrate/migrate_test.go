@@ -1006,6 +1006,69 @@ func TestFailedFullMigrationCanBeRetried(t *testing.T) {
 	}
 }
 
+func TestMigrationRejectsDestinationsLinkedIntoPicoClaw(t *testing.T) {
+	for _, kind := range []string{"profile-file", "dangling-profile-file", "sessions-dir"} {
+		t.Run(kind, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("SCICLAW_HOME", filepath.Join(home, "visible"))
+			t.Setenv("SCICLAW_STATE_HOME", filepath.Join(home, "state"))
+			t.Setenv("PICOCLAW_HOME", "")
+			source := filepath.Join(home, "openclaw")
+			legacy := filepath.Join(home, ".picoclaw")
+			if err := os.MkdirAll(filepath.Join(source, "workspace", "sessions"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(legacy, 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(source, "workspace", "AGENTS.md"), []byte("new"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(source, "workspace", "sessions", "old.json"), []byte("new"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			name := "AGENTS.md"
+			link := filepath.Join(paths.ProfileDir(), name)
+			if kind == "sessions-dir" {
+				name = "old.json"
+				link = filepath.Join(paths.WorkspaceStateDir(paths.DefaultWorkspace()), "sessions")
+			}
+			if kind != "dangling-profile-file" {
+				if err := os.WriteFile(filepath.Join(legacy, name), []byte("preserve"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.MkdirAll(filepath.Dir(link), 0755); err != nil {
+				t.Fatal(err)
+			}
+			target := filepath.Join(legacy, name)
+			if kind == "sessions-dir" {
+				target = legacy
+			}
+			if err := os.Symlink(target, link); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Run(Options{OpenClawHome: source, WorkspaceOnly: true, Force: true}); err == nil {
+				t.Fatal("expected rejection")
+			}
+			data, err := os.ReadFile(filepath.Join(legacy, name))
+			if kind == "dangling-profile-file" {
+				if !os.IsNotExist(err) {
+					t.Fatalf("unexpected legacy file: %q %v", data, err)
+				}
+			} else if err != nil || string(data) != "preserve" {
+				t.Fatalf("legacy data changed: %q %v", data, err)
+			}
+			if kind == "sessions-dir" {
+				if _, err := os.Stat(filepath.Join(paths.ProfileDir(), "AGENTS.md")); !os.IsNotExist(err) {
+					t.Fatalf("partial migration: %v", err)
+				}
+			}
+		})
+	}
+}
+
 func TestRunOpenClawNotFound(t *testing.T) {
 	t.Setenv("SCICLAW_HOME", t.TempDir())
 	opts := Options{

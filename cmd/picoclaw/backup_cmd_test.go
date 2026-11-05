@@ -152,6 +152,30 @@ func TestBackupFollowsConfiguredWorkspaceRootSymlinkOnly(t *testing.T) {
 	}
 }
 
+func TestBackupIncludesLegacyAndManagedSessionsSeparately(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SCICLAW_HOME", filepath.Join(home, "visible"))
+	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(home, "state"))
+	workspace := filepath.Join(home, "workspace")
+	legacy := filepath.Join(workspace, "sessions")
+	managed := filepath.Join(paths.WorkspaceStateDir(workspace), "sessions")
+	mustWriteFile(t, filepath.Join(legacy, "legacy.json"), "legacy")
+	mustWriteFile(t, filepath.Join(legacy, "both.json"), "old")
+	mustWriteFile(t, filepath.Join(managed, "both.json"), "new")
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = workspace
+	archive := filepath.Join(t.TempDir(), "backup.tar.gz")
+	if err := createBackupArchive(archive, collectBackupEntries(cfg, home, true)); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"workspace/sessions/legacy.json", "workspace/sessions/both.json", filepath.ToSlash(filepath.Join("state", "workspaces", paths.WorkspaceID(workspace), "sessions", "both.json"))} {
+		if !archiveContains(t, archive, name) {
+			t.Fatalf("missing %s", name)
+		}
+	}
+}
+
 func archiveContains(t *testing.T, path, want string) bool {
 	t.Helper()
 	file, err := os.Open(path)

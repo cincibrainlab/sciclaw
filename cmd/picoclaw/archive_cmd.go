@@ -55,7 +55,11 @@ func archiveDiscordCmd(args []string) {
 		return
 	}
 	workspace := cfg.WorkspacePath()
-	sm := session.NewSessionManager(filepath.Join(paths.WorkspaceStateDir(workspace), "sessions"))
+	var legacy []string
+	if dir := filepath.Join(workspace, "sessions"); paths.ValidateWorkspace(workspace) == nil && !paths.IsPicoClawPath(dir) {
+		legacy = append(legacy, dir)
+	}
+	sm := session.NewSessionManager(filepath.Join(paths.WorkspaceStateDir(workspace), "sessions"), legacy...)
 	manager := discordarchive.NewManager(workspace, sm, cfg.Channels.Discord.Archive)
 
 	sub := strings.ToLower(strings.TrimSpace(args[0]))
