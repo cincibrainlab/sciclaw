@@ -13,6 +13,23 @@ LEGACY = "move-task-phase-0-to-1"
 
 
 class EntrypointTest(unittest.TestCase):
+    def test_preserves_non_directory_skill_entry_without_blocking_startup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "source" / SKILLS[0]).mkdir(parents=True)
+            (root / "source" / SKILLS[0] / "SKILL.md").write_text("packaged")
+            (root / "workspace").mkdir()
+            entry = root / "workspace" / SKILLS[0]
+            entry.write_text("custom")
+            script = Path(__file__).with_name("docker-entrypoint.sh").read_text()
+            script = script.replace("/opt/sciclaw/skills", str(root / "source"))
+            script = script.replace("/root/sciclaw/skills", str(root / "workspace"))
+            script = script.replace('exec sciclaw "$@"', 'exec "$@"')
+            result = subprocess.run(["sh", "-c", script, "entrypoint", "true"], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(SKILLS[0], result.stderr)
+            self.assertEqual(entry.read_text(), "custom")
+
     def test_warns_when_stale_workspace_skill_has_no_packaged_source(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
