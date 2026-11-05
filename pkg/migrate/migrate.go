@@ -189,6 +189,15 @@ func Plan(opts Options, openclawHome, sciClawHome string) ([]Action, []string, e
 
 func Execute(actions []Action, openclawHome, _ string) *Result {
 	result := &Result{}
+	for _, action := range actions {
+		if action.Type == ActionSkip {
+			continue
+		}
+		if migrationTargetsPicoClaw(action.Destination) || (action.Type == ActionBackup && migrationTargetsPicoClaw(action.Destination+".bak")) {
+			result.Errors = append(result.Errors, fmt.Errorf("migration destination points into ~/.picoclaw: %s", action.Destination))
+			return result
+		}
+	}
 
 	for _, action := range actions {
 		switch action.Type {
@@ -248,6 +257,19 @@ func Execute(actions []Action, openclawHome, _ string) *Result {
 	}
 
 	return result
+}
+
+func migrationTargetsPicoClaw(path string) bool {
+	if paths.IsPicoClawPath(path) {
+		return true
+	}
+	if target, err := os.Readlink(path); err == nil {
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(path), target)
+		}
+		return paths.IsPicoClawPath(target)
+	}
+	return false
 }
 
 func executeConfigMigration(srcConfigPath, dstConfigPath string) error {

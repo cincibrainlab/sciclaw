@@ -220,6 +220,10 @@ func collectBackupEntries(cfg *config.Config, homeDir string, withSessions bool)
 		candidates = append(candidates, backupEntry{SourcePath: filepath.Join(workspace, name), ArchivePath: filepath.ToSlash(filepath.Join("workspace", name))})
 	}
 	if withSessions {
+		legacy := filepath.Join(workspace, "sessions")
+		if paths.ValidateWorkspace(workspace) == nil && !paths.IsPicoClawPath(legacy) {
+			candidates = append(candidates, backupEntry{SourcePath: legacy, ArchivePath: "workspace/sessions"})
+		}
 		candidates = append(candidates, backupEntry{
 			SourcePath:  filepath.Join(paths.WorkspaceStateDir(workspace), "sessions"),
 			ArchivePath: filepath.ToSlash(filepath.Join("state", "workspaces", paths.WorkspaceID(workspace), "sessions")),
