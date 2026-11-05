@@ -87,6 +87,109 @@ type fakeJobRunner struct {
 	lastMsg bus.InboundMessage
 }
 
+func TestQueuedAttachmentDoesNotPersistURLAndRequiresResendAfterRestart(t *testing.T) {
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+	runner := &fakeJobRunner{started: make(chan struct{}), block: make(chan struct{})}
+	path := filepathJoin(t.TempDir(), "jobs.json")
+	resolver := func(LoopTarget) (JobRunner, error) { return runner, nil }
+	progress := &fakeProgressMessenger{}
+	jm, err := NewJobManager(path, config.JobsConfig{Enabled: true}, mb, progress, resolver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	target := LoopTarget{Workspace: t.TempDir()}.normalized()
+	msg := bus.InboundMessage{Channel: "discord", ChatID: "room", SessionKey: "discord:room", Content: "first"}
+	if err := jm.Submit(ctx, target, msg); err != nil {
+		t.Fatal(err)
+	}
+	<-runner.started
+	msg.Content = "review attachment"
+	msg.Media = []string{"https://example.invalid/file?token=SIGNED_SECRET"}
+	if err := jm.Submit(ctx, target, msg); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "SIGNED_SECRET") {
+		t.Error("signed attachment URL was persisted")
+	}
+	restarted, err := NewJobManager(path, config.JobsConfig{Enabled: true}, mb, progress, resolver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	progress.mu.Lock()
+	for _, call := range progress.messages {
+		if embedHas(call.embed, "resend") {
+			t.Error("restart notification sent before channels were ready")
+		}
+	}
+	progress.mu.Unlock()
+	restarted.NotifyInterruptedAttachments(context.Background())
+	records, err := restarted.store.All()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range records {
+		if record.AskSummary == "review attachment" {
+			if record.State != JobStateInterrupted || !strings.Contains(strings.ToLower(record.Detail), "resend") {
+				t.Errorf("queued attachment restart: state=%s detail=%q", record.State, record.Detail)
+			}
+			progress.mu.Lock()
+			reported := false
+			for _, call := range progress.messages {
+				if embedHas(call.embed, "resend") {
+					reported = true
+				}
+			}
+			progress.mu.Unlock()
+			if !reported {
+				t.Error("restart did not update a progress card with resend guidance")
+			}
+			cancel()
+			waitForNoActiveJobs(t, jm, target.key())
+			return
+		}
+	}
+	t.Fatal("attachment job missing")
+}
+
+func TestRestartAttachmentNoticeFallsBackWhenCardUnavailable(t *testing.T) {
+	for _, test := range []struct {
+		name, card string
+		editFail   bool
+	}{{"missing card", "", false}, {"edit failure", "old-card", true}} {
+		t.Run(test.name, func(t *testing.T) {
+			mb := bus.NewMessageBus()
+			defer mb.Close()
+			path := filepathJoin(t.TempDir(), "jobs.json")
+			store, err := newJobStore(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Save(JobRecord{ID: "job-1-1", Channel: "discord", ChatID: "room", State: JobStateQueued, AttachmentsPending: true, StatusMessageID: test.card}); err != nil {
+				t.Fatal(err)
+			}
+			progress := &fakeProgressMessenger{editFail: test.editFail}
+			jm, err := NewJobManager(path, config.JobsConfig{Enabled: true}, mb, progress, func(LoopTarget) (JobRunner, error) { return &fakeJobRunner{}, nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			jm.NotifyInterruptedAttachments(context.Background())
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+			msg, ok := mb.SubscribeOutbound(ctx)
+			if !ok || msg.ChatID != "room" || !strings.Contains(strings.ToLower(msg.Content), "resend") {
+				t.Fatalf("missing fallback notice: %+v ok=%v", msg, ok)
+			}
+		})
+	}
+}
+
 func (r *fakeJobRunner) HandleInbound(context.Context, bus.InboundMessage) {}
 
 func (r *fakeJobRunner) RunJob(ctx context.Context, msg bus.InboundMessage, onProgress func(phase, detail string)) (string, error) {
