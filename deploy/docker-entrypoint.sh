@@ -1,9 +1,13 @@
 #!/bin/sh
 set -eu
 
-mkdir -p /root/sciclaw/skills
 for skill in gitea-create-change-request gitea-move-work-item gitea-move-file-phase-0-to-1; do
+  [ -d "/opt/sciclaw/skills/$skill" ] || continue
   dir="/root/sciclaw/skills/$skill"
+  if [ -L "$dir" ] && [ ! -d "$dir" ]; then
+    echo "Warning: workspace skill $skill is a dangling symlink; preserved." >&2
+    continue
+  fi
   mkdir -p "$dir"
   if [ ! -e "$dir/SKILL.md" ] && [ ! -L "$dir/SKILL.md" ]; then
     (
