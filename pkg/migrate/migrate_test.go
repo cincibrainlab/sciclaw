@@ -1007,7 +1007,7 @@ func TestFailedFullMigrationCanBeRetried(t *testing.T) {
 }
 
 func TestMigrationRejectsDestinationsLinkedIntoPicoClaw(t *testing.T) {
-	for _, kind := range []string{"profile-file", "dangling-profile-file", "sessions-dir"} {
+	for _, kind := range []string{"profile-file", "dangling-profile-file", "chained-dangling-profile-file", "sessions-dir"} {
 		t.Run(kind, func(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("HOME", home)
@@ -1034,7 +1034,7 @@ func TestMigrationRejectsDestinationsLinkedIntoPicoClaw(t *testing.T) {
 				name = "old.json"
 				link = filepath.Join(paths.WorkspaceStateDir(paths.DefaultWorkspace()), "sessions")
 			}
-			if kind != "dangling-profile-file" {
+			if kind != "dangling-profile-file" && kind != "chained-dangling-profile-file" {
 				if err := os.WriteFile(filepath.Join(legacy, name), []byte("preserve"), 0644); err != nil {
 					t.Fatal(err)
 				}
@@ -1043,6 +1043,13 @@ func TestMigrationRejectsDestinationsLinkedIntoPicoClaw(t *testing.T) {
 				t.Fatal(err)
 			}
 			target := filepath.Join(legacy, name)
+			if kind == "chained-dangling-profile-file" {
+				intermediate := filepath.Join(home, "outside-link")
+				if err := os.Symlink(target, intermediate); err != nil {
+					t.Fatal(err)
+				}
+				target = intermediate
+			}
 			if kind == "sessions-dir" {
 				target = legacy
 			}
@@ -1053,7 +1060,7 @@ func TestMigrationRejectsDestinationsLinkedIntoPicoClaw(t *testing.T) {
 				t.Fatal("expected rejection")
 			}
 			data, err := os.ReadFile(filepath.Join(legacy, name))
-			if kind == "dangling-profile-file" {
+			if kind == "dangling-profile-file" || kind == "chained-dangling-profile-file" {
 				if !os.IsNotExist(err) {
 					t.Fatalf("unexpected legacy file: %q %v", data, err)
 				}
