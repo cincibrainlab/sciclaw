@@ -126,9 +126,6 @@ func EnsureStateLayout() error {
 		if err := os.MkdirAll(dir, 0700); err != nil {
 			return err
 		}
-		if err := os.Chmod(dir, 0700); err != nil {
-			return err
-		}
 	}
 	return nil
 }
@@ -142,9 +139,6 @@ func EnsureWorkspaceStateDir(workspacePath string) (string, error) {
 	}
 	dir := WorkspaceStateDir(workspacePath)
 	if err := os.MkdirAll(dir, 0700); err != nil {
-		return "", err
-	}
-	if err := os.Chmod(dir, 0700); err != nil {
 		return "", err
 	}
 	return dir, nil

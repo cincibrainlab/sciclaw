@@ -62,6 +62,20 @@ func TestLoadPolicy_DefaultsWithoutFiles(t *testing.T) {
 	}
 }
 
+func TestLoadPolicyPreservesConfiguredAuditPath(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "hooks.yaml"), []byte("audit:\n  enabled: true\n  path: custom/audit.jsonl\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	policy, _, err := LoadPolicy(t.TempDir(), workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy.AuditPath != filepath.Join(workspace, "custom", "audit.jsonl") {
+		t.Fatalf("audit path = %q", policy.AuditPath)
+	}
+}
+
 func TestLoadPolicy_ProfileThenWorkspacePrecedence(t *testing.T) {
 	profile := t.TempDir()
 	workspace := t.TempDir()

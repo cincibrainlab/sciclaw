@@ -64,19 +64,6 @@ func (m *launchdManager) Install() error {
 	if err := os.MkdirAll(filepath.Dir(m.stdoutPath), 0700); err != nil {
 		return err
 	}
-	if err := os.Chmod(filepath.Dir(m.stdoutPath), 0700); err != nil {
-		return err
-	}
-	for _, logPath := range []string{m.stdoutPath, m.stderrPath} {
-		file, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
-		if err != nil {
-			return err
-		}
-		_ = file.Close()
-		if err := os.Chmod(logPath, 0600); err != nil {
-			return err
-		}
-	}
 
 	pathEnv := buildSystemdPath(os.Getenv("PATH"), m.detectBrewPrefix())
 	plist := renderLaunchdPlist(m.label, m.exePath, m.spec.Args, m.stdoutPath, m.stderrPath, pathEnv, paths.UserHome(), paths.StateHome())

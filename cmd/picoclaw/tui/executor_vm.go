@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"time"
@@ -27,13 +26,9 @@ func (e *VMExecutor) ReadFile(path string) (string, error) {
 }
 
 func (e *VMExecutor) WriteFile(path string, data []byte, perm os.FileMode) error {
-	cmd := vmWriteFileCommand(path, data, perm)
+	cmd := "printf '%s' " + shellEscape(string(data)) + " > " + shellEscape(path)
 	_, err := VMExecShell(10*time.Second, cmd)
 	return err
-}
-
-func vmWriteFileCommand(path string, data []byte, perm os.FileMode) string {
-	return "umask 077; printf '%s' " + shellEscape(string(data)) + " > " + shellEscape(path) + "; chmod " + fmt.Sprintf("%04o", perm.Perm()) + " " + shellEscape(path)
 }
 
 func (e *VMExecutor) ConfigPath() string { return "/home/ubuntu/.sciclaw/config.json" }

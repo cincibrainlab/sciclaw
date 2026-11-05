@@ -56,7 +56,10 @@ func defaultSharedWorkspaceDir() string {
 	return paths.DefaultWorkspace()
 }
 
-func resolveGlobalSkillsDir(_ string) string {
+func resolveGlobalSkillsDir(sharedWorkspace string) string {
+	if strings.TrimSpace(sharedWorkspace) != "" && filepath.Clean(sharedWorkspace) != filepath.Clean(paths.DefaultWorkspace()) {
+		return filepath.Join(sharedWorkspace, "skills")
+	}
 	return paths.GlobalSkillsDir()
 }
 
@@ -128,7 +131,7 @@ func (cb *ContextBuilder) getIdentity() string {
 
 	return fmt.Sprintf(`# sciClaw v%s
 
-You are sciClaw v%s, an autonomous paired-scientist assistant for reproducible execution.
+You are sciClaw v%s, an autonomous paired-scientist execution assistant.
 
 ## Current Time
 %s
@@ -252,7 +255,7 @@ func (cb *ContextBuilder) LoadBootstrapFiles() string {
 
 	var result strings.Builder
 	for _, filename := range bootstrapFiles {
-		candidates := []string{filepath.Join(profileDir, filename), filepath.Join(primaryWorkspace, filename)}
+		candidates := []string{filepath.Join(primaryWorkspace, filename), filepath.Join(profileDir, filename)}
 		if fallbackWorkspace != "" && fallbackWorkspace != "." && fallbackWorkspace != primaryWorkspace {
 			candidates = append(candidates, filepath.Join(fallbackWorkspace, filename))
 		}

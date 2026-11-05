@@ -55,15 +55,8 @@ func TestAtomicSave(t *testing.T) {
 	if err := sm.Flush(ctx); err != nil {
 		t.Fatalf("Flush failed: %v", err)
 	}
-	info, err := os.Stat(stateFile)
-	if err != nil {
+	if _, err := os.Stat(stateFile); err != nil {
 		t.Fatalf("expected state file to exist: %v", err)
-	}
-	if info.Mode().Perm() != 0600 {
-		t.Fatalf("state file mode=%#o want 0600", info.Mode().Perm())
-	}
-	if dirInfo, err := os.Stat(filepath.Dir(stateFile)); err != nil || dirInfo.Mode().Perm() != 0700 {
-		t.Fatalf("state directory mode must be 0700: %#v, %v", dirInfo, err)
 	}
 
 	// Create a new manager to verify persistence.

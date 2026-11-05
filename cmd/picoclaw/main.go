@@ -1253,7 +1253,7 @@ func migrateHelp() {
 	fmt.Println("  --workspace-only   Only migrate workspace files, skip config")
 	fmt.Println("  --force            Skip confirmation prompts")
 	fmt.Println("  --openclaw-home    Override OpenClaw home directory (default: ~/.openclaw)")
-	fmt.Println("  --picoclaw-home    Import compatible PicoClaw config from ~/.picoclaw explicitly")
+	fmt.Println("  --picoclaw-home    Legacy OpenClaw migration destination; must match SCICLAW_HOME")
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Printf("  %s migrate              Detect and migrate from OpenClaw\n", commandName)
@@ -1401,13 +1401,6 @@ func interactiveMode(agentLoop *agent.AgentLoop, sessionKey string) {
 		fmt.Printf("Error creating runtime directory: %v\n", err)
 		return
 	}
-	historyFile, err := os.OpenFile(paths.InteractiveHistoryPath(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
-	if err != nil {
-		fmt.Printf("Error creating history file: %v\n", err)
-		return
-	}
-	_ = historyFile.Close()
-	_ = os.Chmod(paths.InteractiveHistoryPath(), 0600)
 	rl, err := readline.NewEx(&readline.Config{
 		Prompt:          prompt,
 		HistoryFile:     paths.InteractiveHistoryPath(),
@@ -1718,7 +1711,7 @@ func gatewayCmd() {
 		"pid":        os.Getpid(),
 		"started_at": time.Now().UTC().Format(time.RFC3339),
 	}); err == nil {
-		_ = os.WriteFile(gatewayStatusPath, statusJSON, 0600)
+		_ = os.WriteFile(gatewayStatusPath, statusJSON, 0644)
 	}
 
 	// Setup cron tool and service

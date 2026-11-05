@@ -274,9 +274,6 @@ func TestWorkspaceStateDirStableAndCollisionResistant(t *testing.T) {
 func TestEnsureStateLayoutUsesPrivatePermissions(t *testing.T) {
 	stateHome := filepath.Join(t.TempDir(), "state")
 	t.Setenv("SCICLAW_STATE_HOME", stateHome)
-	if err := os.MkdirAll(stateHome, 0755); err != nil {
-		t.Fatal(err)
-	}
 	if err := EnsureStateLayout(); err != nil {
 		t.Fatal(err)
 	}

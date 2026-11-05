@@ -71,13 +71,9 @@ func EnableFileLogging(filePath string) error {
 	mu.Lock()
 	defer mu.Unlock()
 
-	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		return fmt.Errorf("failed to open log file: %w", err)
-	}
-	if err := os.Chmod(filePath, 0600); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("failed to secure log file: %w", err)
 	}
 
 	if logger.file != nil {

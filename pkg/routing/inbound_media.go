@@ -40,10 +40,9 @@ func prepareInboundMedia(ctx context.Context, workspace string, msg *bus.Inbound
 		sanitizePathSegment(msg.Channel),
 		inboundMediaMessageDir(msg),
 	)
-	if err := os.MkdirAll(stageDir, 0700); err != nil {
+	if err := os.MkdirAll(stageDir, 0755); err != nil {
 		return fmt.Errorf("create inbound media staging dir: %w", err)
 	}
-	_ = os.Chmod(stageDir, 0700)
 
 	seenNames := map[string]int{}
 	stagedPaths := make([]string, 0, len(msg.Media))
@@ -217,10 +216,10 @@ func copyInboundFile(sourcePath, destPath string) error {
 }
 
 func writeInboundFile(r io.Reader, destPath string, maxBytes int64) error {
-	if err := os.MkdirAll(filepath.Dir(destPath), 0700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
 		return err
 	}
-	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	out, err := os.Create(destPath)
 	if err != nil {
 		return err
 	}

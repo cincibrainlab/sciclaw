@@ -425,7 +425,7 @@ func TestPlanWorkspaceMigration(t *testing.T) {
 		}
 	})
 
-	t.Run("force still plans backup", func(t *testing.T) {
+	t.Run("force preserves pre-existing overwrite behavior", func(t *testing.T) {
 		srcDir := t.TempDir()
 		dstDir := t.TempDir()
 		profileDir := filepath.Join(dstDir, "profile")
@@ -439,14 +439,14 @@ func TestPlanWorkspaceMigration(t *testing.T) {
 			t.Fatalf("PlanWorkspaceMigration: %v", err)
 		}
 
-		backupCount := 0
+		copyCount := 0
 		for _, a := range actions {
-			if a.Type == ActionBackup {
-				backupCount++
+			if a.Type == ActionCopy && filepath.Base(a.Destination) == "AGENTS.md" {
+				copyCount++
 			}
 		}
-		if backupCount != 1 {
-			t.Fatalf("force must not suppress backups, got %d", backupCount)
+		if copyCount != 1 {
+			t.Fatalf("force must plan a direct copy, got %d", copyCount)
 		}
 	})
 
@@ -677,113 +677,7 @@ func TestSciClawDestinationIgnoresPicoClawHome(t *testing.T) {
 	}
 }
 
-func TestRunMigratesPicoClawConfig(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("SCICLAW_HOME", filepath.Join(home, "sciclaw"))
-	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(home, ".sciclaw"))
-	legacy := filepath.Join(home, ".picoclaw")
-	legacyConfig := config.DefaultConfig()
-	legacyConfig.Agents.Defaults.Workspace = filepath.Join(legacy, "workspace")
-	legacyConfig.Agents.Defaults.SharedWorkspace = "~/.picoclaw/workspace"
-	legacyConfig.Providers.Anthropic.APIKey = "legacy-key"
-	if err := config.SaveConfig(filepath.Join(legacy, "config.json"), legacyConfig); err != nil {
-		t.Fatal(err)
-	}
-
-	result, err := Run(Options{PicoClawHome: legacy, Force: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !result.ConfigMigrated {
-		t.Fatal("expected PicoClaw config to migrate")
-	}
-	migrated, err := config.LoadConfig(paths.ConfigPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if migrated.Providers.Anthropic.APIKey != "legacy-key" {
-		t.Fatalf("provider credential = %q", migrated.Providers.Anthropic.APIKey)
-	}
-	if migrated.WorkspacePath() != paths.DefaultWorkspace() || migrated.SharedWorkspacePath() != paths.DefaultWorkspace() {
-		t.Fatalf("workspace defaults = %q / %q, want %q", migrated.WorkspacePath(), migrated.SharedWorkspacePath(), paths.DefaultWorkspace())
-	}
-}
-
-func TestRunPicoClawMigrationPreservesUnknownFieldsAndIgnoresEnvironment(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("SCICLAW_HOME", filepath.Join(home, "sciclaw"))
-	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(home, ".sciclaw"))
-	t.Setenv("PICOCLAW_PROVIDERS_ANTHROPIC_API_KEY", "environment-key")
-	legacy := filepath.Join(home, ".picoclaw")
-	if err := os.MkdirAll(legacy, 0700); err != nil {
-		t.Fatal(err)
-	}
-	input := `{"agents":{"defaults":{"workspace":"~/.picoclaw/workspace","future_setting":12345678901234567890}},"providers":{"anthropic":{"api_key":"file-key"}},"future":{"nested":[true,"value"]}}`
-	if err := os.WriteFile(filepath.Join(legacy, "config.json"), []byte(input), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Run(Options{PicoClawHome: legacy, Force: true}); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(paths.ConfigPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	var got map[string]json.RawMessage
-	if err := json.Unmarshal(data, &got); err != nil {
-		t.Fatal(err)
-	}
-	var agents map[string]json.RawMessage
-	if err := json.Unmarshal(got["agents"], &agents); err != nil {
-		t.Fatal(err)
-	}
-	var defaults map[string]json.RawMessage
-	if err := json.Unmarshal(agents["defaults"], &defaults); err != nil {
-		t.Fatal(err)
-	}
-	var future map[string][]any
-	if err := json.Unmarshal(got["future"], &future); err != nil {
-		t.Fatal(err)
-	}
-	if string(defaults["future_setting"]) != "12345678901234567890" || len(future["nested"]) != 2 || future["nested"][0] != true || future["nested"][1] != "value" {
-		t.Fatalf("unknown fields lost: %s", data)
-	}
-	if !strings.Contains(string(got["providers"]), "file-key") || strings.Contains(string(data), "environment-key") {
-		t.Fatalf("environment changed imported config: %s", data)
-	}
-}
-
-func TestRunPicoClawMigrationRejectsInvalidWorkspaces(t *testing.T) {
-	for _, field := range []string{"workspace", "shared_workspace", "routing"} {
-		t.Run(field, func(t *testing.T) {
-			home := t.TempDir()
-			t.Setenv("HOME", home)
-			t.Setenv("SCICLAW_HOME", filepath.Join(home, "visible"))
-			t.Setenv("SCICLAW_STATE_HOME", filepath.Join(home, "state"))
-			legacy := filepath.Join(home, ".picoclaw")
-			if err := os.MkdirAll(legacy, 0700); err != nil {
-				t.Fatal(err)
-			}
-			input := `{"agents":{"defaults":{"` + field + `":"~/.picoclaw/custom"}}}`
-			if field == "routing" {
-				input = `{"routing":{"mappings":[{"workspace":"` + filepath.Join(home, "state", "project") + `"}]}}`
-			}
-			if err := os.WriteFile(filepath.Join(legacy, "config.json"), []byte(input), 0600); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := Run(Options{PicoClawHome: legacy, Force: true}); err == nil || !strings.Contains(err.Error(), "update the workspace path") {
-				t.Fatalf("expected actionable workspace error, got %v", err)
-			}
-			if _, err := os.Stat(paths.ConfigPath()); !os.IsNotExist(err) {
-				t.Fatalf("destination created: %v", err)
-			}
-		})
-	}
-}
-
-func TestRunPicoClawMigrationRejectsInvalidRouting(t *testing.T) {
+func TestLegacyDestinationOverrideDoesNotImportOrRedirect(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("SCICLAW_HOME", filepath.Join(home, "visible"))
@@ -792,14 +686,55 @@ func TestRunPicoClawMigrationRejectsInvalidRouting(t *testing.T) {
 	if err := os.MkdirAll(legacy, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(legacy, "config.json"), []byte(`{"routing":{"mappings":[{}]}}`), 0600); err != nil {
+	configFile := filepath.Join(legacy, "config.json")
+	if err := os.WriteFile(configFile, []byte(`{"source":true}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Run(Options{PicoClawHome: legacy, Force: true}); err == nil || !strings.Contains(err.Error(), "invalid routing") {
-		t.Fatalf("expected invalid routing error, got %v", err)
+	if _, err := Run(Options{PicoClawHome: legacy, Force: true}); err == nil || !strings.Contains(err.Error(), "destination") {
+		t.Fatalf("expected incompatible destination error, got %v", err)
+	}
+	data, err := os.ReadFile(configFile)
+	if err != nil || string(data) != `{"source":true}` {
+		t.Fatalf("legacy data changed: %q, %v", data, err)
 	}
 	if _, err := os.Stat(paths.ConfigPath()); !os.IsNotExist(err) {
-		t.Fatalf("destination created: %v", err)
+		t.Fatalf("config created: %v", err)
+	}
+}
+
+func TestLegacyDestinationOverrideMatchingUserRoot(t *testing.T) {
+	home := t.TempDir()
+	visible := filepath.Join(home, "visible")
+	t.Setenv("HOME", home)
+	t.Setenv("SCICLAW_HOME", visible)
+	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(home, "state"))
+	t.Setenv("PICOCLAW_HOME", "")
+	if _, err := Run(Options{PicoClawHome: visible, OpenClawHome: t.TempDir(), DryRun: true}); err != nil {
+		t.Fatalf("matching destination rejected: %v", err)
+	}
+}
+
+func TestOpenClawMigrationPreservesCustomWorkspace(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SCICLAW_HOME", filepath.Join(home, "visible"))
+	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(home, "state"))
+	t.Setenv("PICOCLAW_HOME", "")
+	source := t.TempDir()
+	custom := filepath.Join(home, "project")
+	data := `{"agents":{"defaults":{"workspace":"` + custom + `"}}}`
+	if err := os.WriteFile(filepath.Join(source, "openclaw.json"), []byte(data), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Run(Options{OpenClawHome: source, ConfigOnly: true, Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadConfig(paths.ConfigPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.WorkspacePath() != custom {
+		t.Fatalf("custom workspace lost: %q", cfg.WorkspacePath())
 	}
 }
 
@@ -828,34 +763,6 @@ func TestRunPicoClawMigrationRefusesExistingConfig(t *testing.T) {
 	data, err := os.ReadFile(paths.ConfigPath())
 	if err != nil || string(data) != `{"authoritative":true}` {
 		t.Fatalf("destination config changed: %q, %v", data, err)
-	}
-}
-
-func TestRunPicoClawMigrationPreservesSource(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("SCICLAW_HOME", filepath.Join(home, "sciclaw"))
-	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(home, ".sciclaw"))
-	legacy := filepath.Join(home, ".picoclaw")
-	if err := os.MkdirAll(filepath.Join(legacy, "workspace"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	source := filepath.Join(legacy, "config.json")
-	contents := []byte(`{"agents":{"defaults":{"workspace":"~/.picoclaw/workspace"}}}`)
-	if err := os.WriteFile(source, contents, 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := Run(Options{PicoClawHome: legacy, Force: true}); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(source)
-	if err != nil || string(data) != string(contents) {
-		t.Fatalf("PicoClaw config changed: %q, %v", data, err)
-	}
-	info, err := os.Lstat(legacy)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 {
-		t.Fatalf("PicoClaw home was replaced: %#v, %v", info, err)
 	}
 }
 
@@ -946,11 +853,6 @@ func TestRunFullMigration(t *testing.T) {
 	managedSession := filepath.Join(paths.WorkspaceStateDir(picoWs), "sessions", "chat.json")
 	if _, err := os.Stat(managedSession); err != nil {
 		t.Fatalf("reading migrated managed session: %v", err)
-	}
-	if info, err := os.Stat(managedSession); err != nil {
-		t.Fatal(err)
-	} else if info.Mode().Perm() != 0600 {
-		t.Fatalf("managed session mode=%#o want 0600", info.Mode().Perm())
 	}
 	if _, err := os.Stat(filepath.Join(picoWs, "sessions")); !os.IsNotExist(err) {
 		t.Fatal("sessions must not be imported into the visible workspace")

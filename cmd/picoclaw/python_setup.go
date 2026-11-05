@@ -57,17 +57,13 @@ func ensureWorkspacePythonEnvironment(workspace string) (string, error) {
 		return "", fmt.Errorf("prepare workspace state dir: %w", err)
 	}
 
-	recreated, err := ensureUsableManagedVenv(
-		workspaceVenvDir(workspace),
-		venvPython,
-		runCommandWithOutput,
-		func() error { return createWorkspaceVenv(workspace) },
-	)
-	if err != nil {
-		return "", err
+	if !fileExists(venvPython) {
+		if err := createWorkspaceVenv(workspace); err != nil {
+			return "", err
+		}
 	}
 
-	if !recreated && fileExists(workspacePythonMarkerPath(workspace)) {
+	if fileExists(workspacePythonMarkerPath(workspace)) {
 		return workspaceVenvBinDir(workspace), nil
 	}
 
@@ -75,36 +71,11 @@ func ensureWorkspacePythonEnvironment(workspace string) (string, error) {
 		return "", err
 	}
 
-	if err := os.WriteFile(workspacePythonMarkerPath(workspace), []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0600); err != nil {
+	if err := os.WriteFile(workspacePythonMarkerPath(workspace), []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0644); err != nil {
 		return "", fmt.Errorf("write python bootstrap marker: %w", err)
 	}
 
 	return workspaceVenvBinDir(workspace), nil
-}
-
-type pythonCommandRunner func(timeout time.Duration, name string, args ...string) (string, error)
-
-func ensureUsableManagedVenv(venvDir, pythonPath string, run pythonCommandRunner, recreate func() error) (bool, error) {
-	if fileExists(pythonPath) {
-		if _, err := run(10*time.Second, pythonPath, "--version"); err == nil {
-			return false, nil
-		}
-	}
-	if _, err := os.Stat(venvDir); err == nil {
-		if err := os.RemoveAll(venvDir); err != nil {
-			return false, fmt.Errorf("remove invalid managed venv: %w", err)
-		}
-	} else if !os.IsNotExist(err) {
-		return false, fmt.Errorf("inspect managed venv: %w", err)
-	}
-	if err := recreate(); err != nil {
-		return false, err
-	}
-	if _, err := run(10*time.Second, pythonPath, "--version"); err != nil {
-		_ = os.RemoveAll(venvDir)
-		return false, fmt.Errorf("managed venv python is not executable after recreation: %w", err)
-	}
-	return true, nil
 }
 
 func createWorkspaceVenv(workspace string) error {

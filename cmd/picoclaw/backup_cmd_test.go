@@ -85,19 +85,15 @@ func TestCollectBackupEntries(t *testing.T) {
 	}
 
 	entriesNoSessions := collectBackupEntries(cfg, homeDir, false)
-	if !hasArchivePath(entriesNoSessions, "user/workspaces") {
-		t.Fatalf("expected all managed workspaces in backup entries")
-	}
-	externalArchiveRoot := filepath.ToSlash(filepath.Join("external-workspaces", paths.WorkspaceID(workspace)))
-	if !hasArchivePath(entriesNoSessions, externalArchiveRoot) {
-		t.Fatalf("expected configured external workspace in backup entries")
+	if !hasArchivePath(entriesNoSessions, "workspace/AGENTS.md") {
+		t.Fatalf("expected configured workspace bootstrap file")
 	}
 	if hasArchivePath(entriesNoSessions, filepath.ToSlash(filepath.Join("state", "workspaces", paths.WorkspaceID(workspace), "sessions"))) {
 		t.Fatalf("did not expect managed sessions without --with-sessions")
 	}
 
 	entriesWithSessions := collectBackupEntries(cfg, homeDir, true)
-	for _, current := range []string{workspace, managedDefault, managedSecond} {
+	for _, current := range []string{workspace} {
 		sessionArchive := filepath.ToSlash(filepath.Join("state", "workspaces", paths.WorkspaceID(current), "sessions"))
 		if !hasArchivePath(entriesWithSessions, sessionArchive) {
 			t.Fatalf("expected sessions for %s", current)
@@ -108,18 +104,18 @@ func TestCollectBackupEntries(t *testing.T) {
 	if err := createBackupArchive(archivePath, entriesNoSessions); err != nil {
 		t.Fatalf("create backup: %v", err)
 	}
-	if !archiveContains(t, archivePath, externalArchiveRoot+"/results/arbitrary.txt") {
-		t.Fatal("backup omitted arbitrary workspace output")
+	if archiveContains(t, archivePath, "workspace/results/arbitrary.txt") {
+		t.Fatal("backup unexpectedly includes arbitrary workspace output")
 	}
-	if !archiveContains(t, archivePath, "user/workspaces/second/outputs/second.txt") {
-		t.Fatal("backup omitted secondary managed workspace")
+	if archiveContains(t, archivePath, "user/workspaces/second/outputs/second.txt") {
+		t.Fatal("backup unexpectedly includes secondary workspace")
 	}
 
 	insideOutput := filepath.Join(workspace, "backup.tar.gz")
 	if err := createBackupArchive(insideOutput, entriesNoSessions); err != nil {
 		t.Fatalf("create backup inside workspace: %v", err)
 	}
-	if archiveContains(t, insideOutput, externalArchiveRoot+"/backup.tar.gz") {
+	if archiveContains(t, insideOutput, "workspace/backup.tar.gz") {
 		t.Fatal("backup recursively included its own output")
 	}
 }
@@ -130,7 +126,7 @@ func TestBackupFollowsConfiguredWorkspaceRootSymlinkOnly(t *testing.T) {
 	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(home, ".sciclaw"))
 	realWorkspace := filepath.Join(home, "real-workspace")
 	workspaceLink := filepath.Join(home, "workspace-link")
-	mustWriteFile(t, filepath.Join(realWorkspace, "outputs", "result.txt"), "result")
+	mustWriteFile(t, filepath.Join(realWorkspace, "memory", "result.txt"), "result")
 	outsideFile := filepath.Join(t.TempDir(), "outside.txt")
 	mustWriteFile(t, outsideFile, "outside")
 	if err := os.Symlink(outsideFile, filepath.Join(realWorkspace, "nested-link.txt")); err != nil {
@@ -143,12 +139,12 @@ func TestBackupFollowsConfiguredWorkspaceRootSymlinkOnly(t *testing.T) {
 	cfg.Agents.Defaults.Workspace = workspaceLink
 	cfg.Agents.Defaults.SharedWorkspace = workspaceLink
 	entries := collectBackupEntries(cfg, home, false)
-	archiveRoot := filepath.ToSlash(filepath.Join("external-workspaces", paths.WorkspaceID(workspaceLink)))
+	archiveRoot := "workspace"
 	archivePath := filepath.Join(t.TempDir(), "backup.tar.gz")
 	if err := createBackupArchive(archivePath, entries); err != nil {
 		t.Fatal(err)
 	}
-	if !archiveContains(t, archivePath, archiveRoot+"/outputs/result.txt") {
+	if !archiveContains(t, archivePath, archiveRoot+"/memory/result.txt") {
 		t.Fatal("configured symlink workspace contents were not archived")
 	}
 	if archiveContains(t, archivePath, archiveRoot+"/nested-link.txt") {

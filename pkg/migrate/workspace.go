@@ -59,7 +59,7 @@ func PlanWorkspaceMigration(srcWorkspace, dstWorkspace, profileDir string, force
 	return actions, nil
 }
 
-func planFileCopy(src, dst string, _ bool) Action {
+func planFileCopy(src, dst string, force bool) Action {
 	if _, err := os.Stat(src); os.IsNotExist(err) {
 		return Action{
 			Type:        ActionSkip,
@@ -70,7 +70,7 @@ func planFileCopy(src, dst string, _ bool) Action {
 	}
 
 	_, dstExists := os.Stat(dst)
-	if dstExists == nil {
+	if dstExists == nil && !force {
 		return Action{
 			Type:        ActionBackup,
 			Source:      src,

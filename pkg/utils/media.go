@@ -115,7 +115,7 @@ func DownloadFile(url, filename string, opts DownloadOptions) string {
 		return ""
 	}
 
-	out, err := os.OpenFile(localPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	out, err := os.Create(localPath)
 	if err != nil {
 		logger.ErrorCF(opts.LoggerPrefix, "Failed to create local file", map[string]interface{}{
 			"error": err.Error(),

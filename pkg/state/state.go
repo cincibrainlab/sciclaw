@@ -56,8 +56,7 @@ func NewManager(workspace string) *Manager {
 	stateFile := filepath.Join(stateDir, "state.json")
 
 	// Create state directory if it doesn't exist
-	os.MkdirAll(stateDir, 0700)
-	_ = os.Chmod(stateDir, 0700)
+	os.MkdirAll(stateDir, 0755)
 
 	sm := &Manager{
 		workspace: workspace,
@@ -149,7 +148,7 @@ func (sm *Manager) saveAtomicSnapshot(snapshot State) error {
 	}
 
 	// Write to temp file
-	if err := os.WriteFile(tempFile, data, 0600); err != nil {
+	if err := os.WriteFile(tempFile, data, 0644); err != nil {
 		return fmt.Errorf("failed to write temp file: %w", err)
 	}
 
