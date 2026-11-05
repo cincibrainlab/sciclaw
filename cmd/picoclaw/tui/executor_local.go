@@ -90,10 +90,7 @@ func (e *LocalExecutor) WriteFile(path string, data []byte, perm os.FileMode) er
 	if err := paths.ValidateHomes(); err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, data, perm); err != nil {
-		return err
-	}
-	return os.Chmod(path, perm)
+	return os.WriteFile(path, data, perm)
 }
 
 func (e *LocalExecutor) ConfigPath() string {

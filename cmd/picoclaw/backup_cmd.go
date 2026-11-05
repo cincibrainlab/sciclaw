@@ -188,7 +188,7 @@ func collectBackupEntries(cfg *config.Config, homeDir string, withSessions bool)
 	candidates := []backupEntry{
 		{
 			SourcePath:  paths.ConfigPath(),
-			ArchivePath: filepath.ToSlash(filepath.Join("user", "config.json")),
+			ArchivePath: filepath.ToSlash(filepath.Join("state", "config.json")),
 		},
 		{
 			SourcePath:  paths.ProfileDir(),
@@ -215,31 +215,15 @@ func collectBackupEntries(cfg *config.Config, homeDir string, withSessions bool)
 			ArchivePath: filepath.ToSlash(filepath.Join("state", "op.env")),
 		},
 	}
-	managedWorkspaces := filepath.Join(paths.UserHome(), "workspaces")
-	candidates = append(candidates, backupEntry{SourcePath: managedWorkspaces, ArchivePath: filepath.ToSlash(filepath.Join("user", "workspaces"))})
-
-	workspacePaths := configuredWorkspaces(cfg)
-	if entries, err := os.ReadDir(managedWorkspaces); err == nil {
-		for _, entry := range entries {
-			if entry.IsDir() {
-				workspacePaths = append(workspacePaths, filepath.Join(managedWorkspaces, entry.Name()))
-			}
-		}
+	workspace := cfg.WorkspacePath()
+	for _, name := range []string{"AGENTS.md", "HOOKS.md", "IDENTITY.md", "SOUL.md", "TOOLS.md", "USER.md", "memory", "skills", "cron"} {
+		candidates = append(candidates, backupEntry{SourcePath: filepath.Join(workspace, name), ArchivePath: filepath.ToSlash(filepath.Join("workspace", name))})
 	}
-	workspacePaths = uniqueCleanPaths(workspacePaths)
-	for _, workspace := range workspacePaths {
-		if !pathWithin(workspace, managedWorkspaces) {
-			candidates = append(candidates, backupEntry{
-				SourcePath:  backupWorkspaceSource(workspace),
-				ArchivePath: filepath.ToSlash(filepath.Join("external-workspaces", paths.WorkspaceID(workspace))),
-			})
-		}
-		if withSessions {
-			candidates = append(candidates, backupEntry{
-				SourcePath:  filepath.Join(paths.WorkspaceStateDir(workspace), "sessions"),
-				ArchivePath: filepath.ToSlash(filepath.Join("state", "workspaces", paths.WorkspaceID(workspace), "sessions")),
-			})
-		}
+	if withSessions {
+		candidates = append(candidates, backupEntry{
+			SourcePath:  filepath.Join(paths.WorkspaceStateDir(workspace), "sessions"),
+			ArchivePath: filepath.ToSlash(filepath.Join("state", "workspaces", paths.WorkspaceID(workspace), "sessions")),
+		})
 	}
 
 	existing := make([]backupEntry, 0, len(candidates))
@@ -258,44 +242,8 @@ func collectBackupEntries(cfg *config.Config, homeDir string, withSessions bool)
 	return existing
 }
 
-func backupWorkspaceSource(workspace string) string {
-	info, err := os.Lstat(workspace)
-	if err != nil || info.Mode()&os.ModeSymlink == 0 {
-		return workspace
-	}
-	resolved, err := filepath.EvalSymlinks(workspace)
-	if err != nil {
-		return workspace
-	}
-	return resolved
-}
-
-func uniqueCleanPaths(values []string) []string {
-	seen := map[string]bool{}
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		cleaned, err := filepath.Abs(filepath.Clean(strings.TrimSpace(value)))
-		if err != nil || strings.TrimSpace(value) == "" || seen[cleaned] {
-			continue
-		}
-		seen[cleaned] = true
-		out = append(out, cleaned)
-	}
-	return out
-}
-
-func pathWithin(path, root string) bool {
-	path, pathErr := filepath.Abs(filepath.Clean(path))
-	root, rootErr := filepath.Abs(filepath.Clean(root))
-	if pathErr != nil || rootErr != nil {
-		return false
-	}
-	relative, err := filepath.Rel(root, path)
-	return err == nil && (relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))))
-}
-
 func createBackupArchive(outputPath string, entries []backupEntry) error {
-	file, err := os.OpenFile(outputPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	file, err := os.Create(outputPath)
 	if err != nil {
 		return err
 	}
@@ -313,7 +261,7 @@ func createBackupArchive(outputPath string, entries []backupEntry) error {
 			return err
 		}
 		if info.IsDir() {
-			if err := addDirectoryToArchive(tw, entry.SourcePath, entry.ArchivePath, outputPath); err != nil {
+			if err := addDirectoryToArchive(tw, entry.SourcePath, entry.ArchivePath); err != nil {
 				return err
 			}
 			continue
@@ -326,17 +274,11 @@ func createBackupArchive(outputPath string, entries []backupEntry) error {
 	return nil
 }
 
-func addDirectoryToArchive(tw *tar.Writer, sourceDir, archiveRoot, outputPath string) error {
-	outputPath, _ = filepath.Abs(outputPath)
+func addDirectoryToArchive(tw *tar.Writer, sourceDir, archiveRoot string) error {
 	return filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		absolute, _ := filepath.Abs(path)
-		if absolute == outputPath {
-			return nil
-		}
-
 		relPath, err := filepath.Rel(sourceDir, path)
 		if err != nil {
 			return err

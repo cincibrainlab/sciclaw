@@ -411,10 +411,11 @@ func NewAgentLoopWithOptions(cfg *config.Config, msgBus *bus.MessageBus, provide
 
 	var auditSink hooks.AuditSink
 	if hookPolicy.AuditEnabled || hookPolicyErr != nil {
-		auditPath, pathErr := hookpolicy.ResolveAuditPath(workspaceState, hookPolicy.AuditPath)
-		if pathErr != nil {
-			logger.WarnCF("hooks", "Hook audit sink disabled", map[string]interface{}{"error": pathErr.Error()})
-		} else if sink, err := hooks.NewJSONLAuditSinkAt(auditPath); err != nil {
+		auditPath := filepath.Join(workspaceState, "hooks", "hook-events.jsonl")
+		if hookPolicyErr == nil && hookPolicy.AuditPath != "" {
+			auditPath = hookPolicy.AuditPath
+		}
+		if sink, err := hooks.NewJSONLAuditSinkAt(auditPath); err != nil {
 			logger.WarnCF("hooks", "Hook audit sink disabled", map[string]interface{}{"error": err.Error()})
 		} else {
 			auditSink = sink

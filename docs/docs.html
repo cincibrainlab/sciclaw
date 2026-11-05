@@ -1195,7 +1195,7 @@ http://localhost:4142</code></pre>
 
         <div class="callout">
           <div class="callout-title">Where your work lives</div>
-          <p><strong>User-facing:</strong> <code>~/sciclaw/</code> contains config, profile/global assets, backups, addon source, and visible workspace content.</p>
+          <p><strong>User-facing:</strong> <code>~/sciclaw/</code> contains profile/global assets, backups, addon source, and visible workspace content.</p>
           <p><strong>Machine-managed:</strong> <code>~/.sciclaw/</code> contains OAuth credentials, logs, gateway coordination, jobs, caches, and per-workspace runtime state. <code>~/.picoclaw</code> remains PicoClaw-owned.</p>
         </div>
 
@@ -2381,7 +2381,7 @@ Top contributors
       <!-- ─── Hook Audit ─── -->
       <div class="section" id="hook-audit">
         <h3>Audit Log</h3>
-        <p>Every hook execution is appended to <code>hooks/hook-events.jsonl</code> inside that workspace's private state directory. The configured default uses <code>~/.sciclaw/workspaces/default/</code>; routed and external workspaces use <code>~/.sciclaw/workspaces/&lt;hash&gt;/</code>.</p>
+        <p>By default, hook events are appended to <code>hooks/hook-events.jsonl</code> inside that workspace's state directory. The configured default uses <code>~/.sciclaw/workspaces/default/</code>; routed and external workspaces use <code>~/.sciclaw/workspaces/&lt;hash&gt;/</code>. A configured audit path is honored instead.</p>
 
         <ul>
           <li>Turn ID, event name, and handler name</li>

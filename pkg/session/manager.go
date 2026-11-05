@@ -76,9 +76,8 @@ func NewSessionManager(storage string) *SessionManager {
 	}
 
 	if storage != "" {
-		os.MkdirAll(storage, 0700)
-		_ = os.Chmod(storage, 0700)
-		if err := sm.loadSessionsFromWithTimeout(storage, sessionLoadTimeout); err != nil {
+		os.MkdirAll(storage, 0755)
+		if err := sm.loadSessionsWithTimeout(sessionLoadTimeout); err != nil {
 			sm.loadErr = err
 			logger.WarnCF("session", "Session preload skipped", map[string]interface{}{
 				"storage": storage,
@@ -550,7 +549,7 @@ func (sm *SessionManager) Save(key string) error {
 		}
 		return err
 	}
-	if err := tmpFile.Chmod(0600); err != nil {
+	if err := tmpFile.Chmod(0644); err != nil {
 		_ = tmpFile.Close()
 		if strings.HasPrefix(key, "discord:") {
 			logger.WarnCF("session", "Session save chmod failed", map[string]interface{}{
@@ -612,11 +611,7 @@ func (sm *SessionManager) Save(key string) error {
 }
 
 func (sm *SessionManager) loadSessions() error {
-	return sm.loadSessionsFrom(sm.storage)
-}
-
-func (sm *SessionManager) loadSessionsFrom(storage string) error {
-	files, err := readDir(storage)
+	files, err := readDir(sm.storage)
 	if err != nil {
 		return err
 	}
@@ -630,7 +625,7 @@ func (sm *SessionManager) loadSessionsFrom(storage string) error {
 			continue
 		}
 
-		sessionPath := filepath.Join(storage, file.Name())
+		sessionPath := filepath.Join(sm.storage, file.Name())
 		data, err := readFile(sessionPath)
 		if err != nil {
 			continue
@@ -650,17 +645,13 @@ func (sm *SessionManager) loadSessionsFrom(storage string) error {
 }
 
 func (sm *SessionManager) loadSessionsWithTimeout(timeout time.Duration) error {
-	return sm.loadSessionsFromWithTimeout(sm.storage, timeout)
-}
-
-func (sm *SessionManager) loadSessionsFromWithTimeout(storage string, timeout time.Duration) error {
 	if timeout <= 0 {
-		return sm.loadSessionsFrom(storage)
+		return sm.loadSessions()
 	}
 
 	done := make(chan error, 1)
 	go func() {
-		done <- sm.loadSessionsFrom(storage)
+		done <- sm.loadSessions()
 	}()
 
 	select {

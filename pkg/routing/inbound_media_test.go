@@ -42,12 +42,8 @@ func TestPrepareInboundMedia_DownloadsURLIntoWorkspaceAndAnnotatesContent(t *tes
 	if !strings.HasPrefix(stagedPath, filepath.Join(paths.WorkspaceStateDir(workspace), "inbound")) {
 		t.Fatalf("staged path %q is not under workspace state inbound dir", stagedPath)
 	}
-	info, err := os.Stat(stagedPath)
-	if err != nil {
+	if _, err := os.Stat(stagedPath); err != nil {
 		t.Fatalf("expected staged file to exist: %v", err)
-	}
-	if info.Mode().Perm() != 0600 {
-		t.Fatalf("staged file mode=%#o want 0600", info.Mode().Perm())
 	}
 	if !strings.Contains(msg.Content, "Attachments staged locally and available to tools:") {
 		t.Fatalf("expected staged attachment summary in content, got %q", msg.Content)

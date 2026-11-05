@@ -591,7 +591,7 @@ func ensurePandocDefaultsFile(templatePath string) (string, error) {
 	if defaultsPath == "" {
 		defaultsPath = filepath.Join(paths.TempDir(), "pandoc-defaults.yaml")
 	}
-	if err := os.MkdirAll(filepath.Dir(defaultsPath), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(defaultsPath), 0o755); err != nil {
 		return "", err
 	}
 
