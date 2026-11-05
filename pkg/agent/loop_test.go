@@ -1682,6 +1682,34 @@ func TestAgentLoop_HooksCanBeDisabledByPolicy(t *testing.T) {
 	}
 }
 
+func TestAgentLoopLoadsLegacyWorkspaceSessions(t *testing.T) {
+	workspace := t.TempDir()
+	legacy := filepath.Join(workspace, "sessions", "old.json")
+	if err := os.MkdirAll(filepath.Dir(legacy), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, []byte(`{"key":"old","messages":[{"role":"user","content":"history"}]}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = workspace
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{})
+	if got := al.sessions.GetOrCreate("old"); len(got.Messages) != 1 || got.Messages[0].Content != "history" {
+		t.Fatalf("legacy session not loaded: %#v", got.Messages)
+	}
+	if _, err := os.Stat(legacy); err != nil {
+		t.Fatal(err)
+	}
+	managed := filepath.Join(paths.WorkspaceStateDir(workspace), "sessions", "old.json")
+	if err := os.WriteFile(managed, []byte(`{"key":"old","messages":[{"role":"user","content":"new history"}]}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	second := NewAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{})
+	if got := second.sessions.GetOrCreate("old"); len(got.Messages) != 1 || got.Messages[0].Content != "new history" {
+		t.Fatalf("managed session did not win: %#v", got.Messages)
+	}
+}
+
 func TestAgentLoop_WritesHookAuditEvents(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {

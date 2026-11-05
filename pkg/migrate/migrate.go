@@ -123,6 +123,7 @@ func ResultError(result *Result) error {
 func Plan(opts Options, openclawHome, sciClawHome string) ([]Action, []string, error) {
 	var actions []Action
 	var warnings []string
+	var configAction *Action
 
 	if !opts.WorkspaceOnly {
 		configPath, err := findOpenClawConfig(openclawHome)
@@ -138,12 +139,12 @@ func Plan(opts Options, openclawHome, sciClawHome string) ([]Action, []string, e
 			} else if !os.IsNotExist(statErr) {
 				return nil, nil, statErr
 			}
-			actions = append(actions, Action{
+			configAction = &Action{
 				Type:        ActionConvertConfig,
 				Source:      configPath,
 				Destination: destination,
 				Description: "convert OpenClaw config to sciClaw format",
-			})
+			}
 
 			data, err := LoadOpenClawConfig(configPath)
 			if err == nil {
@@ -180,6 +181,9 @@ func Plan(opts Options, openclawHome, sciClawHome string) ([]Action, []string, e
 		}
 	}
 
+	if configAction != nil {
+		actions = append(actions, *configAction)
+	}
 	return actions, warnings, nil
 }
 
@@ -189,6 +193,9 @@ func Execute(actions []Action, openclawHome, _ string) *Result {
 	for _, action := range actions {
 		switch action.Type {
 		case ActionConvertConfig:
+			if len(result.Errors) != 0 {
+				continue
+			}
 			if err := executeConfigMigration(action.Source, action.Destination); err != nil {
 				result.Errors = append(result.Errors, fmt.Errorf("config migration: %w", err))
 				fmt.Printf("  ✗ Config migration failed: %v\n", err)
@@ -252,6 +259,13 @@ func executeConfigMigration(srcConfigPath, dstConfigPath string) error {
 	incoming, _, err := ConvertConfig(data)
 	if err != nil {
 		return err
+	}
+	if agents, ok := getMap(data, "agents"); ok {
+		if defaults, ok := getMap(agents, "defaults"); ok {
+			if workspace, ok := getString(defaults, "workspace"); ok && filepath.Clean(expandHome(workspace)) == filepath.Join(filepath.Dir(srcConfigPath), "workspace") {
+				incoming.Agents.Defaults.Workspace = paths.DefaultWorkspace()
+			}
+		}
 	}
 
 	if _, err := os.Stat(dstConfigPath); err == nil {

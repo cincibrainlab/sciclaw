@@ -374,7 +374,7 @@ Every IRL command is recorded in the active visible workspace, under `irl/comman
 
 `SCICLAW_HOME` overrides the visible root and `SCICLAW_STATE_HOME` overrides the machine-state root. `~/.picoclaw` remains PicoClaw-owned and is never used as a SciClaw runtime fallback.
 
-The legacy OpenClaw migration option `--picoclaw-home` (or `PICOCLAW_HOME`) must match `SCICLAW_HOME`; configuration is stored separately under `SCICLAW_STATE_HOME`. Existing workspaces under `~/.picoclaw` are rejected and must be relocated and reconfigured manually. Existing configuration, credentials, sessions, and runtime state in their previous locations are not automatically imported; back them up and transfer any needed data deliberately. SciClaw does not automatically move or delete their data.
+The legacy OpenClaw migration option `--picoclaw-home` (or `PICOCLAW_HOME`) must match `SCICLAW_HOME`; configuration is stored separately under `SCICLAW_STATE_HOME`. Existing workspaces under `~/.picoclaw` are rejected and must be relocated and reconfigured manually. Existing configuration and credentials in their previous locations are not automatically imported. For allowed workspaces, existing sessions and state are read as a fallback; subsequent writes use the new state root. Existing files are not moved or deleted.
 
 ## Docker
 
