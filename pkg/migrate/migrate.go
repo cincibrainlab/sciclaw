@@ -260,16 +260,46 @@ func Execute(actions []Action, openclawHome, _ string) *Result {
 }
 
 func migrationTargetsPicoClaw(path string) bool {
-	if paths.IsPicoClawPath(path) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
 		return true
 	}
-	if target, err := os.Readlink(path); err == nil {
-		if !filepath.IsAbs(target) {
-			target = filepath.Join(filepath.Dir(path), target)
+	for links := 0; links <= 40; links++ {
+		if paths.IsPicoClawPath(absolute) {
+			return true
 		}
-		return paths.IsPicoClawPath(target)
+		volume := filepath.VolumeName(absolute)
+		current := volume + string(filepath.Separator)
+		parts := strings.Split(strings.TrimPrefix(absolute, current), string(filepath.Separator))
+		followed := false
+		for i, part := range parts {
+			current = filepath.Join(current, part)
+			info, err := os.Lstat(current)
+			if os.IsNotExist(err) {
+				return false
+			}
+			if err != nil {
+				return true
+			}
+			if info.Mode()&os.ModeSymlink == 0 {
+				continue
+			}
+			target, err := os.Readlink(current)
+			if err != nil {
+				return true
+			}
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(filepath.Dir(current), target)
+			}
+			absolute = filepath.Join(append([]string{target}, parts[i+1:]...)...)
+			followed = true
+			break
+		}
+		if !followed {
+			return false
+		}
 	}
-	return false
+	return true
 }
 
 func executeConfigMigration(srcConfigPath, dstConfigPath string) error {

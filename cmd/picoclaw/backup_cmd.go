@@ -52,7 +52,7 @@ func backupHelp() {
 	fmt.Println()
 	fmt.Println("Create options:")
 	fmt.Println("  -o, --output <path>     Output tar.gz path")
-	fmt.Println("  --with-sessions         Include managed session state in backup")
+	fmt.Println("  --with-sessions         Include managed and legacy workspace sessions")
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Printf("  %s backup create\n", commandName)
@@ -222,10 +222,17 @@ func collectBackupEntries(cfg *config.Config, homeDir string, withSessions bool)
 	if withSessions {
 		legacy := filepath.Join(workspace, "sessions")
 		if paths.ValidateWorkspace(workspace) == nil && !paths.IsPicoClawPath(legacy) {
+			if resolved, err := filepath.EvalSymlinks(legacy); err == nil {
+				legacy = resolved
+			}
 			candidates = append(candidates, backupEntry{SourcePath: legacy, ArchivePath: "workspace/sessions"})
 		}
+		managed := filepath.Join(paths.WorkspaceStateDir(workspace), "sessions")
+		if resolved, err := filepath.EvalSymlinks(managed); err == nil {
+			managed = resolved
+		}
 		candidates = append(candidates, backupEntry{
-			SourcePath:  filepath.Join(paths.WorkspaceStateDir(workspace), "sessions"),
+			SourcePath:  managed,
 			ArchivePath: filepath.ToSlash(filepath.Join("state", "workspaces", paths.WorkspaceID(workspace), "sessions")),
 		})
 	}
@@ -234,10 +241,11 @@ func collectBackupEntries(cfg *config.Config, homeDir string, withSessions bool)
 	seen := map[string]bool{}
 	for _, entry := range candidates {
 		cleaned := filepath.Clean(entry.SourcePath)
-		if seen[cleaned] {
+		key := cleaned + "\x00" + entry.ArchivePath
+		if seen[key] {
 			continue
 		}
-		seen[cleaned] = true
+		seen[key] = true
 		entry.SourcePath = cleaned
 		if _, err := os.Stat(entry.SourcePath); err == nil {
 			existing = append(existing, entry)

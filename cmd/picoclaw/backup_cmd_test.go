@@ -10,6 +10,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/paths"
+	"github.com/sipeed/picoclaw/pkg/session"
 )
 
 func TestParseBackupOptions(t *testing.T) {
@@ -172,6 +173,71 @@ func TestBackupIncludesLegacyAndManagedSessionsSeparately(t *testing.T) {
 	for _, name := range []string{"workspace/sessions/legacy.json", "workspace/sessions/both.json", filepath.ToSlash(filepath.Join("state", "workspaces", paths.WorkspaceID(workspace), "sessions", "both.json"))} {
 		if !archiveContains(t, archive, name) {
 			t.Fatalf("missing %s", name)
+		}
+	}
+}
+
+func TestBackupRestoresLinkedSessionDirectories(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SCICLAW_HOME", filepath.Join(home, "visible"))
+	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(home, "state"))
+	workspace := filepath.Join(home, "workspace")
+	legacy, managed := filepath.Join(workspace, "sessions"), filepath.Join(paths.WorkspaceStateDir(workspace), "sessions")
+	legacyTarget, managedTarget := filepath.Join(home, "legacy-sessions"), filepath.Join(home, "managed-sessions")
+	mustWriteFile(t, filepath.Join(legacyTarget, "legacy.json"), `{"key":"legacy","messages":[{"role":"user","content":"legacy"}]}`)
+	mustWriteFile(t, filepath.Join(legacyTarget, "both.json"), `{"key":"both","messages":[{"role":"user","content":"old"}]}`)
+	mustWriteFile(t, filepath.Join(managedTarget, "both.json"), `{"key":"both","messages":[{"role":"user","content":"new"}]}`)
+	for _, pair := range [][2]string{{legacy, legacyTarget}, {managed, managedTarget}} {
+		if err := os.MkdirAll(filepath.Dir(pair[0]), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(pair[1], pair[0]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = workspace
+	archive := filepath.Join(t.TempDir(), "backup.tar.gz")
+	if err := createBackupArchive(archive, collectBackupEntries(cfg, home, true)); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	z, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer z.Close()
+	r := tar.NewReader(z)
+	restore := t.TempDir()
+	for {
+		h, err := r.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if h.Typeflag != tar.TypeReg {
+			continue
+		}
+		data, err := io.ReadAll(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustWriteFile(t, filepath.Join(restore, h.Name), string(data))
+	}
+	legacyRestored := filepath.Join(restore, "workspace", "sessions")
+	managedRestored := filepath.Join(restore, "state", "workspaces", paths.WorkspaceID(workspace), "sessions")
+	sm := session.NewSessionManager(managedRestored, legacyRestored)
+	for key, want := range map[string]string{"legacy": "legacy", "both": "new"} {
+		got := sm.GetOrCreate(key)
+		if len(got.Messages) != 1 || got.Messages[0].Content != want {
+			t.Fatalf("%s: %#v", key, got.Messages)
 		}
 	}
 }
