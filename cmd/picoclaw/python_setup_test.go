@@ -3,17 +3,20 @@ package main
 import (
 	"path/filepath"
 	"testing"
+
+	"github.com/sipeed/picoclaw/pkg/paths"
 )
 
 func TestWorkspaceVenvPaths(t *testing.T) {
 	workspace := "/tmp/sciclaw-workspace"
-	if got := workspaceVenvDir(workspace); got != filepath.Join(workspace, ".venv") {
+	stateDir := paths.WorkspaceStateDir(workspace)
+	if got := workspaceVenvDir(workspace); got != filepath.Join(stateDir, ".venv") {
 		t.Fatalf("unexpected venv dir: %q", got)
 	}
-	if got := workspaceVenvBinDir(workspace); got != filepath.Join(workspace, ".venv", "bin") {
+	if got := workspaceVenvBinDir(workspace); got != filepath.Join(stateDir, ".venv", "bin") {
 		t.Fatalf("unexpected venv bin dir: %q", got)
 	}
-	if got := workspaceVenvPythonPath(workspace); got != filepath.Join(workspace, ".venv", "bin", "python") {
+	if got := workspaceVenvPythonPath(workspace); got != filepath.Join(stateDir, ".venv", "bin", "python") {
 		t.Fatalf("unexpected venv python path: %q", got)
 	}
 }

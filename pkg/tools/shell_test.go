@@ -662,7 +662,7 @@ func TestCommandWithPandocDefaults_UsesConfiguredTemplate(t *testing.T) {
 
 func TestCommandWithPandocDefaults_UsesSciclawCanonicalTemplate(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("PICOCLAW_HOME", tmpDir)
+	t.Setenv("SCICLAW_HOME", tmpDir)
 	defaultsPath := filepath.Join(tmpDir, "pandoc-defaults.yaml")
 	t.Setenv("SCICLAW_PANDOC_DEFAULTS_PATH", defaultsPath)
 	t.Setenv("SCICLAW_NIH_REFERENCE_DOC", "")
@@ -705,7 +705,7 @@ func TestShellTool_ExecuteInjectsPandocDefaultsForDocx(t *testing.T) {
 	}
 
 	defaultsPath := filepath.Join(tmpDir, "pandoc-defaults.yaml")
-	t.Setenv("PICOCLAW_HOME", homeDir)
+	t.Setenv("SCICLAW_HOME", homeDir)
 	t.Setenv("SCICLAW_PANDOC_DEFAULTS_PATH", defaultsPath)
 	t.Setenv("SCICLAW_NIH_REFERENCE_DOC", "")
 

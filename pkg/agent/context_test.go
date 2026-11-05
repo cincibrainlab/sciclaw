@@ -144,15 +144,42 @@ func TestLoadBootstrapFilesIncludesTools(t *testing.T) {
 	}
 }
 
+func TestWorkspaceBootstrapPrecedesProfile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SCICLAW_HOME", home)
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, "profile"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "profile", "AGENTS.md"), []byte("profile"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "AGENTS.md"), []byte("workspace"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got := NewContextBuilder(workspace).LoadBootstrapFiles()
+	if !strings.Contains(got, "workspace") || strings.Contains(got, "profile") {
+		t.Fatalf("workspace bootstrap lost: %q", got)
+	}
+}
+
+func TestCustomSharedWorkspaceSkillsRemainAccessible(t *testing.T) {
+	shared := t.TempDir()
+	if got := resolveGlobalSkillsDir(shared); got != filepath.Join(shared, "skills") {
+		t.Fatalf("global skills = %q", got)
+	}
+}
+
 func TestLoadBootstrapFilesFallsBackToGlobalWorkspace(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("SCICLAW_HOME", filepath.Join(home, "sciclaw"))
 
-	globalWorkspace := filepath.Join(home, "sciclaw")
-	if err := os.MkdirAll(globalWorkspace, 0755); err != nil {
-		t.Fatalf("mkdir global workspace: %v", err)
+	profileDir := filepath.Join(home, "sciclaw", "profile")
+	if err := os.MkdirAll(profileDir, 0755); err != nil {
+		t.Fatalf("mkdir profile: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(globalWorkspace, "AGENTS.md"), []byte("# Global Agents\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(profileDir, "AGENTS.md"), []byte("# Global Agents\n"), 0644); err != nil {
 		t.Fatalf("write global AGENTS.md: %v", err)
 	}
 
@@ -168,6 +195,7 @@ func TestLoadBootstrapFilesFallsBackToGlobalWorkspace(t *testing.T) {
 func TestContextBuilderLoadsGlobalWorkspaceSkillsForRoutedWorkspace(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("SCICLAW_HOME", filepath.Join(home, "sciclaw"))
 
 	skillDir := filepath.Join(home, "sciclaw", "skills", "baseline")
 	if err := os.MkdirAll(skillDir, 0755); err != nil {

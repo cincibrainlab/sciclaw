@@ -20,6 +20,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/models"
+	"github.com/sipeed/picoclaw/pkg/paths"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/routing"
 	"github.com/sipeed/picoclaw/pkg/skills"
@@ -265,7 +266,7 @@ func (s *webServer) getSnapshot() *tui.VMSnapshot {
 }
 
 func jobsStorePath() string {
-	return filepath.Join(filepath.Dir(getConfigPath()), "jobs.json")
+	return paths.JobsPath()
 }
 
 func loadJobRecords() ([]routing.JobRecord, error) {
@@ -1236,8 +1237,7 @@ func loadWebSkillsState() (*webSkillsState, error) {
 	}
 
 	workspace := cfg.WorkspacePath()
-	globalDir := filepath.Dir(getConfigPath())
-	globalSkillsDir := filepath.Join(globalDir, "skills")
+	globalSkillsDir := paths.GlobalSkillsDir()
 	builtinSkillsDir := resolveBuiltinSkillsDir(workspace)
 	loader := skills.NewSkillsLoader(workspace, globalSkillsDir, builtinSkillsDir)
 	installed := loader.ListSkills()
@@ -1755,7 +1755,7 @@ func (s *webServer) handleSettings(w http.ResponseWriter, r *http.Request) {
 
 // ── System (Personality Files) ──
 
-// knownSystemFiles is the hardcoded allowlist of workspace personality files.
+// knownSystemFiles is the hardcoded allowlist of profile files and workspace memory.
 var knownSystemFiles = []string{
 	"AGENTS.md",
 	"SOUL.md",
@@ -1764,6 +1764,13 @@ var knownSystemFiles = []string{
 	"TOOLS.md",
 	"HOOKS.md",
 	"memory/MEMORY.md",
+}
+
+func systemFilePath(workspace, relativePath string) string {
+	if relativePath == "memory/MEMORY.md" {
+		return filepath.Join(workspace, relativePath)
+	}
+	return filepath.Join(paths.ProfileDir(), relativePath)
 }
 
 type workspaceFileInfo struct {
@@ -1800,7 +1807,7 @@ func collectWorkspaceFiles(workspace, source string, templates []workspacetpl.Te
 
 	files := make([]workspaceFileInfo, 0, len(knownSystemFiles))
 	for _, rel := range knownSystemFiles {
-		abs := filepath.Join(workspace, rel)
+		abs := systemFilePath(workspace, rel)
 		info := workspaceFileInfo{
 			Name:         filepath.Base(rel),
 			RelativePath: rel,
@@ -2023,7 +2030,7 @@ func (s *webServer) handleSystemAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		abs := filepath.Join(body.Workspace, body.Path)
+		abs := systemFilePath(body.Workspace, body.Path)
 		// Ensure parent directory exists (for memory/MEMORY.md).
 		if err := os.MkdirAll(filepath.Dir(abs), 0755); err != nil {
 			jsonErr(w, "failed to create directory: "+err.Error(), 500)
@@ -2088,7 +2095,7 @@ func (s *webServer) handleSystemAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		abs := filepath.Join(body.Workspace, body.Path)
+		abs := systemFilePath(body.Workspace, body.Path)
 		if err := os.MkdirAll(filepath.Dir(abs), 0755); err != nil {
 			jsonErr(w, "failed to create directory: "+err.Error(), 500)
 			return

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/paths"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/skills"
 	"github.com/sipeed/picoclaw/pkg/tools"
@@ -51,67 +52,15 @@ func (cb *ContextBuilder) SetSenderContext(senderID, displayName, theme string) 
 	cb.answerTheme = theme
 }
 
-func getGlobalConfigDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".picoclaw")
-}
-
 func defaultSharedWorkspaceDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, "sciclaw")
+	return paths.DefaultWorkspace()
 }
 
 func resolveGlobalSkillsDir(sharedWorkspace string) string {
-	sharedRoot := strings.TrimSpace(sharedWorkspace)
-	if sharedRoot != "" {
-		sharedSkills := filepath.Join(sharedRoot, "skills")
-		if hasSkillsDir(sharedSkills) {
-			return sharedSkills
-		}
-		// Default to shared workspace path even if skills are missing;
-		// onboard/bootstrap should populate this location.
-		return sharedSkills
+	if strings.TrimSpace(sharedWorkspace) != "" && filepath.Clean(sharedWorkspace) != filepath.Clean(paths.DefaultWorkspace()) {
+		return filepath.Join(sharedWorkspace, "skills")
 	}
-
-	base := strings.TrimSpace(getGlobalConfigDir())
-	if base == "" {
-		return ""
-	}
-	workspaceSkills := filepath.Join(base, "workspace", "skills")
-	legacySkills := filepath.Join(base, "skills")
-
-	// Legacy fallback only when shared workspace is unspecified.
-	if hasSkillsDir(workspaceSkills) {
-		return workspaceSkills
-	}
-	if hasSkillsDir(legacySkills) {
-		return legacySkills
-	}
-
-	// Default to workspace-based legacy path when nothing is present.
-	return workspaceSkills
-}
-
-func hasSkillsDir(path string) bool {
-	entries, err := os.ReadDir(path)
-	if err != nil {
-		return false
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		if _, err := os.Stat(filepath.Join(path, entry.Name(), "SKILL.md")); err == nil {
-			return true
-		}
-	}
-	return false
+	return paths.GlobalSkillsDir()
 }
 
 func NewContextBuilder(workspace string, sharedWorkspace ...string) *ContextBuilder {
@@ -293,18 +242,20 @@ The following skills extend your capabilities. To use a skill, read its SKILL.md
 func (cb *ContextBuilder) LoadBootstrapFiles() string {
 	bootstrapFiles := []string{
 		"AGENTS.md",
+		"HOOKS.md",
 		"SOUL.md",
 		"USER.md",
 		"IDENTITY.md",
 		"TOOLS.md",
 	}
 
+	profileDir := paths.ProfileDir()
 	primaryWorkspace := filepath.Clean(cb.workspace)
 	fallbackWorkspace := filepath.Clean(cb.sharedWorkspace)
 
 	var result strings.Builder
 	for _, filename := range bootstrapFiles {
-		candidates := []string{filepath.Join(primaryWorkspace, filename)}
+		candidates := []string{filepath.Join(primaryWorkspace, filename), filepath.Join(profileDir, filename)}
 		if fallbackWorkspace != "" && fallbackWorkspace != "." && fallbackWorkspace != primaryWorkspace {
 			candidates = append(candidates, filepath.Join(fallbackWorkspace, filename))
 		}

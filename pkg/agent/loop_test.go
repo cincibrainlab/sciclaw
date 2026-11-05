@@ -17,6 +17,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/paths"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
@@ -869,9 +870,14 @@ func TestNewAgentLoop_StateInitialized(t *testing.T) {
 	}
 
 	// Verify state directory was created
-	stateDir := filepath.Join(tmpDir, "state")
+	stateDir := filepath.Join(paths.WorkspaceStateDir(tmpDir), "state")
 	if _, err := os.Stat(stateDir); os.IsNotExist(err) {
 		t.Error("Expected state directory to exist")
+	}
+	for _, runtimeDir := range []string{"sessions", "state", "hooks", ".venv", ".ctxclaw", ".sciclaw"} {
+		if _, err := os.Stat(filepath.Join(tmpDir, runtimeDir)); !os.IsNotExist(err) {
+			t.Fatalf("runtime directory %s leaked into visible workspace", runtimeDir)
+		}
 	}
 }
 
@@ -1507,6 +1513,34 @@ func TestAgentLoop_HooksCanBeDisabledByPolicy(t *testing.T) {
 	}
 }
 
+func TestAgentLoopLoadsLegacyWorkspaceSessions(t *testing.T) {
+	workspace := t.TempDir()
+	legacy := filepath.Join(workspace, "sessions", "old.json")
+	if err := os.MkdirAll(filepath.Dir(legacy), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, []byte(`{"key":"old","messages":[{"role":"user","content":"history"}]}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = workspace
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{})
+	if got := al.sessions.GetOrCreate("old"); len(got.Messages) != 1 || got.Messages[0].Content != "history" {
+		t.Fatalf("legacy session not loaded: %#v", got.Messages)
+	}
+	if _, err := os.Stat(legacy); err != nil {
+		t.Fatal(err)
+	}
+	managed := filepath.Join(paths.WorkspaceStateDir(workspace), "sessions", "old.json")
+	if err := os.WriteFile(managed, []byte(`{"key":"old","messages":[{"role":"user","content":"new history"}]}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	second := NewAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{})
+	if got := second.sessions.GetOrCreate("old"); len(got.Messages) != 1 || got.Messages[0].Content != "new history" {
+		t.Fatalf("managed session did not win: %#v", got.Messages)
+	}
+}
+
 func TestAgentLoop_WritesHookAuditEvents(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
@@ -1540,7 +1574,7 @@ func TestAgentLoop_WritesHookAuditEvents(t *testing.T) {
 		t.Fatalf("processMessage failed: %v", err)
 	}
 
-	auditPath := filepath.Join(tmpDir, "hooks", "hook-events.jsonl")
+	auditPath := filepath.Join(paths.WorkspaceStateDir(tmpDir), "hooks", "hook-events.jsonl")
 	deadline := time.Now().Add(2 * time.Second)
 	var body string
 	for {

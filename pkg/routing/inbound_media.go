@@ -14,6 +14,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/paths"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -29,9 +30,12 @@ func prepareInboundMedia(ctx context.Context, workspace string, msg *bus.Inbound
 		ctx = context.Background()
 	}
 
+	workspaceState, err := paths.EnsureWorkspaceStateDir(workspace)
+	if err != nil {
+		return fmt.Errorf("prepare workspace state: %w", err)
+	}
 	stageDir := filepath.Join(
-		workspace,
-		".sciclaw",
+		workspaceState,
 		"inbound",
 		sanitizePathSegment(msg.Channel),
 		inboundMediaMessageDir(msg),
@@ -76,14 +80,8 @@ func prepareInboundMedia(ctx context.Context, workspace string, msg *bus.Inbound
 			continue
 		}
 
-		relPath, err := filepath.Rel(workspace, destPath)
-		if err != nil {
-			relPath = destPath
-		}
-		relPath = filepath.ToSlash(relPath)
-
 		stagedPaths = append(stagedPaths, destPath)
-		stagedLines = append(stagedLines, fmt.Sprintf("- %s -> %s", filename, relPath))
+		stagedLines = append(stagedLines, fmt.Sprintf("- %s -> %s", filename, filepath.ToSlash(destPath)))
 	}
 	if err := ctx.Err(); err != nil {
 		return err

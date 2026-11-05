@@ -1,6 +1,35 @@
 package main
 
-import "testing"
+import (
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/paths"
+)
+
+func TestArchiveListsLegacyAndManagedSessions(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SCICLAW_HOME", filepath.Join(home, "visible"))
+	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(home, "state"))
+	workspace := filepath.Join(home, "workspace")
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = workspace
+	if err := config.SaveConfig(paths.ConfigPath(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(workspace, "sessions")
+	managed := filepath.Join(paths.WorkspaceStateDir(workspace), "sessions")
+	mustWriteFile(t, filepath.Join(legacy, "legacy.json"), `{"key":"discord:legacy","messages":[{"role":"user","content":"legacy"}]}`)
+	mustWriteFile(t, filepath.Join(legacy, "both.json"), `{"key":"discord:both","messages":[{"role":"user","content":"old"}]}`)
+	mustWriteFile(t, filepath.Join(managed, "both.json"), `{"key":"discord:both","messages":[{"role":"user","content":"new"},{"role":"user","content":"newer"}]}`)
+	out := captureStdout(t, func() { archiveDiscordCmd([]string{"list"}) })
+	if !strings.Contains(out, "discord:legacy | messages=1") || !strings.Contains(out, "discord:both | messages=2") {
+		t.Fatalf("unexpected archive listing: %s", out)
+	}
+}
 
 func TestParseArchiveRunOptions(t *testing.T) {
 	opts, err := parseArchiveRunOptions([]string{"--session-key", "discord:1", "--dry-run"})

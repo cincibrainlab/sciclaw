@@ -35,6 +35,24 @@ func TestDefaultConfig_WorkspacePath(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigUsesVisibleRootOverride(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "visible")
+	t.Setenv("SCICLAW_HOME", root)
+	cfg := DefaultConfig()
+	want := filepath.Join(root, "workspaces", "default")
+	if cfg.WorkspacePath() != want || cfg.SharedWorkspacePath() != want {
+		t.Fatalf("workspaces = %q / %q, want %q", cfg.WorkspacePath(), cfg.SharedWorkspacePath(), want)
+	}
+}
+
+func TestDefaultConfigUsesPortableWorkspace(t *testing.T) {
+	t.Setenv("SCICLAW_HOME", "")
+	cfg := DefaultConfig()
+	if cfg.Agents.Defaults.Workspace != "~/sciclaw/workspaces/default" || cfg.Agents.Defaults.SharedWorkspace != "~/sciclaw/workspaces/default" {
+		t.Fatalf("default paths must be portable: %#v", cfg.Agents.Defaults)
+	}
+}
+
 func TestDefaultConfig_SharedWorkspacePath(t *testing.T) {
 	cfg := DefaultConfig()
 	if strings.TrimSpace(cfg.SharedWorkspacePath()) == "" {

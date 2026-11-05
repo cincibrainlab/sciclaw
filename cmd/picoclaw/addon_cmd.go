@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/addons"
+	"github.com/sipeed/picoclaw/pkg/paths"
 )
 
 // addonLifecycle is the subset of *addons.Lifecycle the CLI handlers use.
@@ -153,10 +154,9 @@ func addonHelp(w io.Writer) {
 
 // --- build a real Lifecycle from paths / git --------------------------------
 
-// sciclawHomeDir returns the sciClaw home directory (parent of config.json).
-// TODO: when pkg/paths.AppHome() lands from the migration RFC, replace this.
+// sciclawHomeDir returns the visible SciClaw home directory.
 func sciclawHomeDir() string {
-	return filepath.Dir(getConfigPath())
+	return paths.UserHome()
 }
 
 // sciclawVersionForAddons returns the version string used for

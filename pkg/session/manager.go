@@ -69,7 +69,7 @@ var bulkyDurableToolNames = map[string]struct{}{
 
 const compactToolMessagePrefix = "Tool output from `"
 
-func NewSessionManager(storage string) *SessionManager {
+func NewSessionManager(storage string, legacy ...string) *SessionManager {
 	sm := &SessionManager{
 		sessions: make(map[string]*Session),
 		storage:  storage,
@@ -77,7 +77,7 @@ func NewSessionManager(storage string) *SessionManager {
 
 	if storage != "" {
 		os.MkdirAll(storage, 0755)
-		if err := sm.loadSessionsWithTimeout(sessionLoadTimeout); err != nil {
+		if err := sm.loadSessionsWithTimeout(sessionLoadTimeout, legacy...); err != nil {
 			sm.loadErr = err
 			logger.WarnCF("session", "Session preload skipped", map[string]interface{}{
 				"storage": storage,
@@ -85,7 +85,6 @@ func NewSessionManager(storage string) *SessionManager {
 			})
 		}
 	}
-
 	return sm
 }
 
@@ -612,7 +611,11 @@ func (sm *SessionManager) Save(key string) error {
 }
 
 func (sm *SessionManager) loadSessions() error {
-	files, err := readDir(sm.storage)
+	return sm.loadSessionsFrom(sm.storage, false)
+}
+
+func (sm *SessionManager) loadSessionsFrom(storage string, onlyMissing bool) error {
+	files, err := readDir(storage)
 	if err != nil {
 		return err
 	}
@@ -626,7 +629,7 @@ func (sm *SessionManager) loadSessions() error {
 			continue
 		}
 
-		sessionPath := filepath.Join(sm.storage, file.Name())
+		sessionPath := filepath.Join(storage, file.Name())
 		data, err := readFile(sessionPath)
 		if err != nil {
 			continue
@@ -638,21 +641,34 @@ func (sm *SessionManager) loadSessions() error {
 		}
 
 		sm.mu.Lock()
-		sm.sessions[session.Key] = &session
+		if _, exists := sm.sessions[session.Key]; !onlyMissing || !exists {
+			sm.sessions[session.Key] = &session
+		}
 		sm.mu.Unlock()
 	}
 
 	return nil
 }
 
-func (sm *SessionManager) loadSessionsWithTimeout(timeout time.Duration) error {
+func (sm *SessionManager) loadSessionsWithTimeout(timeout time.Duration, legacy ...string) error {
+	load := func() error {
+		if err := sm.loadSessions(); err != nil {
+			return err
+		}
+		for _, dir := range legacy {
+			if err := sm.loadSessionsFrom(dir, true); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		}
+		return nil
+	}
 	if timeout <= 0 {
-		return sm.loadSessions()
+		return load()
 	}
 
 	done := make(chan error, 1)
 	go func() {
-		done <- sm.loadSessions()
+		done <- load()
 	}()
 
 	select {

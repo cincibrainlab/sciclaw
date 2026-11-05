@@ -11,6 +11,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	appPaths "github.com/sipeed/picoclaw/pkg/paths"
 )
 
 type AccessMode int
@@ -81,6 +83,8 @@ func validatePathWithPolicy(path, workspace string, restrict bool, mode AccessMo
 	}
 
 	roots := []allowedRoot{makeAllowedRoot(absWorkspace, false)}
+	runtimeRoot := makeAllowedRoot(appPaths.WorkspaceStateDir(absWorkspace), true)
+	roots = append(roots, runtimeRoot)
 	if strings.TrimSpace(sharedWorkspace) != "" {
 		if absShared, err := filepath.Abs(strings.TrimSpace(sharedWorkspace)); err == nil {
 			sharedRoot := makeAllowedRoot(absShared, sharedWorkspaceReadOnly)
@@ -89,13 +93,14 @@ func validatePathWithPolicy(path, workspace string, restrict bool, mode AccessMo
 			}
 		}
 	}
+	roots = append(roots, makeAllowedRoot(appPaths.GlobalSkillsDir(), true))
 
 	root := rootForPath(absPath, roots, false)
 	if root == nil {
 		return "", outsideAllowedRootsError(absPath, roots)
 	}
 	if root.readOnly && mode == AccessWrite {
-		return "", fmt.Errorf("access denied: shared workspace is read-only")
+		return "", fmt.Errorf("access denied: allowed root is read-only")
 	}
 
 	if resolved, err := filepath.EvalSymlinks(absPath); err == nil {
@@ -104,7 +109,7 @@ func validatePathWithPolicy(path, workspace string, restrict bool, mode AccessMo
 			return "", outsideAllowedRootsError(resolved, roots)
 		}
 		if resolvedRoot.readOnly && mode == AccessWrite {
-			return "", fmt.Errorf("access denied: shared workspace is read-only")
+			return "", fmt.Errorf("access denied: allowed root is read-only")
 		}
 	} else if os.IsNotExist(err) {
 		if parentResolved, err := resolveExistingAncestor(filepath.Dir(absPath)); err == nil {
@@ -113,7 +118,7 @@ func validatePathWithPolicy(path, workspace string, restrict bool, mode AccessMo
 				return "", outsideAllowedRootsError(parentResolved, roots)
 			}
 			if resolvedRoot.readOnly && mode == AccessWrite {
-				return "", fmt.Errorf("access denied: shared workspace is read-only")
+				return "", fmt.Errorf("access denied: allowed root is read-only")
 			}
 		} else if !os.IsNotExist(err) {
 			return "", fmt.Errorf("failed to resolve path: %w", err)

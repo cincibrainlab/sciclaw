@@ -3,12 +3,12 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/paths"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/session"
 )
@@ -78,12 +78,13 @@ func BuildPromptEnvelope(cfg *config.Config, opts PromptInspectOptions) (*Prompt
 	if sessionKey == "" {
 		return nil, fmt.Errorf("session key is required")
 	}
-	sessionPath := filepath.Join(workspace, "sessions", sessionKey+".json")
-	if _, err := os.Stat(sessionPath); err != nil {
-		return nil, fmt.Errorf("session not found at %s: %w", sessionPath, err)
+	workspaceState := paths.WorkspaceStateDir(workspace)
+	sessionPath, err := workspaceSessionPath(workspace, sessionKey)
+	if err != nil {
+		return nil, err
 	}
 
-	sm := session.NewSessionManager(filepath.Join(workspace, "sessions"))
+	sm := session.NewSessionManager(filepath.Join(workspaceState, "sessions"))
 	sess, ok := sm.Snapshot(sessionKey)
 	if !ok {
 		if loadErr := sm.LoadError(); loadErr != nil {
@@ -158,7 +159,7 @@ func BuildPromptEnvelope(cfg *config.Config, opts PromptInspectOptions) (*Prompt
 			SummaryReserveFloor: 400,
 		},
 		Options: PromptEnvelopeOptions{
-			ArchiveDir:                filepath.Join(workspace, ".ctxclaw", "archive", "tool-results"),
+			ArchiveDir:                filepath.Join(workspaceState, ".ctxclaw", "archive", "tool-results"),
 			KeepRecentMessages:        6,
 			OldToolResultThreshold:    1200,
 			RecentToolResultThreshold: 30000,

@@ -13,10 +13,10 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/sipeed/picoclaw/pkg/paths"
 )
 
 // ---------- config.json token reader ----------
@@ -30,16 +30,9 @@ type discordCfg struct {
 }
 
 func readToken() string {
-	home, _ := os.UserHomeDir()
-	cfgPath := filepath.Join(home, "sciclaw", "config.json")
-	data, err := os.ReadFile(cfgPath)
+	data, err := os.ReadFile(paths.ConfigPath())
 	if err != nil {
-		// Fall back to legacy path
-		cfgPath = filepath.Join(home, ".picoclaw", "config.json")
-		data, err = os.ReadFile(cfgPath)
-		if err != nil {
-			log.Fatalf("cannot read config.json from ~/sciclaw or ~/.picoclaw: %v", err)
-		}
+		log.Fatalf("cannot read SciClaw config: %v", err)
 	}
 	var c discordCfg
 	if err := json.Unmarshal(data, &c); err != nil {

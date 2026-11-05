@@ -13,6 +13,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/agent"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/paths"
 )
 
 var promptLookPath = exec.LookPath
@@ -234,10 +235,10 @@ func resolvePromptInspectWorkspace(cfg interface {
 			}
 		}
 		path := filepath.Clean(expandHomePath(explicit, home))
-		if _, err := os.Stat(filepath.Join(path, "sessions", sessionKey+".json")); err == nil {
+		if sessionExistsForWorkspace(path, sessionKey) {
 			return path, nil
 		}
-		return "", fmt.Errorf("session %q not found under %s/sessions", sessionKey, path)
+		return "", fmt.Errorf("session %q not found for workspace %s", sessionKey, path)
 	}
 	cfgObj, ok := cfg.(*config.Config)
 	if !ok {
@@ -263,7 +264,7 @@ func resolvePromptInspectWorkspace(cfg interface {
 	}
 	matches := make([]string, 0, 2)
 	for _, candidate := range candidates {
-		if _, err := os.Stat(filepath.Join(candidate, "sessions", sessionKey+".json")); err == nil {
+		if sessionExistsForWorkspace(candidate, sessionKey) {
 			matches = append(matches, candidate)
 		}
 	}
@@ -275,6 +276,17 @@ func resolvePromptInspectWorkspace(cfg interface {
 	default:
 		return "", fmt.Errorf("session %q found in multiple workspaces (%s); pass --workspace explicitly", sessionKey, strings.Join(matches, ", "))
 	}
+}
+
+func sessionExistsForWorkspace(workspace, sessionKey string) bool {
+	for _, dir := range []string{
+		filepath.Join(paths.WorkspaceStateDir(workspace), "sessions"),
+	} {
+		if _, err := os.Stat(filepath.Join(dir, sessionKey+".json")); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func resolvePromptHelperBinaryPath(explicit, defaultName string, lookPath func(string) (string, error), fallbackDirs []string) (string, error) {

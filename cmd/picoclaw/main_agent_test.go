@@ -14,6 +14,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/agent"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/paths"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
@@ -293,7 +294,7 @@ func TestAgentCmdJSONStartupFailuresAreSingleResults(t *testing.T) {
 			name: "config",
 			writeConfig: func(t *testing.T, home string) {
 				t.Helper()
-				if err := os.WriteFile(filepath.Join(home, ".picoclaw", "config.json"), []byte("{invalid"), 0600); err != nil {
+				if err := os.WriteFile(filepath.Join(home, ".sciclaw", "config.json"), []byte("{invalid"), 0600); err != nil {
 					t.Fatal(err)
 				}
 			},
@@ -302,7 +303,7 @@ func TestAgentCmdJSONStartupFailuresAreSingleResults(t *testing.T) {
 			name: "provider",
 			writeConfig: func(t *testing.T, home string) {
 				t.Helper()
-				if err := config.SaveConfig(filepath.Join(home, ".picoclaw", "config.json"), config.DefaultConfig()); err != nil {
+				if err := config.SaveConfig(filepath.Join(home, ".sciclaw", "config.json"), config.DefaultConfig()); err != nil {
 					t.Fatal(err)
 				}
 			},
@@ -313,7 +314,7 @@ func TestAgentCmdJSONStartupFailuresAreSingleResults(t *testing.T) {
 				t.Helper()
 				cfg := config.DefaultConfig()
 				cfg.Providers.OpenAI.APIKey = "test-key"
-				if err := config.SaveConfig(filepath.Join(home, ".picoclaw", "config.json"), cfg); err != nil {
+				if err := config.SaveConfig(filepath.Join(home, ".sciclaw", "config.json"), cfg); err != nil {
 					t.Fatal(err)
 				}
 			},
@@ -322,14 +323,26 @@ func TestAgentCmdJSONStartupFailuresAreSingleResults(t *testing.T) {
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			home := t.TempDir()
-			if err := os.Mkdir(filepath.Join(home, ".picoclaw"), 0700); err != nil {
+			if err := os.Mkdir(filepath.Join(home, ".sciclaw"), 0700); err != nil {
 				t.Fatal(err)
 			}
 			testCase.writeConfig(t, home)
+			t.Setenv("HOME", home)
+			t.Setenv("SCICLAW_HOME", filepath.Join(home, "sciclaw"))
+			t.Setenv("SCICLAW_STATE_HOME", filepath.Join(home, ".sciclaw"))
+			if err := paths.ValidateHomes(); err != nil {
+				t.Fatalf("homes: %v", err)
+			}
 
 			cmd := exec.Command(os.Args[0], "-test.run=^TestAgentCmdJSONHelper$")
-			cmd.Env = append(os.Environ(), "GO_WANT_AGENT_CMD_JSON_HELPER=1", "HOME="+home)
+			cmd.Env = append(os.Environ(), "GO_WANT_AGENT_CMD_JSON_HELPER=1", "HOME="+home, "SCICLAW_HOME="+filepath.Join(home, "sciclaw"), "SCICLAW_STATE_HOME="+filepath.Join(home, ".sciclaw"))
 			out, err := cmd.Output()
+			if _, statErr := os.Stat(filepath.Join(home, ".picoclaw", "web.log")); !os.IsNotExist(statErr) {
+				t.Fatalf("unexpected PicoClaw log: %v", statErr)
+			}
+			if _, statErr := os.Stat(filepath.Join(home, ".sciclaw", "logs", "web.log")); statErr != nil {
+				t.Fatalf("missing SciClaw log: %v; output: %s", statErr, out)
+			}
 			if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() != 1 {
 				t.Fatalf("exit error = %v, want code 1", err)
 			}
@@ -354,6 +367,25 @@ func TestAgentCmdJSONHelper(t *testing.T) {
 	}
 	os.Args = []string{"picoclaw", "agent", "--json", "--debug"}
 	agentCmd()
+}
+
+func TestOnboardRejectsPicoClawWorkspace(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SCICLAW_HOME", filepath.Join(home, "sciclaw"))
+	t.Setenv("SCICLAW_STATE_HOME", filepath.Join(home, ".sciclaw"))
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = filepath.Join(home, ".picoclaw", "custom")
+	if err := config.SaveConfig(paths.ConfigPath(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	args := os.Args
+	os.Args = []string{"sciclaw", "onboard", "--yes"}
+	t.Cleanup(func() { os.Args = args })
+	onboard()
+	if _, err := os.Stat(cfg.WorkspacePath()); !os.IsNotExist(err) {
+		t.Fatalf("workspace was created: %v", err)
+	}
 }
 
 func TestAgentOneShotExitCode_NonZeroOnIncomplete(t *testing.T) {

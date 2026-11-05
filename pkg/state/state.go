@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/sipeed/picoclaw/pkg/paths"
 )
 
 // State represents the persistent state for a workspace.
@@ -46,9 +48,12 @@ var (
 
 // NewManager creates a new state manager for the given workspace.
 func NewManager(workspace string) *Manager {
-	stateDir := filepath.Join(workspace, "state")
+	workspaceState, err := paths.EnsureWorkspaceStateDir(workspace)
+	if err != nil {
+		workspaceState = paths.WorkspaceStateDir(workspace)
+	}
+	stateDir := filepath.Join(workspaceState, "state")
 	stateFile := filepath.Join(stateDir, "state.json")
-	oldStateFile := filepath.Join(workspace, "state.json")
 
 	// Create state directory if it doesn't exist
 	os.MkdirAll(stateDir, 0755)
@@ -62,16 +67,19 @@ func NewManager(workspace string) *Manager {
 		loopDone:  make(chan struct{}),
 	}
 
-	loadedState, loadedFromLegacy, err := loadBootstrapWithTimeout(stateFile, oldStateFile, stateBootstrapTimeout)
+	var legacy []string
+	if paths.ValidateWorkspace(workspace) == nil {
+		for _, path := range []string{filepath.Join(workspace, "state", "state.json"), filepath.Join(workspace, "state.json")} {
+			if !paths.IsPicoClawPath(path) {
+				legacy = append(legacy, path)
+			}
+		}
+	}
+	loadedState, err := loadBootstrapWithTimeout(stateFile, stateBootstrapTimeout, legacy...)
 	if err != nil {
 		log.Printf("[WARN] state: bootstrap skipped for %s: %v", workspace, err)
 	} else if loadedState != nil {
 		sm.state = loadedState
-		if loadedFromLegacy {
-			// Keep startup non-blocking on cloud-backed filesystems.
-			// The state will be persisted in the new location on next write.
-			log.Printf("[INFO] state: loaded legacy state from %s", oldStateFile)
-		}
 	}
 
 	go sm.saveLoop()
@@ -283,49 +291,40 @@ func (sm *Manager) load() error {
 	return nil
 }
 
-func loadBootstrapWithTimeout(stateFile, oldStateFile string, timeout time.Duration) (*State, bool, error) {
+func loadBootstrapWithTimeout(stateFile string, timeout time.Duration, legacy ...string) (*State, error) {
+	load := func() (*State, error) {
+		for _, path := range append([]string{stateFile}, legacy...) {
+			st, err := loadStateFromPath(path)
+			if st != nil || err != nil {
+				return st, err
+			}
+		}
+		return nil, nil
+	}
 	if timeout <= 0 {
-		return loadBootstrap(stateFile, oldStateFile)
+		return load()
 	}
 
 	type result struct {
-		state      *State
-		fromLegacy bool
-		err        error
+		state *State
+		err   error
 	}
 
 	done := make(chan result, 1)
 	go func() {
-		st, legacy, err := loadBootstrap(stateFile, oldStateFile)
+		st, err := load()
 		done <- result{
-			state:      st,
-			fromLegacy: legacy,
-			err:        err,
+			state: st,
+			err:   err,
 		}
 	}()
 
 	select {
 	case out := <-done:
-		return out.state, out.fromLegacy, out.err
+		return out.state, out.err
 	case <-time.After(timeout):
-		return nil, false, fmt.Errorf("state load timed out")
+		return nil, fmt.Errorf("state load timed out")
 	}
-}
-
-func loadBootstrap(stateFile, oldStateFile string) (*State, bool, error) {
-	if st, err := loadStateFromPath(stateFile); err != nil {
-		return nil, false, err
-	} else if st != nil {
-		return st, false, nil
-	}
-
-	if st, err := loadStateFromPath(oldStateFile); err != nil {
-		return nil, false, err
-	} else if st != nil {
-		return st, true, nil
-	}
-
-	return nil, false, nil
 }
 
 func loadStateFromPath(path string) (*State, error) {

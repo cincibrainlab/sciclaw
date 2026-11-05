@@ -12,6 +12,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/paths"
 )
 
 func TestDispatcherSendBlockNotice_UnmappedIncludesAppAndMentionOnlyGuidance(t *testing.T) {
@@ -121,7 +122,7 @@ func TestDispatcherDispatchResolved_StagesInboundMediaBeforePoolDispatch(t *test
 		if len(got.Media) != 1 {
 			t.Fatalf("expected staged media path, got %#v", got.Media)
 		}
-		if !strings.HasPrefix(got.Media[0], filepath.Join(target.Workspace, ".sciclaw", "inbound")) {
+		if !strings.HasPrefix(got.Media[0], filepath.Join(paths.WorkspaceStateDir(target.Workspace), "inbound")) {
 			t.Fatalf("expected staged path under workspace, got %q", got.Media[0])
 		}
 		if _, err := os.Stat(got.Media[0]); err != nil {
@@ -182,7 +183,7 @@ func TestDispatcherDispatchResolved_StagesInboundMediaBeforeJobSubmit(t *testing
 	if len(got.Media) != 1 {
 		t.Fatalf("expected staged media path, got %#v", got.Media)
 	}
-	if !strings.HasPrefix(got.Media[0], filepath.Join(workspace, ".sciclaw", "inbound")) {
+	if !strings.HasPrefix(got.Media[0], filepath.Join(paths.WorkspaceStateDir(workspace), "inbound")) {
 		t.Fatalf("expected staged media path under workspace, got %q", got.Media[0])
 	}
 	if _, err := os.Stat(got.Media[0]); err != nil {

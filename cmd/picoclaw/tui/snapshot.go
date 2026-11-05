@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/sipeed/picoclaw/pkg/paths"
 )
 
 // VMSnapshot holds the complete runtime state collected from the VM or local host.
@@ -21,7 +23,7 @@ type VMSnapshot struct {
 
 	// Agent version
 	AgentVersion string
-	// Gateway version from ~/.picoclaw/gateway.status.json
+	// Gateway version from the machine-managed state directory.
 	GatewayVersion string
 
 	// Config/workspace state
@@ -321,15 +323,18 @@ func resetLocalVMHintCacheForTest() {
 }
 
 func readGatewayVersion(exec Executor) string {
-	path := filepath.Join(filepath.Dir(exec.ConfigPath()), "gateway.status.json")
-	data, err := os.ReadFile(path)
+	path := paths.GatewayStatusPath()
+	if exec.Mode() == ModeVM {
+		path = "/home/ubuntu/.sciclaw/runtime/gateway.status.json"
+	}
+	raw, err := exec.ReadFile(path)
 	if err != nil {
 		return ""
 	}
 	var status struct {
 		Version string `json:"version"`
 	}
-	if json.Unmarshal(data, &status) != nil {
+	if json.Unmarshal([]byte(raw), &status) != nil {
 		return ""
 	}
 	return status.Version
@@ -425,11 +430,7 @@ func shellEscape(s string) string {
 }
 
 func hostConfigRaw() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	path := filepath.Join(home, ".picoclaw", "config.json")
+	path := paths.ConfigPath()
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
