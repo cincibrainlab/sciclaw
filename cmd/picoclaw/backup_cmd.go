@@ -22,6 +22,7 @@ type backupOptions struct {
 type backupEntry struct {
 	SourcePath  string
 	ArchivePath string
+	Sessions    bool
 }
 
 func backupCmd() {
@@ -225,7 +226,7 @@ func collectBackupEntries(cfg *config.Config, homeDir string, withSessions bool)
 			if resolved, err := filepath.EvalSymlinks(legacy); err == nil {
 				legacy = resolved
 			}
-			candidates = append(candidates, backupEntry{SourcePath: legacy, ArchivePath: "workspace/sessions"})
+			candidates = append(candidates, backupEntry{SourcePath: legacy, ArchivePath: "workspace/sessions", Sessions: true})
 		}
 		managed := filepath.Join(paths.WorkspaceStateDir(workspace), "sessions")
 		if resolved, err := filepath.EvalSymlinks(managed); err == nil {
@@ -234,6 +235,7 @@ func collectBackupEntries(cfg *config.Config, homeDir string, withSessions bool)
 		candidates = append(candidates, backupEntry{
 			SourcePath:  managed,
 			ArchivePath: filepath.ToSlash(filepath.Join("state", "workspaces", paths.WorkspaceID(workspace), "sessions")),
+			Sessions:    true,
 		})
 	}
 
@@ -273,7 +275,7 @@ func createBackupArchive(outputPath string, entries []backupEntry) error {
 			return err
 		}
 		if info.IsDir() {
-			if err := addDirectoryToArchive(tw, entry.SourcePath, entry.ArchivePath); err != nil {
+			if err := addDirectoryToArchive(tw, entry.SourcePath, entry.ArchivePath, entry.Sessions); err != nil {
 				return err
 			}
 			continue
@@ -286,7 +288,7 @@ func createBackupArchive(outputPath string, entries []backupEntry) error {
 	return nil
 }
 
-func addDirectoryToArchive(tw *tar.Writer, sourceDir, archiveRoot string) error {
+func addDirectoryToArchive(tw *tar.Writer, sourceDir, archiveRoot string, sessions bool) error {
 	return filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -304,6 +306,13 @@ func addDirectoryToArchive(tw *tar.Writer, sourceDir, archiveRoot string) error 
 
 		if info.IsDir() {
 			return addDirHeaderToArchive(tw, info, target)
+		}
+		if sessions && info.Mode()&os.ModeSymlink != 0 && filepath.Dir(relPath) == "." && filepath.Ext(relPath) == ".json" {
+			resolvedInfo, err := os.Stat(path)
+			if err != nil || !resolvedInfo.Mode().IsRegular() {
+				return nil
+			}
+			return addFileToArchive(tw, path, target)
 		}
 		if !info.Mode().IsRegular() {
 			return nil

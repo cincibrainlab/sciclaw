@@ -130,7 +130,7 @@ func TestBackupFollowsConfiguredWorkspaceRootSymlinkOnly(t *testing.T) {
 	mustWriteFile(t, filepath.Join(realWorkspace, "memory", "result.txt"), "result")
 	outsideFile := filepath.Join(t.TempDir(), "outside.txt")
 	mustWriteFile(t, outsideFile, "outside")
-	if err := os.Symlink(outsideFile, filepath.Join(realWorkspace, "nested-link.txt")); err != nil {
+	if err := os.Symlink(outsideFile, filepath.Join(realWorkspace, "memory", "nested-link.txt")); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
 	if err := os.Symlink(realWorkspace, workspaceLink); err != nil {
@@ -148,7 +148,7 @@ func TestBackupFollowsConfiguredWorkspaceRootSymlinkOnly(t *testing.T) {
 	if !archiveContains(t, archivePath, archiveRoot+"/memory/result.txt") {
 		t.Fatal("configured symlink workspace contents were not archived")
 	}
-	if archiveContains(t, archivePath, archiveRoot+"/nested-link.txt") {
+	if archiveContains(t, archivePath, archiveRoot+"/memory/nested-link.txt") {
 		t.Fatal("nested workspace symlink must not be followed or archived")
 	}
 }
@@ -177,7 +177,7 @@ func TestBackupIncludesLegacyAndManagedSessionsSeparately(t *testing.T) {
 	}
 }
 
-func TestBackupRestoresLinkedSessionDirectories(t *testing.T) {
+func TestBackupRestoresLinkedSessionDirectoriesAndFiles(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("SCICLAW_HOME", filepath.Join(home, "visible"))
@@ -185,9 +185,20 @@ func TestBackupRestoresLinkedSessionDirectories(t *testing.T) {
 	workspace := filepath.Join(home, "workspace")
 	legacy, managed := filepath.Join(workspace, "sessions"), filepath.Join(paths.WorkspaceStateDir(workspace), "sessions")
 	legacyTarget, managedTarget := filepath.Join(home, "legacy-sessions"), filepath.Join(home, "managed-sessions")
-	mustWriteFile(t, filepath.Join(legacyTarget, "legacy.json"), `{"key":"legacy","messages":[{"role":"user","content":"legacy"}]}`)
-	mustWriteFile(t, filepath.Join(legacyTarget, "both.json"), `{"key":"both","messages":[{"role":"user","content":"old"}]}`)
-	mustWriteFile(t, filepath.Join(managedTarget, "both.json"), `{"key":"both","messages":[{"role":"user","content":"new"}]}`)
+	for _, item := range []struct{ dir, name, key, text string }{
+		{legacyTarget, "legacy.json", "legacy", "legacy"},
+		{legacyTarget, "both.json", "both", "old"},
+		{managedTarget, "both.json", "both", "new"},
+	} {
+		target := filepath.Join(home, "files", item.dir[len(home)+1:]+"-"+item.name)
+		mustWriteFile(t, target, `{"key":"`+item.key+`","messages":[{"role":"user","content":"`+item.text+`"}]}`)
+		if err := os.MkdirAll(item.dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, filepath.Join(item.dir, item.name)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for _, pair := range [][2]string{{legacy, legacyTarget}, {managed, managedTarget}} {
 		if err := os.MkdirAll(filepath.Dir(pair[0]), 0755); err != nil {
 			t.Fatal(err)
