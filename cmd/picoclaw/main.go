@@ -1836,6 +1836,7 @@ func gatewayCmd() {
 				}
 				return agentLoop, nil
 			},
+			func() map[string]string { return currentInboundMediaRewrites(&inboundMediaRewrites) },
 		)
 		if jmErr != nil {
 			fmt.Printf("Warning: background jobs disabled: %v\n", jmErr)
@@ -1908,6 +1909,9 @@ func gatewayCmd() {
 
 	if err := channelManager.StartAll(ctx); err != nil {
 		fmt.Printf("Error starting channels: %v\n", err)
+	}
+	if jobManager != nil {
+		jobManager.NotifyInterruptedAttachments(ctx)
 	}
 
 	sigChan := make(chan os.Signal, 1)
@@ -2964,6 +2968,12 @@ func runGatewayDefaultDispatch(ctx context.Context, msgBus *bus.MessageBus, agen
 			if !ok {
 				continue
 			}
+			if jobManager != nil && jobManager.ShouldHandleChannel(msg.Channel) {
+				if err := jobManager.Submit(ctx, target, msg); err != nil && !constants.IsInternalChannel(msg.Channel) {
+					_ = msgBus.PublishOutbound(ctx, bus.OutboundMessage{Channel: msg.Channel, ChatID: msg.ChatID, Content: fmt.Sprintf("Failed to start background job: %v", err)})
+				}
+				continue
+			}
 			staged := msg
 			staged.Metadata = map[string]string{"message_id": msg.Metadata["message_id"] + "-" + uuid.NewString()}
 			stageErr := routing.PrepareInboundMedia(ctx, target.Workspace, &staged, currentInboundMediaRewrites(inboundMediaURLRewrites))
@@ -2974,16 +2984,6 @@ func runGatewayDefaultDispatch(ctx context.Context, msgBus *bus.MessageBus, agen
 				}
 				msg.Media = nil
 				msg.Content = strings.TrimSpace(msg.Content) + "\nAttachments could not be staged locally."
-			}
-			if jobManager != nil && jobManager.ShouldHandleChannel(msg.Channel) {
-				if err := jobManager.Submit(ctx, target, msg); err != nil && !constants.IsInternalChannel(msg.Channel) {
-					_ = msgBus.PublishOutbound(ctx, bus.OutboundMessage{
-						Channel: msg.Channel,
-						ChatID:  msg.ChatID,
-						Content: fmt.Sprintf("Failed to start background job: %v", err),
-					})
-				}
-				continue
 			}
 			agentLoop.HandleInbound(ctx, msg)
 		}
