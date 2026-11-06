@@ -2283,7 +2283,7 @@ func formatMessagesForLog(messages []providers.Message) string {
 	giteaCallIDs := make(map[string]bool)
 	for _, msg := range messages {
 		for _, tc := range msg.ToolCalls {
-			if tc.Name == "gitea_mcp" || (tc.Function != nil && tc.Function.Name == "gitea_mcp") {
+			if tools.IsGiteaMCPLogSensitive(tc.Name) || (tc.Function != nil && tools.IsGiteaMCPLogSensitive(tc.Function.Name)) {
 				giteaCallIDs[tc.ID] = true
 			}
 		}
@@ -2299,7 +2299,7 @@ func formatMessagesForLog(messages []providers.Message) string {
 				result += fmt.Sprintf("    - ID: %s, Type: %s, Name: %s\n", tc.ID, tc.Type, tc.Name)
 				if tc.Function != nil {
 					arguments := tc.Function.Arguments
-					if tc.Name == "gitea_mcp" || tc.Function.Name == "gitea_mcp" {
+					if tools.IsGiteaMCPLogSensitive(tc.Name) || tools.IsGiteaMCPLogSensitive(tc.Function.Name) {
 						arguments = "[REDACTED]"
 					}
 					result += fmt.Sprintf("      Arguments: %s\n", utils.Truncate(arguments, 200))
@@ -2308,7 +2308,7 @@ func formatMessagesForLog(messages []providers.Message) string {
 		}
 		if msg.Content != "" {
 			content := utils.Truncate(msg.Content, 200)
-			if msg.Role == "tool" && (msg.ToolName == "gitea_mcp" || (msg.ToolCallID != "" && giteaCallIDs[msg.ToolCallID])) {
+			if msg.Role == "tool" && (tools.IsGiteaMCPLogSensitive(msg.ToolName) || (msg.ToolCallID != "" && giteaCallIDs[msg.ToolCallID])) {
 				content = "[REDACTED]"
 			}
 			result += fmt.Sprintf("  Content: %s\n", content)

@@ -14,6 +14,9 @@ import (
 func TestGiteaMCPToolInventory(t *testing.T) {
 	want := strings.Fields(`get_me get_user_orgs actions_config_read actions_run_read actions_config_write actions_run_write list_my_repos list_org_repos get_repository_tree create_repo fork_repo notification_read notification_write attachment_read list_issues issue_read issue_write label_read label_write milestone_read milestone_write package_read package_write list_pull_requests pull_request_read pull_request_write pull_request_review_write search_users search_org_teams search_repos search_issues project_read project_write get_gitea_mcp_server_version wiki_read wiki_write timetracking_read timetracking_write get_file_contents get_dir_contents create_or_update_file delete_file list_branches create_branch delete_branch rename_branch get_tag list_tags create_tag delete_tag list_commits get_commit get_release get_latest_release list_releases create_release delete_release`)
 	tool := &GiteaMCPTool{}
+	if got := tool.Name(); got != "atomicqms_mcp" {
+		t.Fatalf("tool name = %q, want atomicqms_mcp", got)
+	}
 	properties := tool.Parameters()["properties"].(map[string]interface{})
 	got := properties["tool"].(map[string]interface{})["enum"].([]string)
 	if len(got) != len(want) {
@@ -110,12 +113,12 @@ func TestLimitGiteaProjectListResult(t *testing.T) {
 		limit     int
 		wantError bool
 	}{
-		{"oversize", "gitea_mcp", list, oversize, 4, true},
-		{"at limit after trim", "gitea_mcp", list, oversize, 5, false},
-		{"disabled", "gitea_mcp", list, oversize, 0, false},
+		{"oversize", "atomicqms_mcp", list, oversize, 4, true},
+		{"at limit after trim", "atomicqms_mcp", list, oversize, 5, false},
+		{"disabled", "atomicqms_mcp", list, oversize, 0, false},
 		{"other tool", "other", list, oversize, 4, false},
-		{"other method", "gitea_mcp", map[string]interface{}{"tool": "project_read", "arguments": map[string]interface{}{"method": "get"}}, oversize, 4, false},
-		{"existing error", "gitea_mcp", list, ErrorResult("existing error"), 4, false},
+		{"other method", "atomicqms_mcp", map[string]interface{}{"tool": "project_read", "arguments": map[string]interface{}{"method": "get"}}, oversize, 4, false},
+		{"existing error", "atomicqms_mcp", list, ErrorResult("existing error"), 4, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := LimitGiteaProjectListResult(tc.tool, tc.args, tc.result, tc.limit)

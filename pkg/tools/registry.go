@@ -69,9 +69,14 @@ func (r *ToolRegistry) Execute(ctx context.Context, name string, args map[string
 	return r.ExecuteWithContext(ctx, name, args, "", "", nil)
 }
 
+// IsGiteaMCPLogSensitive includes the legacy name for saved sessions and rejected calls.
+func IsGiteaMCPLogSensitive(name string) bool {
+	return name == "atomicqms_mcp" || name == "gitea_mcp"
+}
+
 // ToolLogArgs excludes Gitea arguments from logs and audit hooks.
 func ToolLogArgs(name string, args map[string]interface{}) map[string]interface{} {
-	if name == "gitea_mcp" {
+	if IsGiteaMCPLogSensitive(name) {
 		return map[string]interface{}{"arguments": "[REDACTED]"}
 	}
 	return args
@@ -117,7 +122,7 @@ func (r *ToolRegistry) ExecuteWithContext(ctx context.Context, name string, args
 	// Log based on result type
 	if result.IsError {
 		errorDetail := result.ForLLM
-		if name == "gitea_mcp" {
+		if IsGiteaMCPLogSensitive(name) {
 			errorDetail = "[REDACTED]"
 		}
 		logger.ErrorCF("tool", "Tool execution failed",

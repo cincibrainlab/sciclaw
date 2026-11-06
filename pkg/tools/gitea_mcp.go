@@ -75,7 +75,7 @@ var giteaMCPTools = []string{
 
 // LimitGiteaProjectListResult prevents partial project lists from reaching an agent.
 func LimitGiteaProjectListResult(name string, args map[string]interface{}, result *ToolResult, limit int) *ToolResult {
-	if name != "gitea_mcp" || result.IsError || limit <= 0 || len(strings.TrimSpace(result.ForLLM)) <= limit {
+	if name != "atomicqms_mcp" || result.IsError || limit <= 0 || len(strings.TrimSpace(result.ForLLM)) <= limit {
 		return result
 	}
 	arguments, _ := args["arguments"].(map[string]interface{})
@@ -87,7 +87,7 @@ func LimitGiteaProjectListResult(name string, args map[string]interface{}, resul
 	return result
 }
 
-func (t *GiteaMCPTool) Name() string { return "gitea_mcp" }
+func (t *GiteaMCPTool) Name() string { return "atomicqms_mcp" }
 
 func (t *GiteaMCPTool) Description() string {
 	return "Call an official Gitea MCP tool with structured arguments, without a shell."

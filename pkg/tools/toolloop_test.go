@@ -114,11 +114,11 @@ func TestRunToolLoop_TruncatesToolOutputWhenConfigured(t *testing.T) {
 
 func TestRunToolLoop_RejectsOversizeGiteaProjectList(t *testing.T) {
 	provider := &toolLoopEchoProvider{toolCall: &providers.ToolCall{
-		ID: "tool-1", Name: "gitea_mcp",
+		ID: "tool-1", Name: "atomicqms_mcp",
 		Arguments: map[string]interface{}{"tool": "project_read", "arguments": map[string]interface{}{"method": "list_columns", "page": 2}},
 	}}
 	registry := NewToolRegistry()
-	registry.Register(&fixedToolResultTool{name: "gitea_mcp", result: NewToolResult(strings.Repeat("x", 500))})
+	registry.Register(&fixedToolResultTool{name: "atomicqms_mcp", result: NewToolResult(strings.Repeat("x", 500))})
 	result, err := RunToolLoop(context.Background(), ToolLoopConfig{
 		Provider: provider, Model: "test-model", Tools: registry, ToolResultMaxChars: 250,
 	}, []providers.Message{{Role: "user", Content: "test"}}, "discord", "chat-1")
@@ -227,9 +227,9 @@ func TestGiteaArgumentsRedactedFromToolLoopAndRegistryLogs(t *testing.T) {
 	}
 	defer logger.DisableFileLogging()
 	const secret = "gitea-argument-canary"
-	provider := &toolLoopEchoProvider{toolCall: &providers.ToolCall{ID: "1", Name: "gitea_mcp", Arguments: map[string]interface{}{"tool": "issue_read", "arguments": map[string]interface{}{"body": secret}}}}
+	provider := &toolLoopEchoProvider{toolCall: &providers.ToolCall{ID: "1", Name: "atomicqms_mcp", Arguments: map[string]interface{}{"tool": "issue_read", "arguments": map[string]interface{}{"body": secret}}}}
 	registry := NewToolRegistry()
-	registry.Register(&fixedToolResultTool{name: "gitea_mcp", result: NewToolResult("ok")})
+	registry.Register(&fixedToolResultTool{name: "atomicqms_mcp", result: NewToolResult("ok")})
 	if _, err := RunToolLoop(context.Background(), ToolLoopConfig{Provider: provider, Model: "test", Tools: registry}, []providers.Message{{Role: "user", Content: "test"}}, "cli", "direct"); err != nil {
 		t.Fatal(err)
 	}
@@ -256,10 +256,35 @@ func TestGiteaErrorDetailsRedactedFromRegistryLogs(t *testing.T) {
 	defer logger.DisableFileLogging()
 	const secret = "echoed-argument-canary"
 	registry := NewToolRegistry()
-	registry.Register(&fixedToolResultTool{name: "gitea_mcp", result: ErrorResult("server echoed " + secret)})
-	result := registry.Execute(context.Background(), "gitea_mcp", map[string]interface{}{"arguments": map[string]interface{}{"body": secret}})
+	registry.Register(&fixedToolResultTool{name: "atomicqms_mcp", result: ErrorResult("server echoed " + secret)})
+	result := registry.Execute(context.Background(), "atomicqms_mcp", map[string]interface{}{"arguments": map[string]interface{}{"body": secret}})
 	if !result.IsError || !strings.Contains(result.ForLLM, secret) {
 		t.Fatal("tool result must remain available to caller")
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), secret) || !strings.Contains(string(data), "[REDACTED]") {
+		t.Fatalf("unexpected logs: %s", data)
+	}
+}
+
+func TestRejectedLegacyGiteaCallRedactsArguments(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "tool.log")
+	previousLevel := logger.GetLevel()
+	logger.SetLevel(logger.INFO)
+	defer logger.SetLevel(previousLevel)
+	if err := logger.EnableFileLogging(logPath); err != nil {
+		t.Fatal(err)
+	}
+	defer logger.DisableFileLogging()
+	const secret = "rejected-legacy-secret"
+	registry := NewToolRegistry()
+	registry.Register(&GiteaMCPTool{})
+	result := registry.Execute(context.Background(), "gitea_mcp", map[string]interface{}{"body": secret})
+	if !result.IsError || !strings.Contains(result.ForLLM, "not found") {
+		t.Fatalf("legacy tool should not be registered: %+v", result)
 	}
 	data, err := os.ReadFile(logPath)
 	if err != nil {
