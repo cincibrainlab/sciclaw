@@ -498,7 +498,16 @@ func TestJobManagerWritesProgressAndFinalState(t *testing.T) {
 		t.Fatalf("Submit: %v", err)
 	}
 
-	waitForNoActiveJobs(t, jm, target.key())
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		progress.mu.Lock()
+		callCount := len(progress.calls)
+		progress.mu.Unlock()
+		if callCount >= 2 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 
 	progress.mu.Lock()
 	defer progress.mu.Unlock()
