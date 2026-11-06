@@ -2101,7 +2101,7 @@ func TestGiteaToolResultsRedactedFromDebugMessages(t *testing.T) {
 	got := formatMessagesForLog(messages)
 	if strings.Contains(got, secret) || !strings.Contains(got, "[REDACTED]") || !strings.Contains(got, "other-result") {
 		t.Fatalf("unexpected log: %s", got)
- 	}
+	}
 }
 
 func TestProviderTransportFailureHookIdentity(t *testing.T) {

@@ -5,7 +5,7 @@ import unittest
 
 
 class EntrypointTest(unittest.TestCase):
-    def test_warns_and_preserves_existing_skills_without_seeding(self):
+    def test_seeds_available_skills_and_warns_for_missing_sources(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             workspace = root / "workspace"
@@ -25,10 +25,10 @@ class EntrypointTest(unittest.TestCase):
             self.assertEqual(result.stdout, "gateway\n")
             self.assertIn("gitea-create-change-request", result.stderr)
             self.assertIn("move-task-phase-0-to-1", result.stderr)
-            self.assertIn("review", result.stderr.lower())
+            self.assertIn("gitea-move-file-phase-0-to-1", result.stderr)
             self.assertEqual((existing / "SKILL.md").read_text(), "custom")
             self.assertTrue((workspace / "move-task-phase-0-to-1").is_symlink())
-            self.assertFalse((workspace / "gitea-move-work-item").exists())
+            self.assertEqual((workspace / "gitea-move-work-item" / "SKILL.md").read_text(), "packaged")
 
 
 if __name__ == "__main__":
