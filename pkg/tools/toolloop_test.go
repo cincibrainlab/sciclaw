@@ -29,8 +29,9 @@ func (p *failingProvider) Chat(context.Context, []providers.Message, []providers
 func (p *failingProvider) GetDefaultModel() string { return "test-model" }
 
 type toolLoopEchoProvider struct {
-	calls int
-	seen  [][]providers.Message
+	calls    int
+	seen     [][]providers.Message
+	toolCall *providers.ToolCall
 }
 
 func (p *toolLoopEchoProvider) Chat(ctx context.Context, messages []providers.Message, tools []providers.ToolDefinition, model string, options map[string]interface{}) (*providers.LLMResponse, error) {
@@ -40,6 +41,9 @@ func (p *toolLoopEchoProvider) Chat(ctx context.Context, messages []providers.Me
 
 	if p.calls == 0 {
 		p.calls++
+		if p.toolCall != nil {
+			return &providers.LLMResponse{ToolCalls: []providers.ToolCall{*p.toolCall}}, nil
+		}
 		return &providers.LLMResponse{
 			ToolCalls: []providers.ToolCall{
 				{
@@ -105,6 +109,24 @@ func TestRunToolLoop_TruncatesToolOutputWhenConfigured(t *testing.T) {
 	}
 	if !strings.HasPrefix(result.Content, strings.Repeat("x", 40)) {
 		t.Fatalf("expected truncated content prefix, got %q", result.Content)
+	}
+}
+
+func TestRunToolLoop_RejectsOversizeGiteaProjectList(t *testing.T) {
+	provider := &toolLoopEchoProvider{toolCall: &providers.ToolCall{
+		ID: "tool-1", Name: "gitea_mcp",
+		Arguments: map[string]interface{}{"tool": "project_read", "arguments": map[string]interface{}{"method": "list_columns", "page": 2}},
+	}}
+	registry := NewToolRegistry()
+	registry.Register(&fixedToolResultTool{name: "gitea_mcp", result: NewToolResult(strings.Repeat("x", 500))})
+	result, err := RunToolLoop(context.Background(), ToolLoopConfig{
+		Provider: provider, Model: "test-model", Tools: registry, ToolResultMaxChars: 250,
+	}, []providers.Message{{Role: "user", Content: "test"}}, "discord", "chat-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Content, "no results were returned") || strings.Contains(result.Content, strings.Repeat("x", 100)) {
+		t.Fatalf("expected fail-closed result, got %q", result.Content)
 	}
 }
 
