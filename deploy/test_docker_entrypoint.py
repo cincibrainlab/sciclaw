@@ -4,59 +4,31 @@ import tempfile
 import unittest
 
 
-SKILLS = (
-    "gitea-create-change-request",
-    "gitea-move-work-item",
-    "gitea-move-file-phase-0-to-1",
-)
-
-
 class EntrypointTest(unittest.TestCase):
-    def test_preserves_non_directory_skill_entry_without_blocking_startup(self):
+    def test_warns_and_preserves_existing_skills_without_seeding(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            (root / "source" / SKILLS[0]).mkdir(parents=True)
-            (root / "source" / SKILLS[0] / "SKILL.md").write_text("packaged")
-            (root / "source" / SKILLS[1]).mkdir()
-            (root / "source" / SKILLS[1] / "SKILL.md").write_text("packaged")
-            (root / "workspace").mkdir()
-            entry = root / "workspace" / SKILLS[0]
-            entry.write_text("custom")
-            dangling = root / "workspace" / SKILLS[1]
-            dangling.symlink_to(root / "missing")
+            workspace = root / "workspace"
+            source = root / "source"
+            existing = workspace / "gitea-create-change-request"
+            existing.mkdir(parents=True)
+            (existing / "SKILL.md").write_text("custom")
+            (workspace / "move-task-phase-0-to-1").symlink_to(root / "missing")
+            supplied = source / "gitea-move-work-item"
+            supplied.mkdir(parents=True)
+            (supplied / "SKILL.md").write_text("packaged")
             script = Path(__file__).with_name("docker-entrypoint.sh").read_text()
-            script = script.replace("/opt/sciclaw/skills", str(root / "source"))
-            script = script.replace("/root/sciclaw/skills", str(root / "workspace"))
+            script = script.replace("/root/sciclaw/skills", str(workspace))
+            script = script.replace("/opt/sciclaw/skills", str(source))
             script = script.replace('exec sciclaw "$@"', 'exec "$@"')
-            result = subprocess.run(["sh", "-c", script, "entrypoint", "true"], capture_output=True, text=True)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn(SKILLS[0], result.stderr)
-            self.assertEqual(entry.read_text(), "custom")
-            self.assertTrue(dangling.is_symlink())
-
-    def test_warns_when_stale_workspace_skill_has_no_packaged_source(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            skill = root / "workspace" / SKILLS[0]
-            skill.mkdir(parents=True)
-            (skill / "SKILL.md").write_text("old guidance")
-            script = Path(__file__).with_name("docker-entrypoint.sh").read_text()
-            script = script.replace("/opt/sciclaw/skills", str(root / "source"))
-            script = script.replace("/root/sciclaw/skills", str(root / "workspace"))
-            script = script.replace('exec sciclaw "$@"', 'exec "$@"')
-            result = subprocess.run(["sh", "-c", script, "entrypoint", "true"], check=True, capture_output=True, text=True)
-            self.assertIn(SKILLS[0], result.stderr)
-            self.assertEqual((skill / "SKILL.md").read_text(), "old guidance")
-
-    def test_absent_skills_do_not_create_workspace(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            script = Path(__file__).with_name("docker-entrypoint.sh").read_text()
-            script = script.replace("/opt/sciclaw/skills", str(root / "source"))
-            script = script.replace("/root/sciclaw/skills", str(root / "workspace"))
-            script = script.replace('exec sciclaw "$@"', 'exec "$@"')
-            subprocess.run(["sh", "-c", script, "entrypoint", "true"], check=True)
-            self.assertFalse((root / "workspace").exists())
+            result = subprocess.run(["sh", "-c", script, "entrypoint", "printf", "%s\\n", "gateway"], check=True, capture_output=True, text=True)
+            self.assertEqual(result.stdout, "gateway\n")
+            self.assertIn("gitea-create-change-request", result.stderr)
+            self.assertIn("move-task-phase-0-to-1", result.stderr)
+            self.assertIn("review", result.stderr.lower())
+            self.assertEqual((existing / "SKILL.md").read_text(), "custom")
+            self.assertTrue((workspace / "move-task-phase-0-to-1").is_symlink())
+            self.assertFalse((workspace / "gitea-move-work-item").exists())
 
 
 if __name__ == "__main__":
