@@ -4,6 +4,10 @@ set -eu
 mkdir -p /root/sciclaw/skills
 for skill in gitea-create-change-request gitea-move-work-item gitea-move-file-phase-0-to-1; do
   dir="/root/sciclaw/skills/$skill"
+  if [ -L "$dir" ] || { [ -e "$dir" ] && [ ! -d "$dir" ]; }; then
+    echo "Warning: workspace skill $dir is a symlink or non-directory; preserving it without seeding." >&2
+    continue
+  fi
   mkdir -p "$dir"
   if [ ! -e "$dir/SKILL.md" ] && [ ! -L "$dir/SKILL.md" ]; then
     (

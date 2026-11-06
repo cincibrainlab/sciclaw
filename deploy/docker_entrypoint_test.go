@@ -83,6 +83,93 @@ func TestDockerEntrypointPreservesWorkspaceSkills(t *testing.T) {
 	}
 }
 
+func TestDockerEntrypointPreservesNonDirectorySkillEntries(t *testing.T) {
+	for _, kind := range []string{"file", "dangling symlink", "directory symlink", "file symlink"} {
+		t.Run(kind, func(t *testing.T) {
+			tmp := t.TempDir()
+			workspace := filepath.Join(tmp, "workspace")
+			builtin := filepath.Join(tmp, "builtin")
+			skill := "gitea-create-change-request"
+			entry := filepath.Join(workspace, skill)
+			target := filepath.Join(tmp, "target")
+			if err := os.MkdirAll(workspace, 0755); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{skill, "gitea-move-work-item", "gitea-move-file-phase-0-to-1"} {
+				if err := os.MkdirAll(filepath.Join(builtin, name), 0755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(builtin, name, "SKILL.md"), []byte("built-in"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			switch kind {
+			case "file":
+				if err := os.WriteFile(entry, []byte("custom"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			case "directory symlink":
+				if err := os.Mkdir(target, 0755); err != nil {
+					t.Fatal(err)
+				}
+			case "file symlink":
+				if err := os.WriteFile(target, []byte("custom"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if kind != "file" {
+				if err := os.Symlink(target, entry); err != nil {
+					t.Fatal(err)
+				}
+			}
+			script, err := os.ReadFile("docker-entrypoint.sh")
+			if err != nil {
+				t.Fatal(err)
+			}
+			content := strings.ReplaceAll(string(script), "/root/sciclaw/skills", workspace)
+			content = strings.ReplaceAll(content, "/opt/sciclaw/skills", builtin)
+			content = strings.Replace(content, "exec sciclaw \"$@\"", "exit 0", 1)
+			path := filepath.Join(tmp, "entrypoint.sh")
+			if err := os.WriteFile(path, []byte(content), 0755); err != nil {
+				t.Fatal(err)
+			}
+			output, err := exec.Command("sh", path).CombinedOutput()
+			if err != nil {
+				t.Errorf("startup failed: %v: %s", err, output)
+			}
+			if !strings.Contains(string(output), "Warning:") || !strings.Contains(string(output), skill) {
+				t.Errorf("missing warning: %s", output)
+			}
+			if kind == "file" {
+				got, err := os.ReadFile(entry)
+				if err != nil || string(got) != "custom" {
+					t.Errorf("entry changed: %q, %v", got, err)
+				}
+			} else {
+				got, err := os.Readlink(entry)
+				if err != nil || got != target {
+					t.Errorf("symlink changed: %q, %v", got, err)
+				}
+			}
+			if kind == "directory symlink" {
+				entries, err := os.ReadDir(target)
+				if err != nil || len(entries) != 0 {
+					t.Errorf("symlink target modified: %v, %v", entries, err)
+				}
+			}
+			if kind == "file symlink" {
+				got, err := os.ReadFile(target)
+				if err != nil || string(got) != "custom" {
+					t.Errorf("symlink target changed: %q, %v", got, err)
+				}
+			}
+			if got, err := os.ReadFile(filepath.Join(workspace, "gitea-move-work-item", "SKILL.md")); err != nil || string(got) != "built-in" {
+				t.Errorf("other skill not seeded: %q, %v", got, err)
+			}
+		})
+	}
+}
+
 func TestDockerEntrypointPreservesConcurrentSkillCreation(t *testing.T) {
 	tmp := t.TempDir()
 	workspace := filepath.Join(tmp, "workspace")
