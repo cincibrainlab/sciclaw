@@ -1040,10 +1040,15 @@ func (c *DiscordChannel) processIncomingMessage(_ *discordgo.Session, m *discord
 	}()
 
 	for _, attachment := range m.Attachments {
+		attachmentURL := attachment.URL
+		if attachmentURL == "" {
+			attachmentURL = attachment.ProxyURL
+		}
 		isAudio := utils.IsAudioFile(attachment.Filename, attachment.ContentType)
+		mediaPaths = append(mediaPaths, attachmentURL)
 
 		if isAudio {
-			localPath := c.downloadAttachment(attachment.URL, attachment.Filename)
+			localPath := c.downloadAttachment(attachmentURL, attachment.Filename)
 			if localPath != "" {
 				localFiles = append(localFiles, localPath)
 
@@ -1071,14 +1076,12 @@ func (c *DiscordChannel) processIncomingMessage(_ *discordgo.Session, m *discord
 				content = appendContent(content, transcribedText)
 			} else {
 				logger.WarnCF("discord", "Failed to download audio attachment", map[string]any{
-					"url":      attachment.URL,
+					"url":      attachmentURL,
 					"filename": attachment.Filename,
 				})
-				mediaPaths = append(mediaPaths, attachment.URL)
 				content = appendContent(content, fmt.Sprintf("[attachment: %s]", attachment.Filename))
 			}
 		} else {
-			mediaPaths = append(mediaPaths, attachment.URL)
 			content = appendContent(content, fmt.Sprintf("[attachment: %s]", attachment.Filename))
 		}
 	}
