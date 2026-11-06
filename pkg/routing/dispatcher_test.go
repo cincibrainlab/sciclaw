@@ -2,6 +2,7 @@ package routing
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -187,5 +188,62 @@ func TestDispatcherDispatchResolved_StagesInboundMediaBeforeJobSubmit(t *testing
 	}
 	if _, err := os.Stat(got.Media[0]); err != nil {
 		t.Fatalf("expected staged file to exist: %v", err)
+	}
+}
+
+func TestDispatcherDispatchResolved_PreservesTextWhenStagingFails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/slow.ogg" {
+			<-r.Context().Done()
+			return
+		}
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", inboundMediaMaxDownloadBytes+1))
+		_, _ = w.Write([]byte("large"))
+	}))
+	defer server.Close()
+	oldClient := inboundMediaHTTPClient
+	inboundMediaHTTPClient = &http.Client{Timeout: 100 * time.Millisecond}
+	defer func() { inboundMediaHTTPClient = oldClient }()
+	for _, name := range []string{"large.ogg", "slow.ogg"} {
+		t.Run(name, func(t *testing.T) {
+			received := make(chan bus.InboundMessage, 1)
+			pool := NewAgentLoopPoolWithFactory(func(LoopTarget) (inboundHandler, error) { return &fakeHandler{received: received}, nil })
+			defer pool.Close()
+			mb := bus.NewMessageBus()
+			defer mb.Close()
+			d := NewDispatcher(mb, nil, pool)
+			target := LoopTarget{Workspace: t.TempDir()}
+			msg := bus.InboundMessage{Channel: "discord", ChatID: "room", Content: "question\n[audio transcription: hello]", Media: []string{server.URL + "/" + name}}
+			d.dispatchResolved(context.Background(), dispatchTask{target: target, msg: msg})
+			select {
+			case got := <-received:
+				if !strings.Contains(got.Content, msg.Content) || !strings.Contains(got.Content, "Attachments could not be staged locally.") || len(got.Media) != 0 {
+					t.Fatalf("dispatched message = %+v", got)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("text was not dispatched")
+			}
+		})
+	}
+}
+
+func TestDispatcherDispatchResolved_CancelledContextDoesNotDispatch(t *testing.T) {
+	received := make(chan bus.InboundMessage, 1)
+	pool := NewAgentLoopPoolWithFactory(func(LoopTarget) (inboundHandler, error) { return &fakeHandler{received: received}, nil })
+	defer pool.Close()
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+	d := NewDispatcher(mb, nil, pool)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	msg := bus.InboundMessage{Channel: "discord", Content: "[audio transcription: hello]", Media: []string{"http://example.invalid/voice.ogg"}}
+	d.dispatchResolved(ctx, dispatchTask{target: LoopTarget{Workspace: t.TempDir()}, msg: msg})
+	select {
+	case got := <-received:
+		t.Fatalf("cancelled message dispatched: %+v", got)
+	default:
+	}
+	if msg.Content != "[audio transcription: hello]" {
+		t.Fatalf("original content changed: %q", msg.Content)
 	}
 }

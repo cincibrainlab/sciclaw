@@ -12,6 +12,7 @@ type ChannelHistoryMessage struct {
 	ID        string
 	Author    string
 	Content   string
+	Media     []string
 	Timestamp string
 }
 
@@ -19,7 +20,7 @@ type ChannelHistoryMessage struct {
 // channelID is the platform-specific channel/chat ID.
 // limit is the max number of messages to return (capped by the callback).
 // beforeID, if non-empty, fetches messages before this message ID (for pagination).
-type FetchChannelHistoryCallback func(channelID string, limit int, beforeID string) ([]ChannelHistoryMessage, error)
+type FetchChannelHistoryCallback func(ctx context.Context, channelID string, limit int, beforeID string) ([]ChannelHistoryMessage, error)
 
 type ChannelHistoryTool struct {
 	fetchCallback  FetchChannelHistoryCallback
@@ -101,7 +102,7 @@ func (t *ChannelHistoryTool) Execute(ctx context.Context, args map[string]interf
 
 	beforeID, _ := args["before"].(string)
 
-	messages, err := fetchCallback(defaultChatID, limit, beforeID)
+	messages, err := fetchCallback(ctx, defaultChatID, limit, beforeID)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("failed to fetch channel history: %v", err))
 	}
