@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNewAPIErrorParsesErrorEnvelopes(t *testing.T) {
@@ -23,6 +24,30 @@ func TestNewAPIErrorParsesErrorEnvelopes(t *testing.T) {
 			apiErr := NewAPIError("OpenAI", response, []byte(test.body)).(*APIError)
 			if apiErr.Code != test.code || apiErr.Message != test.message || apiErr.RequestID != "req-123" {
 				t.Fatalf("APIError = %#v", apiErr)
+			}
+		})
+	}
+}
+
+func TestAPIErrorParsesRetryAfter(t *testing.T) {
+	now := time.Date(2026, time.September, 28, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name   string
+		header http.Header
+		want   time.Duration
+	}{
+		{"milliseconds", http.Header{"Retry-After-Ms": []string{"250"}}, 250 * time.Millisecond},
+		{"milliseconds takes precedence", http.Header{"Retry-After-Ms": []string{"250"}, "Retry-After": []string{"3"}}, 250 * time.Millisecond},
+		{"seconds", http.Header{"Retry-After": []string{"3"}}, 3 * time.Second},
+		{"http date", http.Header{"Retry-After": []string{now.Add(10 * time.Second).Format(http.TimeFormat)}}, 10 * time.Second},
+		{"overflow seconds", http.Header{"Retry-After": []string{"9223372036854775807"}}, time.Duration(1<<63 - 1)},
+		{"overflow milliseconds", http.Header{"Retry-After-Ms": []string{"999999999999999999999"}}, time.Duration(1<<63 - 1)},
+		{"invalid", http.Header{"Retry-After": []string{"soon"}}, 0},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := parseRetryAfter(test.header, now); got != test.want {
+				t.Fatalf("parseRetryAfter() = %v, want %v", got, test.want)
 			}
 		})
 	}
