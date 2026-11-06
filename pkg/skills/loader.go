@@ -22,27 +22,62 @@ type SkillInfo struct {
 }
 
 type SkillsLoader struct {
-	workspace       string
-	workspaceSkills string // workspace skills (项目级别)
-	globalSkills    string // 全局 skills (~/.picoclaw/skills)
-	builtinSkills   string // 内置 skills
+	workspace          string
+	workspaceSkills    string // workspace skills (项目级别)
+	globalSkills       string // 全局 skills (~/.picoclaw/skills)
+	builtinSkills      string // 内置 skills
+	managedGiteaSkills string
+}
+
+var managedGiteaNames = []string{"gitea-create-change-request", "gitea-move-work-item", "gitea-move-file-phase-0-to-1"}
+
+func (sl *SkillsLoader) isManagedGitea(name string) bool {
+	if sl.managedGiteaSkills == "" {
+		return false
+	}
+	if name == "move-task-phase-0-to-1" {
+		return true
+	}
+	for _, managed := range managedGiteaNames {
+		if name == managed {
+			return true
+		}
+	}
+	return false
 }
 
 func NewSkillsLoader(workspace string, globalSkills string, builtinSkills string) *SkillsLoader {
 	return &SkillsLoader{
-		workspace:       workspace,
-		workspaceSkills: filepath.Join(workspace, "skills"),
-		globalSkills:    globalSkills, // ~/.picoclaw/skills
-		builtinSkills:   builtinSkills,
+		workspace:          workspace,
+		workspaceSkills:    filepath.Join(workspace, "skills"),
+		globalSkills:       globalSkills, // ~/.picoclaw/skills
+		builtinSkills:      builtinSkills,
+		managedGiteaSkills: os.Getenv("SCICLAW_MANAGED_GITEA_SKILLS_DIR"),
 	}
 }
 
 func (sl *SkillsLoader) ListSkills() []SkillInfo {
 	skills := make([]SkillInfo, 0)
 
+	if sl.managedGiteaSkills != "" {
+		for _, name := range managedGiteaNames {
+			path := filepath.Join(sl.managedGiteaSkills, name, "SKILL.md")
+			if _, err := os.Stat(path); err == nil {
+				info := SkillInfo{Name: name, Path: path, Source: "managed"}
+				if metadata := sl.getSkillMetadata(path); metadata != nil {
+					info.Description = metadata.Description
+				}
+				skills = append(skills, info)
+			}
+		}
+	}
+
 	if sl.workspaceSkills != "" {
 		if dirs, err := os.ReadDir(sl.workspaceSkills); err == nil {
 			for _, dir := range dirs {
+				if sl.isManagedGitea(dir.Name()) {
+					continue
+				}
 				if dir.IsDir() {
 					skillFile := filepath.Join(sl.workspaceSkills, dir.Name(), "SKILL.md")
 					if _, err := os.Stat(skillFile); err == nil {
@@ -66,6 +101,9 @@ func (sl *SkillsLoader) ListSkills() []SkillInfo {
 	if sl.globalSkills != "" {
 		if dirs, err := os.ReadDir(sl.globalSkills); err == nil {
 			for _, dir := range dirs {
+				if sl.isManagedGitea(dir.Name()) {
+					continue
+				}
 				if dir.IsDir() {
 					skillFile := filepath.Join(sl.globalSkills, dir.Name(), "SKILL.md")
 					if _, err := os.Stat(skillFile); err == nil {
@@ -100,6 +138,9 @@ func (sl *SkillsLoader) ListSkills() []SkillInfo {
 	if sl.builtinSkills != "" {
 		if dirs, err := os.ReadDir(sl.builtinSkills); err == nil {
 			for _, dir := range dirs {
+				if sl.isManagedGitea(dir.Name()) {
+					continue
+				}
 				if dir.IsDir() {
 					skillFile := filepath.Join(sl.builtinSkills, dir.Name(), "SKILL.md")
 					if _, err := os.Stat(skillFile); err == nil {
@@ -135,6 +176,16 @@ func (sl *SkillsLoader) ListSkills() []SkillInfo {
 }
 
 func (sl *SkillsLoader) LoadSkill(name string) (string, bool) {
+	if sl.isManagedGitea(name) {
+		if name == "move-task-phase-0-to-1" {
+			return "", false
+		}
+		content, err := os.ReadFile(filepath.Join(sl.managedGiteaSkills, name, "SKILL.md"))
+		if err != nil {
+			return "", false
+		}
+		return sl.stripFrontmatter(string(content)), true
+	}
 	// 1. 优先从 workspace skills 加载（项目级别）
 	if sl.workspaceSkills != "" {
 		skillFile := filepath.Join(sl.workspaceSkills, name, "SKILL.md")
@@ -184,21 +235,36 @@ func (sl *SkillsLoader) BuildSkillsSummary() string {
 		return ""
 	}
 
-	var lines []string
+	var lines, managedContent []string
 	lines = append(lines, "<skills>")
 	for _, s := range allSkills {
 		escapedName := escapeXML(s.Name)
 		escapedDesc := escapeXML(s.Description)
 		escapedPath := escapeXML(s.Path)
+		content := ""
+		if s.Source == "managed" {
+			var ok bool
+			content, ok = sl.LoadSkill(s.Name)
+			if !ok {
+				continue
+			}
+		}
 
 		lines = append(lines, fmt.Sprintf("  <skill>"))
 		lines = append(lines, fmt.Sprintf("    <name>%s</name>", escapedName))
 		lines = append(lines, fmt.Sprintf("    <description>%s</description>", escapedDesc))
-		lines = append(lines, fmt.Sprintf("    <location>%s</location>", escapedPath))
+		if s.Source == "managed" {
+			managedContent = append(managedContent, fmt.Sprintf("### Skill: %s\n\n%s", s.Name, content))
+		} else {
+			lines = append(lines, fmt.Sprintf("    <location>%s</location>", escapedPath))
+		}
 		lines = append(lines, fmt.Sprintf("    <source>%s</source>", s.Source))
 		lines = append(lines, "  </skill>")
 	}
 	lines = append(lines, "</skills>")
+	if len(managedContent) > 0 {
+		lines = append(lines, "\n## Inline managed skills\n", strings.Join(managedContent, "\n\n---\n\n"))
+	}
 
 	return strings.Join(lines, "\n")
 }

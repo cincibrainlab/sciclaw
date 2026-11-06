@@ -219,6 +219,13 @@ func TestDockerEntrypointPreservesConcurrentSkillCreation(t *testing.T) {
 func TestDockerEntrypointFailsOnIncompleteSkillCopy(t *testing.T) {
 	tmp := t.TempDir()
 	workspace := filepath.Join(tmp, "workspace")
+	builtin := filepath.Join(tmp, "builtin")
+	if err := os.MkdirAll(filepath.Join(builtin, "gitea-create-change-request"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(builtin, "gitea-create-change-request", "SKILL.md"), []byte("built-in"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	bin := filepath.Join(tmp, "bin")
 	if err := os.Mkdir(bin, 0755); err != nil {
 		t.Fatal(err)
@@ -231,6 +238,7 @@ func TestDockerEntrypointFailsOnIncompleteSkillCopy(t *testing.T) {
 		t.Fatal(err)
 	}
 	entrypoint := strings.ReplaceAll(string(script), "/root/sciclaw/skills", workspace)
+	entrypoint = strings.ReplaceAll(entrypoint, "/opt/sciclaw/skills", builtin)
 	entrypoint = strings.Replace(entrypoint, "exec sciclaw \"$@\"", "exit 0", 1)
 	path := filepath.Join(tmp, "entrypoint.sh")
 	if err := os.WriteFile(path, []byte(entrypoint), 0755); err != nil {

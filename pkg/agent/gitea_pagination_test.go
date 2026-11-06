@@ -15,7 +15,7 @@ import (
 
 type paginationResultTool struct{ content string }
 
-func (t *paginationResultTool) Name() string        { return "gitea_mcp" }
+func (t *paginationResultTool) Name() string        { return "atomicqms_mcp" }
 func (t *paginationResultTool) Description() string { return "test Gitea result" }
 func (t *paginationResultTool) Parameters() map[string]interface{} {
 	return map[string]interface{}{"type": "object"}
@@ -49,7 +49,7 @@ func TestGiteaListResultLimit(t *testing.T) {
 				arguments["page"] = 2
 			}
 			provider := &scriptedProvider{responses: []*providers.LLMResponse{
-				{ToolCalls: []providers.ToolCall{{ID: "call-1", Name: "gitea_mcp", Arguments: map[string]interface{}{"tool": "project_read", "arguments": arguments}}}},
+				{ToolCalls: []providers.ToolCall{{ID: "call-1", Name: "atomicqms_mcp", Arguments: map[string]interface{}{"tool": "project_read", "arguments": arguments}}}},
 				{Content: "done"},
 			}}
 			al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)

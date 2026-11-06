@@ -2081,6 +2081,29 @@ func TestToolResult_UserFacingToolDoesSendMessage(t *testing.T) {
 	}
 }
 
+func TestGiteaArgumentsRedactedFromDebugMessages(t *testing.T) {
+	const secret = "gitea-debug-canary"
+	messages := []providers.Message{{Role: "assistant", ToolCalls: []providers.ToolCall{{Name: "atomicqms_mcp", Function: &providers.FunctionCall{Name: "atomicqms_mcp", Arguments: secret}}}}}
+	got := formatMessagesForLog(messages)
+	if strings.Contains(got, secret) || !strings.Contains(got, "[REDACTED]") {
+		t.Fatalf("unexpected log: %s", got)
+	}
+}
+
+func TestGiteaToolResultsRedactedFromDebugMessages(t *testing.T) {
+	const secret = "echoed-gitea-error-canary"
+	messages := []providers.Message{
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-1", Name: "atomicqms_mcp"}}},
+		{Role: "tool", ToolName: "atomicqms_mcp", ToolCallID: "call-1", Content: secret},
+		{Role: "tool", ToolCallID: "call-1", Content: secret},
+		{Role: "tool", ToolName: "other", ToolCallID: "call-2", Content: "other-result"},
+	}
+	got := formatMessagesForLog(messages)
+	if strings.Contains(got, secret) || !strings.Contains(got, "[REDACTED]") || !strings.Contains(got, "other-result") {
+		t.Fatalf("unexpected log: %s", got)
+	}
+}
+
 func TestProviderTransportFailureHookIdentity(t *testing.T) {
 	adapters := []struct {
 		name string
@@ -2107,6 +2130,28 @@ func TestProviderTransportFailureHookIdentity(t *testing.T) {
 			metadata := handler.contexts[hooks.EventOnError].Metadata
 			if metadata["provider"] != adapter.name || metadata["error_kind"] != string(providers.ProviderErrorKindNetwork) {
 				t.Fatalf("hook metadata = %v", metadata)
+			}
+		})
+	}
+}
+
+func TestGiteaNamesRedactedFromSavedMessages(t *testing.T) {
+	for _, name := range []string{"gitea_mcp", "atomicqms_mcp"} {
+		t.Run(name, func(t *testing.T) {
+			const secret = "saved-message-secret"
+			messages := []providers.Message{
+				{Role: "assistant", ToolCalls: []providers.ToolCall{
+					{ID: "outer", Name: name, Function: &providers.FunctionCall{Arguments: secret}},
+					{ID: "function", Function: &providers.FunctionCall{Name: name, Arguments: secret}},
+				}},
+				{Role: "tool", ToolName: name, Content: secret},
+				{Role: "tool", ToolCallID: "outer", Content: secret},
+				{Role: "tool", ToolCallID: "function", Content: secret},
+				{Role: "tool", ToolName: "other", Content: "visible-result"},
+			}
+			got := formatMessagesForLog(messages)
+			if strings.Contains(got, secret) || strings.Count(got, "[REDACTED]") != 5 || !strings.Contains(got, "visible-result") {
+				t.Fatalf("unexpected log: %s", got)
 			}
 		})
 	}

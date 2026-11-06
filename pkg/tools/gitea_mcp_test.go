@@ -7,12 +7,16 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Inventory from gitea-mcp operation/domainTools and its unfiltered registration contract.
 func TestGiteaMCPToolInventory(t *testing.T) {
 	want := strings.Fields(`get_me get_user_orgs actions_config_read actions_run_read actions_config_write actions_run_write list_my_repos list_org_repos get_repository_tree create_repo fork_repo notification_read notification_write attachment_read list_issues issue_read issue_write label_read label_write milestone_read milestone_write package_read package_write list_pull_requests pull_request_read pull_request_write pull_request_review_write search_users search_org_teams search_repos search_issues project_read project_write get_gitea_mcp_server_version wiki_read wiki_write timetracking_read timetracking_write get_file_contents get_dir_contents create_or_update_file delete_file list_branches create_branch delete_branch rename_branch get_tag list_tags create_tag delete_tag list_commits get_commit get_release get_latest_release list_releases create_release delete_release`)
 	tool := &GiteaMCPTool{}
+	if got := tool.Name(); got != "atomicqms_mcp" {
+		t.Fatalf("tool name = %q, want atomicqms_mcp", got)
+	}
 	properties := tool.Parameters()["properties"].(map[string]interface{})
 	got := properties["tool"].(map[string]interface{})["enum"].([]string)
 	if len(got) != len(want) {
@@ -109,12 +113,12 @@ func TestLimitGiteaProjectListResult(t *testing.T) {
 		limit     int
 		wantError bool
 	}{
-		{"oversize", "gitea_mcp", list, oversize, 4, true},
-		{"at limit after trim", "gitea_mcp", list, oversize, 5, false},
-		{"disabled", "gitea_mcp", list, oversize, 0, false},
+		{"oversize", "atomicqms_mcp", list, oversize, 4, true},
+		{"at limit after trim", "atomicqms_mcp", list, oversize, 5, false},
+		{"disabled", "atomicqms_mcp", list, oversize, 0, false},
 		{"other tool", "other", list, oversize, 4, false},
-		{"other method", "gitea_mcp", map[string]interface{}{"tool": "project_read", "arguments": map[string]interface{}{"method": "get"}}, oversize, 4, false},
-		{"existing error", "gitea_mcp", list, ErrorResult("existing error"), 4, false},
+		{"other method", "atomicqms_mcp", map[string]interface{}{"tool": "project_read", "arguments": map[string]interface{}{"method": "get"}}, oversize, 4, false},
+		{"existing error", "atomicqms_mcp", list, ErrorResult("existing error"), 4, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := LimitGiteaProjectListResult(tc.tool, tc.args, tc.result, tc.limit)
@@ -223,5 +227,66 @@ print(json.dumps({'content': [{'type': 'text', 'text': json.dumps(items)}]}))
 				t.Fatalf("expected %q error, got %#v", tc.message, result)
 			}
 		})
+	}
+}
+
+func TestGiteaMCPWriteFailures(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	tool := &GiteaMCPTool{}
+	args := map[string]interface{}{"tool": "pull_request_write", "arguments": map[string]interface{}{}}
+	result := tool.Execute(context.Background(), args)
+	if !result.IsError || strings.Contains(result.ForLLM, "outcome is unknown") {
+		t.Fatalf("missing executable is a definite pre-launch failure: %#v", result)
+	}
+	path := filepath.Join(dir, "mcp-server-cli")
+	for _, tc := range []struct {
+		script, name string
+		unknown      bool
+		reconcile    bool
+	}{
+		{"#!/bin/sh\necho transport-failed >&2\nexit 1\n", "pull_request_write", true, true},
+		{"#!/bin/sh\necho transport-failed >&2\nexit 1\n", "issue_read", false, false},
+		{"#!/bin/sh\necho '{\"isError\":true,\"content\":[]}'\nexit 1\n", "pull_request_write", false, true},
+	} {
+		if err := os.WriteFile(path, []byte(tc.script), 0755); err != nil {
+			t.Fatal(err)
+		}
+		result = tool.Execute(context.Background(), map[string]interface{}{"tool": tc.name, "arguments": map[string]interface{}{}})
+		if !result.IsError || (strings.Contains(result.ForLLM, "Reconcile remote state before retrying") != tc.reconcile || strings.Contains(result.ForLLM, "outcome is unknown") != tc.unknown) {
+			t.Fatalf("%s: %#v", tc.name, result)
+		}
+	}
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexec /bin/sleep 10\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	result = tool.Execute(ctx, args)
+	if !result.IsError || !strings.Contains(result.ForLLM, "Reconcile remote state before retrying") {
+		t.Fatalf("timed-out write: %#v", result)
+	}
+}
+
+func TestGiteaWriteReconciliationPrecedesLongErrors(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	path := filepath.Join(dir, "mcp-server-cli")
+	for _, explicit := range []bool{false, true} {
+		script := "#!/usr/bin/python3\nimport sys, json\n"
+		if explicit {
+			script += "print(json.dumps({'isError': True, 'content': [{'type': 'text', 'text': 'x' * 12000}]}))\n"
+		} else {
+			script += "sys.stderr.write('x' * 12000)\n"
+		}
+		script += "sys.exit(1)\n"
+		if err := os.WriteFile(path, []byte(script), 0755); err != nil {
+			t.Fatal(err)
+		}
+		result := (&GiteaMCPTool{}).Execute(context.Background(), map[string]interface{}{"tool": "pull_request_write", "arguments": map[string]interface{}{}})
+		truncated := truncateToolLoopContent(result.ForLLM, 200, "tool output")
+		if !result.IsError || !strings.Contains(truncated, "Reconcile remote state before retrying") || !strings.Contains(truncated, "truncated") {
+			t.Fatalf("explicit=%v result=%s", explicit, truncated)
+		}
 	}
 }

@@ -1684,14 +1684,14 @@ Either call the appropriate tool now, or give an honest present-tense status of 
 				ChatID:     opts.ChatID,
 				Model:      al.model,
 				ToolName:   tc.Name,
-				ToolArgs:   sanitizeHookArgs(tc.Arguments),
+				ToolArgs:   sanitizeHookArgs(tools.ToolLogArgs(tc.Name, tc.Arguments)),
 				Metadata: map[string]any{
 					"iteration": iteration,
 				},
 			})
 
 			// Log tool call with arguments preview
-			argsJSON, _ := json.Marshal(tc.Arguments)
+			argsJSON, _ := json.Marshal(tools.ToolLogArgs(tc.Name, tc.Arguments))
 			argsPreview := utils.Truncate(string(argsJSON), 200)
 			logger.InfoCF("agent", fmt.Sprintf("Tool call: %s(%s)", tc.Name, argsPreview),
 				map[string]interface{}{
@@ -1810,7 +1810,7 @@ Either call the appropriate tool now, or give an honest present-tense status of 
 				ChatID:     opts.ChatID,
 				Model:      al.model,
 				ToolName:   tc.Name,
-				ToolArgs:   sanitizeHookArgs(tc.Arguments),
+				ToolArgs:   sanitizeHookArgs(tools.ToolLogArgs(tc.Name, tc.Arguments)),
 				ToolResult: sanitizeHookText(contentForLLM),
 				Metadata: map[string]any{
 					"iteration": iteration,
@@ -1831,7 +1831,7 @@ Either call the appropriate tool now, or give an honest present-tense status of 
 					ChatID:       opts.ChatID,
 					Model:        al.model,
 					ToolName:     tc.Name,
-					ToolArgs:     sanitizeHookArgs(tc.Arguments),
+					ToolArgs:     sanitizeHookArgs(tools.ToolLogArgs(tc.Name, tc.Arguments)),
 					ErrorMessage: sanitizeHookText(errMsg),
 					Metadata: map[string]any{
 						"iteration":   iteration,
@@ -2280,6 +2280,15 @@ func formatMessagesForLog(messages []providers.Message) string {
 		return "[]"
 	}
 
+	giteaCallIDs := make(map[string]bool)
+	for _, msg := range messages {
+		for _, tc := range msg.ToolCalls {
+			if tools.IsGiteaMCPLogSensitive(tc.Name) || (tc.Function != nil && tools.IsGiteaMCPLogSensitive(tc.Function.Name)) {
+				giteaCallIDs[tc.ID] = true
+			}
+		}
+	}
+
 	var result string
 	result += "[\n"
 	for i, msg := range messages {
@@ -2289,12 +2298,19 @@ func formatMessagesForLog(messages []providers.Message) string {
 			for _, tc := range msg.ToolCalls {
 				result += fmt.Sprintf("    - ID: %s, Type: %s, Name: %s\n", tc.ID, tc.Type, tc.Name)
 				if tc.Function != nil {
-					result += fmt.Sprintf("      Arguments: %s\n", utils.Truncate(tc.Function.Arguments, 200))
+					arguments := tc.Function.Arguments
+					if tools.IsGiteaMCPLogSensitive(tc.Name) || tools.IsGiteaMCPLogSensitive(tc.Function.Name) {
+						arguments = "[REDACTED]"
+					}
+					result += fmt.Sprintf("      Arguments: %s\n", utils.Truncate(arguments, 200))
 				}
 			}
 		}
 		if msg.Content != "" {
 			content := utils.Truncate(msg.Content, 200)
+			if msg.Role == "tool" && (tools.IsGiteaMCPLogSensitive(msg.ToolName) || (msg.ToolCallID != "" && giteaCallIDs[msg.ToolCallID])) {
+				content = "[REDACTED]"
+			}
 			result += fmt.Sprintf("  Content: %s\n", content)
 		}
 		if msg.ToolCallID != "" {

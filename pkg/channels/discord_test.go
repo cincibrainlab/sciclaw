@@ -691,6 +691,9 @@ func TestDiscordHandleInteractionCreateSkillPublishesInboundAndDefers(t *testing
 	if !strings.Contains(in.Content, `Use the skill "pubmed-cli" for this task.`) {
 		t.Fatalf("unexpected inbound content: %q", in.Content)
 	}
+	if strings.Contains(in.Content, "Read its SKILL.md first") || !strings.Contains(in.Content, "inline instructions") || !strings.Contains(in.Content, "otherwise read its SKILL.md first") {
+		t.Fatalf("skill task does not support inline instructions: %q", in.Content)
+	}
 	if !strings.Contains(in.Content, "find the Jeon paper") {
 		t.Fatalf("unexpected inbound content: %q", in.Content)
 	}

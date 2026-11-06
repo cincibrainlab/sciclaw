@@ -5,7 +5,7 @@ description: Move an AtomicQMS Gitea work item between named organization-projec
 
 # Move Gitea Work Item
 
-Use the `gitea_mcp` tool for every call to the configured official Gitea MCP server. Set `tool` to the MCP tool name and `arguments` to a JSON object containing its arguments. Never use `exec` or construct shell commands. The CLI reads `SCICLAW_MCP_URL`; never include credentials in arguments, chat messages, or logs. This requires the standalone CLI with stdin support (sciclaw-mcp-cli PR #2) installed by the service packaging (sciclaw-stack #12); the older bundled CLI does not support this invocation.
+Use the `atomicqms_mcp` tool for every call to the configured official Gitea MCP server. Set `tool` to the MCP tool name and `arguments` to a JSON object containing its arguments. Never use `exec` or construct shell commands. The CLI reads `SCICLAW_MCP_URL`; never include credentials in arguments, chat messages, or logs. This requires the standalone CLI with stdin support (sciclaw-mcp-cli PR #2) installed by the service packaging (sciclaw-stack #12); the older bundled CLI does not support this invocation.
 
 If the executable is unavailable or reports missing configuration, explain that the operation cannot run and request that an administrator install the CLI and configure `SCICLAW_MCP_URL` in the SciClaw service.
 
@@ -13,7 +13,7 @@ Collect `organization`, `projectId`, `owner`, `repository`, `issueNumber`, `from
 
 Call `issue_read` with `method: "get"`, `owner`, `repo`, and `issue_number`; retain its internal `id`. Call `project_read` with `method: "list_columns"`, `org: organization`, and `project_id: projectId`; identify the exact source and destination column IDs by title from the complete results. If the agent reports that the result exceeds its limit, retry with explicit `page: 1` and a smaller `per_page`, then request successive pages until an empty page. If any page exceeds the limit, reduce `per_page` and restart at page 1; if one item cannot fit, stop. Treat repeated pages, truncated or malformed results, and other errors as failures; report them and stop without calling `project_write`. If either column is absent after exhausting results, report it and stop without calling `project_write`. Otherwise, call `project_read` again with `method: "list_column_issues"`, the same `org` and `project_id`, and the source `column_id`; include `org` and `project_id` on every page request and apply the same pagination and error rules and check for the internal issue ID. If the issue is absent after exhausting results, report it and stop without calling `project_write`. Only when both columns and the issue are found, move it with:
 
-Call `gitea_mcp` with `tool: "project_write"` and `arguments` containing:
+Call `atomicqms_mcp` with `tool: "project_write"` and `arguments` containing:
 
 ```json
 {"method":"add_issue","org":"<organization>","project_id":<project-id>,"column_id":<destination-column-id>,"issue_id":<issue-id>}
