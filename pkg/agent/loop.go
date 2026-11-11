@@ -273,6 +273,7 @@ func createToolRegistry(workspace string, restrict bool, cfg *config.Config, msg
 	pdfFormFillTool := tools.NewPDFFormFillTool(workspace, restrict)
 	pdfFormFillTool.SetSharedWorkspacePolicy(sharedWorkspace, sharedReadOnly)
 	registry.Register(execTool)
+	registry.Register(&tools.GiteaMCPTool{})
 	registry.Register(pubmedSearchTool)
 	registry.Register(pubmedFetchTool)
 	registry.Register(pubmedExportTool)
