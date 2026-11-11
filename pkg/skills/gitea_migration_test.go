@@ -100,6 +100,9 @@ func TestEarlierGiteaVersionsMigrateWithoutOverwritingCustomizations(t *testing.
 		t.Fatal(err)
 	}
 	for _, tc := range []struct{ name, revision string }{
+		{"gitea-create-change-request", "d7ce6b1"},
+		{"gitea-move-file-phase-0-to-1", "d7ce6b1"},
+		{"gitea-move-work-item", "d7ce6b1"},
 		{"gitea-create-change-request", "2a644b6"},
 		{"gitea-move-work-item", "2a644b6"},
 		{"gitea-move-work-item", "c38e0f8"},
