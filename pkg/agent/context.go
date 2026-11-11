@@ -119,6 +119,9 @@ func NewContextBuilder(workspace string, sharedWorkspace ...string) *ContextBuil
 	// Use the skills/ directory under the current working directory
 	wd, _ := os.Getwd()
 	builtinSkillsDir := filepath.Join(wd, "skills")
+	if !hasSkillsDir(builtinSkillsDir) && hasSkillsDir("/opt/sciclaw/skills") {
+		builtinSkillsDir = "/opt/sciclaw/skills"
+	}
 	sharedRoot := ""
 	if len(sharedWorkspace) > 0 {
 		sharedRoot = strings.TrimSpace(sharedWorkspace[0])
@@ -275,7 +278,7 @@ func (cb *ContextBuilder) BuildSystemPrompt() string {
 	if skillsSummary != "" {
 		parts = append(parts, fmt.Sprintf(`# Skills
 
-The following skills extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool.
+The following skills extend your capabilities. To use a skill, follow its inline instructions if present; otherwise read its SKILL.md file using the read_file tool.
 
 %s`, skillsSummary))
 	}

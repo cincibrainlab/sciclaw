@@ -1693,6 +1693,9 @@ Either call the appropriate tool now, or give an honest present-tense status of 
 			// Log tool call with arguments preview
 			argsJSON, _ := json.Marshal(tc.Arguments)
 			argsPreview := utils.Truncate(string(argsJSON), 200)
+			if tc.Name == "gitea_mcp" {
+				argsPreview = "[redacted]"
+			}
 			logger.InfoCF("agent", fmt.Sprintf("Tool call: %s(%s)", tc.Name, argsPreview),
 				map[string]interface{}{
 					"tool":      tc.Name,

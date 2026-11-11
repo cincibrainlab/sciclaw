@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -42,6 +44,12 @@ func (*GiteaMCPTool) Execute(ctx context.Context, args map[string]interface{}) *
 	if err != nil {
 		return ErrorResult("cannot serialize Gitea MCP arguments: " + err.Error())
 	}
+	decoder := json.NewDecoder(bytes.NewReader(input))
+	decoder.UseNumber()
+	var decoded interface{}
+	if err := decoder.Decode(&decoded); err != nil || !safeGiteaNumbers(decoded) {
+		return ErrorResult("numeric arguments exceed the CLI's safe integer range")
+	}
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "mcp-server-cli", "call", name, string(input))
@@ -55,4 +63,25 @@ func (*GiteaMCPTool) Execute(ctx context.Context, args map[string]interface{}) *
 		return ErrorResult(fmt.Sprintf("Gitea MCP call failed: %v\n%s", err, detail))
 	}
 	return NewToolResult(stdout.String())
+}
+
+func safeGiteaNumbers(value interface{}) bool {
+	switch v := value.(type) {
+	case json.Number:
+		n, err := strconv.ParseFloat(string(v), 64)
+		return err == nil && math.Abs(n) < 9007199254740992
+	case []interface{}:
+		for _, item := range v {
+			if !safeGiteaNumbers(item) {
+				return false
+			}
+		}
+	case map[string]interface{}:
+		for _, item := range v {
+			if !safeGiteaNumbers(item) {
+				return false
+			}
+		}
+	}
+	return true
 }

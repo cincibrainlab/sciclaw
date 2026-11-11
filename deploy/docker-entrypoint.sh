@@ -20,7 +20,7 @@ for skill in gitea-create-change-request gitea-move-work-item gitea-move-file-ph
     )
   fi
   if ! cmp -s "$dir/SKILL.md" "/opt/sciclaw/skills/$skill/SKILL.md"; then
-    echo "Warning: workspace skill $skill differs from the bundled version and may use obsolete MCP tools. Review $dir/SKILL.md against /opt/sciclaw/skills/$skill/SKILL.md and update it while preserving customizations." >&2
+    echo "Warning: workspace skill $skill differs from the bundled version and may use unsafe or obsolete MCP commands. Customized copies require user intervention: review $dir/SKILL.md against /opt/sciclaw/skills/$skill/SKILL.md and update it while preserving customizations." >&2
   fi
 done
 
