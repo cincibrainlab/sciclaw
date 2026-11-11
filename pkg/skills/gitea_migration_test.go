@@ -93,3 +93,50 @@ func TestGiteaMigrationPreservesCustomizedAndSymlinkSkills(t *testing.T) {
 		t.Fatalf("symlink target changed: %v", err)
 	}
 }
+
+func TestEarlierGiteaVersionsMigrateWithoutOverwritingCustomizations(t *testing.T) {
+	builtin, err := filepath.Abs("../../skills")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ name, revision string }{
+		{"gitea-create-change-request", "2a644b6"},
+		{"gitea-move-work-item", "2a644b6"},
+		{"gitea-move-work-item", "c38e0f8"},
+	} {
+		t.Run(tc.name+"-"+tc.revision, func(t *testing.T) {
+			workspace := t.TempDir()
+			path := filepath.Join(workspace, "skills", tc.name, "SKILL.md")
+			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+				t.Fatal(err)
+			}
+			old, err := os.ReadFile(filepath.Join("testdata", "gitea-legacy", tc.name+"-"+tc.revision+".md"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, old, 0600); err != nil {
+				t.Fatal(err)
+			}
+			loader := NewSkillsLoader(workspace, "", builtin)
+			content, ok := loader.LoadSkill(tc.name)
+			if !ok || !strings.Contains(content, "Never use `exec`") {
+				t.Fatal("shipped legacy skill not migrated")
+			}
+			got, err := os.ReadFile(path)
+			if err != nil || string(got) != string(old) {
+				t.Fatal("legacy file changed")
+			}
+			custom := append(append([]byte{}, old...), []byte("\ncustom")...)
+			if err := os.WriteFile(path, custom, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if loader.safeLegacyGitea(tc.name, path) != "" {
+				t.Fatal("customized skill migrated")
+			}
+			got, err = os.ReadFile(path)
+			if err != nil || string(got) != string(custom) {
+				t.Fatal("customized file changed")
+			}
+		})
+	}
+}
