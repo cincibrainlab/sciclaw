@@ -141,6 +141,9 @@ func RunToolLoop(ctx context.Context, config ToolLoopConfig, messages []provider
 		for _, tc := range response.ToolCalls {
 			argsJSON, _ := json.Marshal(tc.Arguments)
 			argsPreview := utils.Truncate(string(argsJSON), 200)
+			if tc.Name == "gitea_mcp" {
+				argsPreview = "[redacted]"
+			}
 			logger.InfoCF("toolloop", fmt.Sprintf("Tool call: %s(%s)", tc.Name, argsPreview),
 				map[string]any{
 					"tool":      tc.Name,

@@ -1,6 +1,7 @@
 package skills
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -19,6 +20,7 @@ type SkillInfo struct {
 	Path        string `json:"path"`
 	Source      string `json:"source"`
 	Description string `json:"description"`
+	inline      string
 }
 
 type SkillsLoader struct {
@@ -131,6 +133,11 @@ func (sl *SkillsLoader) ListSkills() []SkillInfo {
 		}
 	}
 
+	for i := range skills {
+		if skills[i].Source == "workspace" || skills[i].Source == "global" {
+			skills[i].inline = sl.safeLegacyGitea(skills[i].Name, skills[i].Path)
+		}
+	}
 	return skills
 }
 
@@ -139,6 +146,9 @@ func (sl *SkillsLoader) LoadSkill(name string) (string, bool) {
 	if sl.workspaceSkills != "" {
 		skillFile := filepath.Join(sl.workspaceSkills, name, "SKILL.md")
 		if content, err := os.ReadFile(skillFile); err == nil {
+			if replacement := sl.safeLegacyGitea(name, skillFile); replacement != "" {
+				return sl.stripFrontmatter(replacement), true
+			}
 			return sl.stripFrontmatter(string(content)), true
 		}
 	}
@@ -147,6 +157,9 @@ func (sl *SkillsLoader) LoadSkill(name string) (string, bool) {
 	if sl.globalSkills != "" {
 		skillFile := filepath.Join(sl.globalSkills, name, "SKILL.md")
 		if content, err := os.ReadFile(skillFile); err == nil {
+			if replacement := sl.safeLegacyGitea(name, skillFile); replacement != "" {
+				return sl.stripFrontmatter(replacement), true
+			}
 			return sl.stripFrontmatter(string(content)), true
 		}
 	}
@@ -194,7 +207,18 @@ func (sl *SkillsLoader) BuildSkillsSummary() string {
 		lines = append(lines, fmt.Sprintf("  <skill>"))
 		lines = append(lines, fmt.Sprintf("    <name>%s</name>", escapedName))
 		lines = append(lines, fmt.Sprintf("    <description>%s</description>", escapedDesc))
-		lines = append(lines, fmt.Sprintf("    <location>%s</location>", escapedPath))
+		if s.inline != "" {
+			lines = append(lines, fmt.Sprintf("    <instructions>%s</instructions>", escapeXML(s.inline)))
+		} else {
+			lines = append(lines, fmt.Sprintf("    <location>%s</location>", escapedPath))
+			if _, isGitea := giteaSkillHashes[s.Name]; isGitea && s.Source != "builtin" {
+				current, err := os.ReadFile(filepath.Join(sl.builtinSkills, s.Name, "SKILL.md"))
+				custom, customErr := os.ReadFile(s.Path)
+				if err != nil || customErr != nil || !bytes.Equal(current, custom) {
+					lines = append(lines, "    <warning>This customized Gitea skill may contain unsafe commands and requires user intervention before use.</warning>")
+				}
+			}
+		}
 		lines = append(lines, fmt.Sprintf("    <source>%s</source>", s.Source))
 		lines = append(lines, "  </skill>")
 	}

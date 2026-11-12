@@ -24,6 +24,14 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build \
     -o /out/sciclaw \
     ./cmd/picoclaw
 
+FROM oven/bun:1.4.2 AS mcp-cli-builder
+
+WORKDIR /src
+COPY tools/mcp-server-cli/package.json tools/mcp-server-cli/bun.lock ./
+RUN bun install --frozen-lockfile
+COPY tools/mcp-server-cli/src ./src
+RUN bun build --compile --outfile /out/mcp-server-cli src/index.ts
+
 # ============================================================
 # Stage 2: Full runtime image
 # ============================================================
@@ -106,6 +114,8 @@ RUN set -eux; \
 
 # Copy binary
 COPY --from=builder /out/sciclaw /usr/local/bin/sciclaw
+COPY --from=mcp-cli-builder /out/mcp-server-cli /usr/local/bin/mcp-server-cli
+COPY --chmod=0755 deploy/docker-entrypoint.sh /usr/local/bin/sciclaw-docker-entrypoint
 RUN ln -sf sciclaw /usr/local/bin/picoclaw
 
 # Copy builtin skills
@@ -115,5 +125,5 @@ COPY --from=builder /src/skills /opt/sciclaw/skills
 RUN mkdir -p /root/sciclaw/skills /root/.picoclaw && \
     cp -r /opt/sciclaw/skills/* /root/sciclaw/skills/ 2>/dev/null || true
 
-ENTRYPOINT ["sciclaw"]
+ENTRYPOINT ["sciclaw-docker-entrypoint"]
 CMD ["gateway"]

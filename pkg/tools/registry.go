@@ -73,10 +73,14 @@ func (r *ToolRegistry) Execute(ctx context.Context, name string, args map[string
 // If the tool implements AsyncTool and a non-nil callback is provided,
 // the callback will be set on the tool before execution.
 func (r *ToolRegistry) ExecuteWithContext(ctx context.Context, name string, args map[string]interface{}, channel, chatID string, asyncCallback AsyncCallback) *ToolResult {
+	var loggedArgs interface{} = args
+	if name == "gitea_mcp" {
+		loggedArgs = "[redacted]"
+	}
 	logger.InfoCF("tool", "Tool execution started",
 		map[string]interface{}{
 			"tool": name,
-			"args": args,
+			"args": loggedArgs,
 		})
 
 	tool, ok := r.Get(name)
@@ -108,11 +112,15 @@ func (r *ToolRegistry) ExecuteWithContext(ctx context.Context, name string, args
 
 	// Log based on result type
 	if result.IsError {
+		loggedError := result.ForLLM
+		if name == "gitea_mcp" {
+			loggedError = "[redacted]"
+		}
 		logger.ErrorCF("tool", "Tool execution failed",
 			map[string]interface{}{
 				"tool":     name,
 				"duration": duration.Milliseconds(),
-				"error":    result.ForLLM,
+				"error":    loggedError,
 			})
 	} else if result.Async {
 		logger.InfoCF("tool", "Tool started (async)",

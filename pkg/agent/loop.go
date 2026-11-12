@@ -273,6 +273,7 @@ func createToolRegistry(workspace string, restrict bool, cfg *config.Config, msg
 	pdfFormFillTool := tools.NewPDFFormFillTool(workspace, restrict)
 	pdfFormFillTool.SetSharedWorkspacePolicy(sharedWorkspace, sharedReadOnly)
 	registry.Register(execTool)
+	registry.Register(&tools.GiteaMCPTool{})
 	registry.Register(pubmedSearchTool)
 	registry.Register(pubmedFetchTool)
 	registry.Register(pubmedExportTool)
@@ -1692,6 +1693,9 @@ Either call the appropriate tool now, or give an honest present-tense status of 
 			// Log tool call with arguments preview
 			argsJSON, _ := json.Marshal(tc.Arguments)
 			argsPreview := utils.Truncate(string(argsJSON), 200)
+			if tc.Name == "gitea_mcp" {
+				argsPreview = "[redacted]"
+			}
 			logger.InfoCF("agent", fmt.Sprintf("Tool call: %s(%s)", tc.Name, argsPreview),
 				map[string]interface{}{
 					"tool":      tc.Name,
@@ -2231,6 +2235,17 @@ func (al *AgentLoop) dispatchHook(ctx context.Context, event hooks.Event, data h
 	if al.hooks == nil {
 		return
 	}
+	if data.ToolName == "gitea_mcp" {
+		if data.ToolArgs != nil {
+			data.ToolArgs = map[string]any{"redacted": "[REDACTED]"}
+		}
+		if data.ToolResult != "" {
+			data.ToolResult = "[REDACTED]"
+		}
+		if data.ErrorMessage != "" {
+			data.ErrorMessage = "[REDACTED]"
+		}
+	}
 	al.hooks.Dispatch(ctx, event, data)
 }
 
@@ -2278,6 +2293,14 @@ func formatMessagesForLog(messages []providers.Message) string {
 		return "[]"
 	}
 
+	privateCalls := make(map[string]bool)
+	for _, msg := range messages {
+		for _, tc := range msg.ToolCalls {
+			if tc.ID != "" && (tc.Name == "gitea_mcp" || (tc.Function != nil && tc.Function.Name == "gitea_mcp")) {
+				privateCalls[tc.ID] = true
+			}
+		}
+	}
 	var result string
 	result += "[\n"
 	for i, msg := range messages {
@@ -2287,12 +2310,19 @@ func formatMessagesForLog(messages []providers.Message) string {
 			for _, tc := range msg.ToolCalls {
 				result += fmt.Sprintf("    - ID: %s, Type: %s, Name: %s\n", tc.ID, tc.Type, tc.Name)
 				if tc.Function != nil {
-					result += fmt.Sprintf("      Arguments: %s\n", utils.Truncate(tc.Function.Arguments, 200))
+					arguments := utils.Truncate(tc.Function.Arguments, 200)
+					if tc.Name == "gitea_mcp" || tc.Function.Name == "gitea_mcp" {
+						arguments = "[REDACTED]"
+					}
+					result += fmt.Sprintf("      Arguments: %s\n", arguments)
 				}
 			}
 		}
 		if msg.Content != "" {
 			content := utils.Truncate(msg.Content, 200)
+			if msg.Role == "tool" && (msg.ToolName == "gitea_mcp" || (msg.ToolCallID != "" && privateCalls[msg.ToolCallID])) {
+				content = "[REDACTED]"
+			}
 			result += fmt.Sprintf("  Content: %s\n", content)
 		}
 		if msg.ToolCallID != "" {
