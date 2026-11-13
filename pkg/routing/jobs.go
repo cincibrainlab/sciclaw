@@ -1198,24 +1198,6 @@ func (jm *JobManager) syncTrackedJobProgress(ctx context.Context, job *activeJob
 	return record, nil
 }
 
-func (jm *JobManager) syncTrackedJobsProgress(ctx context.Context, jobs ...*activeJob) []JobRecord {
-	updated := make([]JobRecord, 0, len(jobs))
-	for _, job := range jobs {
-		if job == nil {
-			continue
-		}
-		record, err := jm.syncTrackedJobProgress(ctx, job)
-		if err != nil {
-			snapshot := job.snapshot()
-			logger.WarnCF("jobs", "Failed to sync tracked job progress", map[string]interface{}{"job_id": snapshot.ID, "error": err.Error()})
-			updated = append(updated, snapshot)
-			continue
-		}
-		updated = append(updated, record)
-	}
-	return updated
-}
-
 func (jm *JobManager) reindexQueuedWritesLocked(activeSet *targetActiveJobs) []JobRecord {
 	if activeSet == nil || len(activeSet.queuedWrites) == 0 {
 		return nil
@@ -1250,11 +1232,6 @@ func (jm *JobManager) reindexQueuedWritesLocked(activeSet *targetActiveJobs) []J
 	return updated
 }
 
-func (jm *JobManager) syncProgressRecord(ctx context.Context, record JobRecord) JobRecord {
-	record, _ = jm.trySyncProgressRecord(ctx, record)
-	return record
-}
-
 func (jm *JobManager) trySyncProgressRecord(ctx context.Context, record JobRecord) (JobRecord, bool) {
 	if jm.progress == nil || strings.TrimSpace(record.StatusMessageID) == "" {
 		return record, false
@@ -1274,14 +1251,6 @@ func (jm *JobManager) trySyncProgressRecord(ctx context.Context, record JobRecor
 		}
 	}
 	return record, true
-}
-
-func (jm *JobManager) syncProgressRecords(ctx context.Context, records ...JobRecord) []JobRecord {
-	updated := make([]JobRecord, 0, len(records))
-	for _, record := range records {
-		updated = append(updated, jm.syncProgressRecord(ctx, record))
-	}
-	return updated
 }
 
 func (jm *JobManager) runJob(ctx context.Context, target LoopTarget, msg bus.InboundMessage, active *activeJob) {
