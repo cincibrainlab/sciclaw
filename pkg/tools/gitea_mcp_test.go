@@ -5,22 +5,37 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 )
 
-// Inventory from gitea-mcp operation/domainTools and its unfiltered registration contract.
+// Read inventory from gitea-mcp v1.13.0, with the existing write inventory preserved.
 func TestGiteaMCPToolInventory(t *testing.T) {
-	want := strings.Fields(`get_me get_user_orgs actions_config_read actions_run_read actions_config_write actions_run_write list_my_repos list_org_repos get_repository_tree create_repo fork_repo notification_read notification_write attachment_read list_issues issue_read issue_write label_read label_write milestone_read milestone_write package_read package_write list_pull_requests pull_request_read pull_request_write pull_request_review_write search_users search_org_teams search_repos search_issues project_read project_write get_gitea_mcp_server_version wiki_read wiki_write timetracking_read timetracking_write get_file_contents get_dir_contents create_or_update_file delete_file list_branches create_branch delete_branch rename_branch get_tag list_tags create_tag delete_tag list_commits get_commit get_release get_latest_release list_releases create_release delete_release`)
+	want := strings.Fields(`get_gitea_mcp_server_version get_me get_user_orgs search_users search_org_teams search_repos search_issues notification_read label_read milestone_read wiki_read timetracking_read package_read project_read list_issues issue_read list_pull_requests pull_request_read actions_config_read actions_run_read repo_read get_repository_tree get_file_contents get_dir_contents branch_read tag_read commit_read release_read`)
+	stale := strings.Fields(`list_my_repos list_org_repos attachment_read list_branches get_tag list_tags list_commits get_commit get_release get_latest_release list_releases`)
 	tool := &GiteaMCPTool{}
 	if got := tool.Name(); got != "atomicqms_mcp" {
 		t.Fatalf("tool name = %q, want atomicqms_mcp", got)
 	}
 	properties := tool.Parameters()["properties"].(map[string]interface{})
 	got := properties["tool"].(map[string]interface{})["enum"].([]string)
-	if len(got) != len(want) {
-		t.Fatalf("enum has %d tools, want %d", len(got), len(want))
+	allowed := append(slices.Clone(want), strings.Fields(`actions_config_write actions_run_write create_repo fork_repo notification_write issue_write label_write milestone_write package_write pull_request_write pull_request_review_write project_write wiki_write timetracking_write create_or_update_file delete_file create_branch delete_branch rename_branch create_tag delete_tag create_release delete_release`)...)
+	seen := map[string]bool{}
+	for _, name := range got {
+		if seen[name] {
+			t.Errorf("duplicate tool %q", name)
+		}
+		seen[name] = true
+		if !slices.Contains(allowed, name) {
+			t.Errorf("unexpected tool %q", name)
+		}
+	}
+	for _, name := range allowed {
+		if !seen[name] {
+			t.Errorf("allowed tool %q missing from enum", name)
+		}
 	}
 	dir := t.TempDir()
 	script := "#!/usr/bin/python3\nimport sys\nassert len(sys.argv) == 4 and sys.argv[1] == 'call' and sys.argv[3] == '--stdin'\nsys.stdout.write(sys.argv[2])\n"
@@ -28,16 +43,54 @@ func TestGiteaMCPToolInventory(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir)
-	seen := map[string]bool{}
-	for i, name := range want {
-		if got[i] != name || seen[name] {
-			t.Fatalf("enum[%d] = %q, want unique %q", i, got[i], name)
+	for _, name := range want {
+		if !slices.Contains(got, name) {
+			t.Errorf("current read tool %q missing from enum", name)
 		}
-		seen[name] = true
 		result := tool.Execute(context.Background(), map[string]interface{}{"tool": name, "arguments": map[string]interface{}{}})
 		if result.IsError || result.ForLLM != name {
 			t.Errorf("%s: %#v", name, result)
 		}
+	}
+	for _, name := range stale {
+		if slices.Contains(got, name) {
+			t.Errorf("stale read tool %q present in enum", name)
+		}
+		result := tool.Execute(context.Background(), map[string]interface{}{"tool": name, "arguments": map[string]interface{}{}})
+		if !result.IsError {
+			t.Errorf("stale read tool %q accepted: %#v", name, result)
+		}
+	}
+}
+
+func TestGiteaMCPBranchReadListGuidance(t *testing.T) {
+	schema := ToolToSchema(&GiteaMCPTool{})
+	function := schema["function"].(map[string]interface{})
+	description := function["description"].(string)
+	for _, part := range []string{`branch_read`, `"method":"list"`, `"owner"`, `"repo"`} {
+		if !strings.Contains(description, part) {
+			t.Errorf("model-facing description missing %q: %s", part, description)
+		}
+	}
+}
+
+func TestGiteaMCPBranchReadList(t *testing.T) {
+	dir := t.TempDir()
+	script := `#!/usr/bin/python3
+import json, sys
+assert sys.argv[1:] == ['call', 'branch_read', '--stdin']
+assert json.load(sys.stdin) == {'method': 'list', 'owner': 'acme', 'repo': 'example'}
+print('branches')
+`
+	if err := os.WriteFile(filepath.Join(dir, "mcp-server-cli"), []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	result := (&GiteaMCPTool{}).Execute(context.Background(), map[string]interface{}{
+		"tool": "branch_read", "arguments": map[string]interface{}{"method": "list", "owner": "acme", "repo": "example"},
+	})
+	if result.IsError || strings.TrimSpace(result.ForLLM) != "branches" {
+		t.Fatalf("branch_read list: %#v", result)
 	}
 }
 

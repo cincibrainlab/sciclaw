@@ -20,14 +20,12 @@ var giteaMCPTools = []string{
 	"actions_run_read",
 	"actions_config_write",
 	"actions_run_write",
-	"list_my_repos",
-	"list_org_repos",
+	"repo_read",
 	"get_repository_tree",
 	"create_repo",
 	"fork_repo",
 	"notification_read",
 	"notification_write",
-	"attachment_read",
 	"list_issues",
 	"issue_read",
 	"issue_write",
@@ -56,19 +54,15 @@ var giteaMCPTools = []string{
 	"get_dir_contents",
 	"create_or_update_file",
 	"delete_file",
-	"list_branches",
+	"branch_read",
 	"create_branch",
 	"delete_branch",
 	"rename_branch",
-	"get_tag",
-	"list_tags",
+	"tag_read",
 	"create_tag",
 	"delete_tag",
-	"list_commits",
-	"get_commit",
-	"get_release",
-	"get_latest_release",
-	"list_releases",
+	"commit_read",
+	"release_read",
 	"create_release",
 	"delete_release",
 }
@@ -90,7 +84,7 @@ func LimitGiteaProjectListResult(name string, args map[string]interface{}, resul
 func (t *GiteaMCPTool) Name() string { return "atomicqms_mcp" }
 
 func (t *GiteaMCPTool) Description() string {
-	return "Call an official Gitea MCP tool with structured arguments, without a shell."
+	return `Call an official Gitea MCP tool with structured arguments, without a shell. To list branches, use tool "branch_read" with arguments {"method":"list","owner":"OWNER","repo":"REPO"}.`
 }
 
 func (t *GiteaMCPTool) Parameters() map[string]interface{} {
