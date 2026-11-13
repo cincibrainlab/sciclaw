@@ -406,8 +406,12 @@ func TestCompletionSaveFailureDoesNotReportDone(t *testing.T) {
 	if got := job.snapshot(); got.State == JobStateDone {
 		t.Fatalf("reported undurable completion: %#v", got)
 	}
-	if progressHas(progress, "Done. Reply below.") {
-		t.Fatal("sent success despite persistence failure")
+	progress.mu.Lock()
+	defer progress.mu.Unlock()
+	for _, call := range progress.messages {
+		if embedHas(call.embed, "Done. Reply below.") || embedHas(call.embed, "Done. Reply posted below.") {
+			t.Fatal("sent success despite persistence failure")
+		}
 	}
 }
 
@@ -425,70 +429,42 @@ func TestPreparationOverloadWithoutBusReturnsError(t *testing.T) {
 	}
 }
 
-func TestInitialStatusCapacityRejectsWithoutPersisting(t *testing.T) {
-	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{MaxConcurrent: 1}, nil, nil, func(LoopTarget) (JobRunner, error) { return &fakeJobRunner{}, nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i := 0; i < cap(jm.statusSlots); i++ {
-		jm.statusSlots <- struct{}{}
-	}
-	err = jm.Submit(context.Background(), LoopTarget{Workspace: t.TempDir()}, bus.InboundMessage{Channel: "discord", ChatID: "room", Media: []string{"https://example.invalid/file"}})
-	if err == nil {
-		t.Fatal("status capacity exhaustion accepted an unobservable job")
-	}
-	records, err := jm.store.All()
-	if err != nil || len(records) != 0 {
-		t.Fatalf("rejected job persisted: %#v %v", records, err)
-	}
-}
-
-func TestImmediateJobStatusCapacityRejectsWithoutExecution(t *testing.T) {
-	runner := &fakeJobRunner{}
-	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{MaxConcurrent: 1}, nil, nil, func(LoopTarget) (JobRunner, error) { return runner, nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i := 0; i < cap(jm.statusSlots); i++ {
-		jm.statusSlots <- struct{}{}
-	}
-	err = jm.Submit(context.Background(), LoopTarget{Workspace: t.TempDir()}, bus.InboundMessage{Channel: "discord", ChatID: "room", Content: "work"})
-	if err == nil {
-		t.Fatal("status capacity exhaustion accepted immediate job")
-	}
-	records, err := jm.store.All()
-	if err != nil || len(records) != 0 {
-		t.Fatalf("rejected job persisted: %#v %v", records, err)
-	}
-	runner.mu.Lock()
-	defer runner.mu.Unlock()
-	if runner.runs != 0 {
-		t.Fatal("rejected job executed")
+func TestImmediateJobRunsWhenStatusCapacityExhausted(t *testing.T) {
+	for _, messenger := range []bool{false, true} {
+		t.Run(fmt.Sprintf("messenger=%t", messenger), func(t *testing.T) {
+			progress := &hungProgress{started: make(chan struct{}, 10), release: make(chan struct{})}
+			defer close(progress.release)
+			var messengerImpl ProgressMessenger
+			if messenger {
+				messengerImpl = progress
+			}
+			runner := &fakeJobRunner{started: make(chan struct{})}
+			jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{MaxConcurrent: 1}, nil, messengerImpl, func(LoopTarget) (JobRunner, error) { return runner, nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			slots := jm.statusSlots
+			if messenger {
+				slots = jm.progress.(*boundedProgress).slots
+			}
+			for i := 0; i < cap(slots); i++ {
+				slots <- struct{}{}
+			}
+			target := LoopTarget{Workspace: t.TempDir()}.normalized()
+			if err := jm.Submit(context.Background(), target, bus.InboundMessage{Channel: "discord", ChatID: "room", Content: "work"}); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-runner.started:
+			case <-time.After(time.Second):
+				t.Fatal("job did not run with status capacity exhausted")
+			}
+			waitForNoActiveJobs(t, jm, target.key())
+		})
 	}
 }
 
-func TestHungMessengerCapacityRejectsBeforeAcceptingJob(t *testing.T) {
-	progress := &hungProgress{started: make(chan struct{}, 10), release: make(chan struct{})}
-	defer close(progress.release)
-	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{MaxConcurrent: 1}, nil, progress, func(LoopTarget) (JobRunner, error) { return &fakeJobRunner{}, nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	bounded := jm.progress.(*boundedProgress)
-	for i := 0; i < cap(bounded.slots); i++ {
-		bounded.slots <- struct{}{}
-	}
-	err = jm.Submit(context.Background(), LoopTarget{Workspace: t.TempDir()}, bus.InboundMessage{Channel: "discord", ChatID: "room", Content: "work"})
-	if err == nil {
-		t.Fatal("accepted job with no status capacity or fallback")
-	}
-	records, err := jm.store.All()
-	if err != nil || len(records) != 0 {
-		t.Fatalf("rejected job persisted: %#v %v", records, err)
-	}
-}
-
-func TestQueuedWriteStatusCapacityRejectsWithoutDisturbingWriter(t *testing.T) {
+func TestQueuedWriteStatusCapacityDoesNotDisturbWriter(t *testing.T) {
 	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{MaxConcurrent: 1}, nil, nil, func(LoopTarget) (JobRunner, error) { return &fakeJobRunner{}, nil })
 	if err != nil {
 		t.Fatal(err)
@@ -499,15 +475,11 @@ func TestQueuedWriteStatusCapacityRejectsWithoutDisturbingWriter(t *testing.T) {
 	for i := 0; i < cap(jm.statusSlots); i++ {
 		jm.statusSlots <- struct{}{}
 	}
-	if err := jm.Submit(context.Background(), target, bus.InboundMessage{Channel: "discord", ChatID: "room", Content: "new"}); err == nil {
-		t.Fatal("expected rejection")
+	if err := jm.Submit(context.Background(), target, bus.InboundMessage{Channel: "discord", ChatID: "room", Content: "new"}); err != nil {
+		t.Fatal(err)
 	}
-	if got := jm.active[target.key()]; got.write != writer || len(got.queuedWrites) != 0 {
+	if got := jm.active[target.key()]; got.write != writer || len(got.queuedWrites) != 1 {
 		t.Fatalf("existing writer disturbed: %#v", got)
-	}
-	records, err := jm.store.All()
-	if err != nil || len(records) != 0 {
-		t.Fatalf("rejected job persisted: %#v %v", records, err)
 	}
 }
 
@@ -526,8 +498,8 @@ func TestStatusOverloadDoesNotStrandRecoveredBacklog(t *testing.T) {
 		jm.statusSlots <- struct{}{}
 	}
 	err = jm.Submit(context.Background(), target, bus.InboundMessage{Channel: "discord", ChatID: "room", Content: "new"})
-	if err == nil {
-		t.Fatal("expected status overload rejection")
+	if err != nil {
+		t.Fatal(err)
 	}
 	select {
 	case <-runner.started:
@@ -549,69 +521,43 @@ func TestForcePreparingJobExplainsPreparation(t *testing.T) {
 	}
 }
 
-func TestCancelDoesNotBlockOnHungCard(t *testing.T) {
-	progress := &hungProgress{started: make(chan struct{}, 1), release: make(chan struct{})}
-	defer close(progress.release)
-	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{}, nil, progress, func(LoopTarget) (JobRunner, error) { return &fakeJobRunner{}, nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	job := &activeJob{record: JobRecord{ID: "job-1", State: JobStateQueued, StatusMessageID: "card"}, ctx: ctx, cancel: cancel}
-	jm.active["target"] = &targetActiveJobs{queuedWrites: []*activeJob{job}}
-	done := make(chan error, 1)
-	go func() { _, err := jm.cancelQueuedJob("target", job.snapshot().ID); done <- err }()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(300 * time.Millisecond):
-		t.Fatal("cancel blocked on progress card")
-	}
-}
-
-func TestForceDoesNotBlockOnHungCard(t *testing.T) {
-	progress := &hungProgress{started: make(chan struct{}, 1), release: make(chan struct{})}
-	defer close(progress.release)
-	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{}, nil, progress, func(LoopTarget) (JobRunner, error) { return &fakeJobRunner{}, nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	job := &activeJob{record: JobRecord{ID: "job-1", State: JobStateQueued, StatusMessageID: "card"}}
-	jm.active["target"] = &targetActiveJobs{write: &activeJob{record: JobRecord{ID: "write", State: JobStateRunning}}, queuedWrites: []*activeJob{job}}
-	done := make(chan error, 1)
-	go func() { _, err := jm.forceQueuedJob("target", "job-1"); done <- err }()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(300 * time.Millisecond):
-		t.Fatal("force blocked on progress card")
-	}
-}
-
-func TestStatusDoesNotBlockOnHungCard(t *testing.T) {
-	progress := &hungProgress{started: make(chan struct{}, 1), release: make(chan struct{})}
-	defer close(progress.release)
-	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{}, nil, progress, func(LoopTarget) (JobRunner, error) { return &fakeJobRunner{}, nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	job := &activeJob{record: JobRecord{ID: "job-1", State: JobStateRunning, StatusMessageID: "card"}}
-	done := make(chan error, 1)
-	go func() {
-		done <- jm.handleControl(context.Background(), bus.InboundMessage{}, "target", []*activeJob{job}, parsedJobControl{Kind: jobControlStatus})
-	}()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(300 * time.Millisecond):
-		t.Fatal("status blocked on progress card")
+func TestControlsDoNotBlockOnHungCard(t *testing.T) {
+	for _, control := range []string{"cancel", "force", "status"} {
+		t.Run(control, func(t *testing.T) {
+			progress := &hungProgress{started: make(chan struct{}, 1), release: make(chan struct{})}
+			defer close(progress.release)
+			jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{}, nil, progress, func(LoopTarget) (JobRunner, error) { return &fakeJobRunner{}, nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			job := &activeJob{record: JobRecord{ID: "job-1", State: JobStateQueued, StatusMessageID: "card"}, ctx: ctx, cancel: cancel}
+			jm.active["target"] = &targetActiveJobs{write: &activeJob{record: JobRecord{ID: "write", State: JobStateRunning}}, queuedWrites: []*activeJob{job}}
+			if control == "status" {
+				job.record.State = JobStateRunning
+			}
+			done := make(chan error, 1)
+			go func() {
+				switch control {
+				case "cancel":
+					_, err = jm.cancelQueuedJob("target", job.snapshot().ID)
+				case "force":
+					_, err = jm.forceQueuedJob("target", job.snapshot().ID)
+				case "status":
+					err = jm.handleControl(ctx, bus.InboundMessage{}, "target", []*activeJob{job}, parsedJobControl{Kind: jobControlStatus})
+				}
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(300 * time.Millisecond):
+				t.Fatalf("%s blocked on progress card", control)
+			}
+		})
 	}
 }
 

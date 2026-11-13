@@ -731,62 +731,79 @@ func TestQueuedStatusDoesNotBlockSubmit(t *testing.T) {
 	}
 }
 
-func TestWaitingPreparedBTWCancelledByParent(t *testing.T) {
-	started, release := make(chan struct{}), make(chan struct{})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		close(started)
-		select {
-		case <-release:
-			_, _ = w.Write([]byte("file"))
-		case <-r.Context().Done():
-		}
-	}))
-	defer server.Close()
-	writer := &fakeJobRunner{started: make(chan struct{}), block: make(chan struct{})}
-	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{MaxConcurrent: 2}, nil, nil, func(LoopTarget) (JobRunner, error) { return writer, nil })
-	if err != nil {
-		t.Fatal(err)
+func TestWaitingPreparedJobCancelledByParent(t *testing.T) {
+	for _, side := range []bool{true, false} {
+		t.Run(fmt.Sprintf("side=%t", side), func(t *testing.T) {
+			started, release := make(chan struct{}), make(chan struct{})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				close(started)
+				select {
+				case <-release:
+					_, _ = w.Write([]byte("file"))
+				case <-r.Context().Done():
+				}
+			}))
+			defer server.Close()
+			writer := &fakeJobRunner{started: make(chan struct{}), block: make(chan struct{})}
+			jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{MaxConcurrent: 2}, nil, nil, func(LoopTarget) (JobRunner, error) { return writer, nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			jm.SetSideLaneResolver(func(LoopTarget) (JobRunner, error) { return &fakeJobRunner{}, nil })
+			target := LoopTarget{Workspace: t.TempDir()}.normalized()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			attachment := bus.InboundMessage{Channel: "discord", ChatID: "room", Content: "attachment", Media: []string{server.URL + "/file"}}
+			write := bus.InboundMessage{Channel: "discord", ChatID: "room", Content: "write"}
+			if side {
+				attachment.Content = "/btw attachment"
+				if err := jm.Submit(ctx, target, attachment); err != nil {
+					t.Fatal(err)
+				}
+				<-started
+			}
+			if err := jm.Submit(context.Background(), target, write); err != nil {
+				t.Fatal(err)
+			}
+			<-writer.started
+			defer func() { close(writer.block); waitForNoActiveJobs(t, jm, target.key()) }()
+			if !side {
+				if err := jm.Submit(ctx, target, attachment); err != nil {
+					t.Fatal(err)
+				}
+				<-started
+			}
+			close(release)
+			if side {
+				deadline := time.Now().Add(time.Second)
+				ready := false
+				for time.Now().Before(deadline) {
+					jm.mu.Lock()
+					set := jm.active[target.key()]
+					ready = set != nil && len(set.preparing) == 1 && set.preparing[0].prepared
+					jm.mu.Unlock()
+					if ready {
+						break
+					}
+					time.Sleep(time.Millisecond)
+				}
+				if !ready {
+					t.Fatal("side job did not finish preparation")
+				}
+			} else {
+				waitForQueuedWrite(t, jm, target.key(), 1)
+			}
+			cancel()
+			deadline := time.Now().Add(time.Second)
+			for time.Now().Before(deadline) {
+				if findJobRecordByAskSummary(t, jm, "attachment").State == JobStateCancelled {
+					return
+				}
+				time.Sleep(time.Millisecond)
+			}
+			t.Fatal("waiting prepared job did not cancel")
+		})
 	}
-	jm.SetSideLaneResolver(func(LoopTarget) (JobRunner, error) { return &fakeJobRunner{}, nil })
-	target := LoopTarget{Workspace: t.TempDir()}.normalized()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	msg := bus.InboundMessage{Channel: "discord", ChatID: "room", Content: "/btw attachment", Media: []string{server.URL + "/file"}}
-	if err := jm.Submit(ctx, target, msg); err != nil {
-		t.Fatal(err)
-	}
-	<-started
-	msg.Content, msg.Media = "write", nil
-	if err := jm.Submit(context.Background(), target, msg); err != nil {
-		t.Fatal(err)
-	}
-	<-writer.started
-	defer func() { close(writer.block); waitForNoActiveJobs(t, jm, target.key()) }()
-	close(release)
-	deadline := time.Now().Add(time.Second)
-	ready := false
-	for time.Now().Before(deadline) {
-		jm.mu.Lock()
-		set := jm.active[target.key()]
-		ready = set != nil && len(set.preparing) == 1 && set.preparing[0].prepared
-		jm.mu.Unlock()
-		if ready {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
-	if !ready {
-		t.Fatal("side job did not finish preparation")
-	}
-	cancel()
-	deadline = time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if findJobRecordByAskSummary(t, jm, "attachment").State == JobStateCancelled {
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatal("waiting side job did not cancel")
 }
 
 func TestPreparationSaveFailureIsReportedAndNotExecuted(t *testing.T) {
@@ -949,238 +966,132 @@ func (r *serializedRunner) RunJob(ctx context.Context, msg bus.InboundMessage, _
 	return "done", nil
 }
 
-func TestPreparedWriteWaitsForActiveWrite(t *testing.T) {
-	started, release := make(chan struct{}), make(chan struct{})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		close(started)
-		<-release
-		_, _ = w.Write([]byte("file"))
-	}))
-	defer server.Close()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	runner := &serializedRunner{started: make(chan string, 2), release: make(chan struct{})}
-	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{MaxConcurrent: 2}, nil, nil, func(LoopTarget) (JobRunner, error) { return runner, nil })
-	if err != nil {
-		t.Fatal(err)
+func TestPreparedJobsWaitForActiveWrite(t *testing.T) {
+	for _, side := range []bool{false, true} {
+		t.Run(fmt.Sprintf("side=%t", side), func(t *testing.T) {
+			started, release := make(chan struct{}), make(chan struct{})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				close(started)
+				<-release
+				_, _ = w.Write([]byte("file"))
+			}))
+			defer server.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			runner := &serializedRunner{started: make(chan string, 2), release: make(chan struct{})}
+			jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{MaxConcurrent: 2}, nil, nil, func(LoopTarget) (JobRunner, error) { return runner, nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			jm.SetSideLaneResolver(func(LoopTarget) (JobRunner, error) { return runner, nil })
+			target := LoopTarget{Workspace: t.TempDir()}.normalized()
+			msg := bus.InboundMessage{Channel: "discord", ChatID: "room", Content: "attachment", Media: []string{server.URL + "/file"}}
+			if side {
+				msg.Content = "/btw attachment"
+			}
+			if err := jm.Submit(ctx, target, msg); err != nil {
+				t.Fatal(err)
+			}
+			<-started
+			msg.Content, msg.Media = "ordinary", nil
+			if err := jm.Submit(ctx, target, msg); err != nil {
+				t.Fatal(err)
+			}
+			if got := <-runner.started; got != "ordinary" {
+				t.Fatalf("first job = %q", got)
+			}
+			close(release)
+			if side {
+				deadline := time.Now().Add(time.Second)
+				ready := false
+				for time.Now().Before(deadline) {
+					jm.mu.Lock()
+					set := jm.active[target.key()]
+					ready = set != nil && len(set.preparing) == 1 && set.preparing[0].prepared
+					jm.mu.Unlock()
+					if ready {
+						break
+					}
+					time.Sleep(time.Millisecond)
+				}
+				if !ready {
+					t.Fatal("side job did not finish preparation")
+				}
+			} else {
+				waitForQueuedWrite(t, jm, target.key(), 1)
+			}
+			select {
+			case got := <-runner.started:
+				t.Fatalf("overlapping write: %q", got)
+			default:
+			}
+			close(runner.release)
+			select {
+			case <-runner.started:
+			case <-time.After(time.Second):
+				t.Fatal("prepared write did not start")
+			}
+			waitForNoActiveJobs(t, jm, target.key())
+		})
 	}
-	target := LoopTarget{Workspace: t.TempDir()}.normalized()
-	msg := bus.InboundMessage{Channel: "discord", ChatID: "room", Content: "attachment", Media: []string{server.URL + "/file"}}
-	if err := jm.Submit(ctx, target, msg); err != nil {
-		t.Fatal(err)
-	}
-	<-started
-	msg.Content, msg.Media = "ordinary", nil
-	if err := jm.Submit(ctx, target, msg); err != nil {
-		t.Fatal(err)
-	}
-	if got := <-runner.started; got != "ordinary" {
-		t.Fatalf("first job = %q", got)
-	}
-	close(release)
-	waitForQueuedWrite(t, jm, target.key(), 1)
-	select {
-	case got := <-runner.started:
-		t.Fatalf("overlapping write: %q", got)
-	default:
-	}
-	close(runner.release)
-	select {
-	case <-runner.started:
-	case <-time.After(time.Second):
-		t.Fatal("prepared write did not start")
-	}
-	waitForNoActiveJobs(t, jm, target.key())
 }
 
-func TestPreparedBTWWaitsForActiveWrite(t *testing.T) {
-	started, release := make(chan struct{}), make(chan struct{})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		close(started)
-		<-release
-		_, _ = w.Write([]byte("file"))
-	}))
-	defer server.Close()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	runner := &serializedRunner{started: make(chan string, 2), release: make(chan struct{})}
-	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{MaxConcurrent: 2}, nil, nil, func(LoopTarget) (JobRunner, error) { return runner, nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	jm.SetSideLaneResolver(func(LoopTarget) (JobRunner, error) { return runner, nil })
-	target := LoopTarget{Workspace: t.TempDir()}.normalized()
-	msg := bus.InboundMessage{Channel: "discord", ChatID: "room", Content: "/btw attachment", Media: []string{server.URL + "/file"}}
-	if err := jm.Submit(ctx, target, msg); err != nil {
-		t.Fatal(err)
-	}
-	<-started
-	msg.Content, msg.Media = "ordinary", nil
-	if err := jm.Submit(ctx, target, msg); err != nil {
-		t.Fatal(err)
-	}
-	if got := <-runner.started; got != "ordinary" {
-		t.Fatalf("first job = %q", got)
-	}
-	close(release)
-	deadline := time.Now().Add(time.Second)
-	ready := false
-	for time.Now().Before(deadline) {
-		jm.mu.Lock()
-		set := jm.active[target.key()]
-		ready = set != nil && len(set.preparing) == 1 && set.preparing[0].prepared
-		jm.mu.Unlock()
-		if ready {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
-	if !ready {
-		t.Fatal("side job did not finish preparation")
-	}
-	select {
-	case got := <-runner.started:
-		t.Fatalf("side job overlapped writer: %q", got)
-	default:
-	}
-	close(runner.release)
-	select {
-	case <-runner.started:
-	case <-time.After(time.Second):
-		t.Fatal("prepared side job did not start")
-	}
-	waitForNoActiveJobs(t, jm, target.key())
-}
-
-func TestWriteWaitsForActivePreparedBTW(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("file")) }))
-	defer server.Close()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	write := &fakeJobRunner{started: make(chan struct{})}
-	side := &fakeJobRunner{started: make(chan struct{}), block: make(chan struct{})}
-	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{MaxConcurrent: 2}, nil, nil, func(LoopTarget) (JobRunner, error) { return write, nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	jm.SetSideLaneResolver(func(LoopTarget) (JobRunner, error) { return side, nil })
-	target := LoopTarget{Workspace: t.TempDir()}.normalized()
-	released := false
-	defer func() {
-		if !released {
+func TestWriteWaitsForActiveBTW(t *testing.T) {
+	for _, attachmentOnSide := range []bool{true, false} {
+		t.Run(fmt.Sprintf("attachmentOnSide=%t", attachmentOnSide), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("file")) }))
+			defer server.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			write := &fakeJobRunner{started: make(chan struct{})}
+			side := &fakeJobRunner{started: make(chan struct{}), block: make(chan struct{})}
+			jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{MaxConcurrent: 2}, nil, nil, func(LoopTarget) (JobRunner, error) { return write, nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			jm.SetSideLaneResolver(func(LoopTarget) (JobRunner, error) { return side, nil })
+			target := LoopTarget{Workspace: t.TempDir()}.normalized()
+			released := false
+			defer func() {
+				if !released {
+					close(side.block)
+				}
+				waitForNoActiveJobs(t, jm, target.key())
+			}()
+			msg := bus.InboundMessage{Channel: "discord", ChatID: "room", Content: "/btw side"}
+			if attachmentOnSide {
+				msg.Media = []string{server.URL + "/file"}
+			}
+			if err := jm.Submit(ctx, target, msg); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-side.started:
+			case <-time.After(time.Second):
+				t.Fatal("side job did not start")
+			}
+			msg.Content, msg.Media = "write", nil
+			if !attachmentOnSide {
+				msg.Media = []string{server.URL + "/file"}
+			}
+			if err := jm.Submit(ctx, target, msg); err != nil {
+				t.Fatal(err)
+			}
+			waitForQueuedWrite(t, jm, target.key(), 1)
+			select {
+			case <-write.started:
+				t.Fatal("write overlapped side job")
+			default:
+			}
 			close(side.block)
-		}
-		waitForNoActiveJobs(t, jm, target.key())
-	}()
-	msg := bus.InboundMessage{Channel: "discord", ChatID: "room", Content: "/btw attachment", Media: []string{server.URL + "/file"}}
-	if err := jm.Submit(ctx, target, msg); err != nil {
-		t.Fatal(err)
+			released = true
+			select {
+			case <-write.started:
+			case <-time.After(time.Second):
+				t.Fatal("write did not start after side job")
+			}
+		})
 	}
-	select {
-	case <-side.started:
-	case <-time.After(time.Second):
-		t.Fatal("side job did not start")
-	}
-	msg.Content, msg.Media = "write", nil
-	if err := jm.Submit(ctx, target, msg); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-write.started:
-		t.Fatal("write overlapped side job")
-	case <-time.After(250 * time.Millisecond):
-	}
-	close(side.block)
-	released = true
-	select {
-	case <-write.started:
-	case <-time.After(time.Second):
-		t.Fatal("write did not start after side job finished")
-	}
-}
-
-func TestPreparedWriteWaitsForActiveBTW(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("file")) }))
-	defer server.Close()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	write := &fakeJobRunner{started: make(chan struct{})}
-	side := &fakeJobRunner{started: make(chan struct{}), block: make(chan struct{})}
-	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{MaxConcurrent: 2}, nil, nil, func(LoopTarget) (JobRunner, error) { return write, nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	jm.SetSideLaneResolver(func(LoopTarget) (JobRunner, error) { return side, nil })
-	target := LoopTarget{Workspace: t.TempDir()}.normalized()
-	released := false
-	defer func() {
-		if !released {
-			close(side.block)
-		}
-		waitForNoActiveJobs(t, jm, target.key())
-	}()
-	msg := bus.InboundMessage{Channel: "discord", ChatID: "room", Content: "/btw side"}
-	if err := jm.Submit(ctx, target, msg); err != nil {
-		t.Fatal(err)
-	}
-	<-side.started
-	msg.Content, msg.Media = "attachment", []string{server.URL + "/file"}
-	if err := jm.Submit(ctx, target, msg); err != nil {
-		t.Fatal(err)
-	}
-	waitForQueuedWrite(t, jm, target.key(), 1)
-	select {
-	case <-write.started:
-		t.Fatal("prepared write overlapped side job")
-	default:
-	}
-	close(side.block)
-	released = true
-	select {
-	case <-write.started:
-	case <-time.After(time.Second):
-		t.Fatal("prepared write did not start after side job")
-	}
-}
-
-func TestPreparedQueuedWriteCancelsBeforeActiveWriterFinishes(t *testing.T) {
-	started, release := make(chan struct{}), make(chan struct{})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		close(started)
-		<-release
-		_, _ = w.Write([]byte("file"))
-	}))
-	defer server.Close()
-	writer := &fakeJobRunner{started: make(chan struct{}), block: make(chan struct{})}
-	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{MaxConcurrent: 2}, nil, nil, func(LoopTarget) (JobRunner, error) { return writer, nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	target := LoopTarget{Workspace: t.TempDir()}.normalized()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	defer func() { close(writer.block); waitForNoActiveJobs(t, jm, target.key()) }()
-	msg := bus.InboundMessage{Channel: "discord", ChatID: "room", Content: "writer"}
-	if err := jm.Submit(context.Background(), target, msg); err != nil {
-		t.Fatal(err)
-	}
-	<-writer.started
-	msg.Content, msg.Media = "attachment", []string{server.URL + "/file"}
-	if err := jm.Submit(ctx, target, msg); err != nil {
-		t.Fatal(err)
-	}
-	<-started
-	close(release)
-	waitForQueuedWrite(t, jm, target.key(), 1)
-	cancel()
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if findJobRecordByAskSummary(t, jm, "attachment").State == JobStateCancelled {
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatal("prepared queued write was not cancelled while writer remained active")
 }
 
 func TestDispatcherAttachmentCaptionIsNotJobControl(t *testing.T) {

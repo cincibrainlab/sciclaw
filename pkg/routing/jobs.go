@@ -44,16 +44,11 @@ type boundedProgress struct {
 	slots chan struct{}
 }
 
-type reservedProgressKey struct{}
-
 func (p *boundedProgress) SendOrEditProgress(ctx context.Context, channel, chat, id string, msg bus.OutboundMessage) (string, error) {
-	reservation, _ := ctx.Value(reservedProgressKey{}).(*atomic.Bool)
-	if reservation == nil || !reservation.CompareAndSwap(false, true) {
-		select {
-		case p.slots <- struct{}{}:
-		default:
-			return "", fmt.Errorf("progress capacity exhausted")
-		}
+	select {
+	case p.slots <- struct{}{}:
+	default:
+		return "", fmt.Errorf("progress capacity exhausted")
 	}
 	type result struct {
 		id  string
@@ -438,40 +433,6 @@ func (jm *JobManager) Submit(ctx context.Context, target LoopTarget, msg bus.Inb
 			return nil
 		}
 	}
-	select {
-	case jm.statusSlots <- struct{}{}:
-	default:
-		if preparing {
-			<-jm.preparation
-		}
-		if activeSet.empty() {
-			delete(jm.active, targetKey)
-		}
-		jm.mu.Unlock()
-		if recoveredWrite != nil {
-			go jm.runJob(recoveredWrite.ctx, recoveredWrite.target, recoveredWrite.msg, recoveredWrite)
-		}
-		return fmt.Errorf("job status capacity exhausted; please try again shortly")
-	}
-	progress, _ := jm.progress.(*boundedProgress)
-	if progress != nil {
-		select {
-		case progress.slots <- struct{}{}:
-		default:
-			<-jm.statusSlots
-			if preparing {
-				<-jm.preparation
-			}
-			if activeSet.empty() {
-				delete(jm.active, targetKey)
-			}
-			jm.mu.Unlock()
-			if recoveredWrite != nil {
-				go jm.runJob(recoveredWrite.ctx, recoveredWrite.target, recoveredWrite.msg, recoveredWrite)
-			}
-			return fmt.Errorf("job progress capacity exhausted; please try again shortly")
-		}
-	}
 	jobID, shortID := jm.nextJobID()
 	jobCtx, cancel := context.WithCancel(ctx)
 	persistedMessage := request.Message
@@ -513,10 +474,6 @@ func (jm *JobManager) Submit(ctx context.Context, target LoopTarget, msg bus.Inb
 			}
 			jm.mu.Unlock()
 			<-jm.preparation
-			<-jm.statusSlots
-			if progress != nil {
-				<-progress.slots
-			}
 			cancel()
 			if recoveredWrite != nil {
 				go jm.runJob(recoveredWrite.ctx, recoveredWrite.target, recoveredWrite.msg, recoveredWrite)
@@ -527,7 +484,7 @@ func (jm *JobManager) Submit(ctx context.Context, target LoopTarget, msg bus.Inb
 		if recoveredWrite != nil {
 			go jm.runJob(recoveredWrite.ctx, recoveredWrite.target, recoveredWrite.msg, recoveredWrite)
 		}
-		jm.sendQueuedStatusReserved(ctx, active, JobRecord{}, 0, progress != nil)
+		jm.sendQueuedStatusAsync(ctx, active, JobRecord{}, 0)
 		go jm.prepareJob(active)
 		return nil
 	}
@@ -569,10 +526,6 @@ func (jm *JobManager) Submit(ctx context.Context, target LoopTarget, msg bus.Inb
 			delete(jm.active, targetKey)
 		}
 		jm.mu.Unlock()
-		<-jm.statusSlots
-		if progress != nil {
-			<-progress.slots
-		}
 		cancel()
 		if recoveredWrite != nil {
 			go jm.runJob(recoveredWrite.ctx, recoveredWrite.target, recoveredWrite.msg, recoveredWrite)
@@ -589,10 +542,10 @@ func (jm *JobManager) Submit(ctx context.Context, target LoopTarget, msg bus.Inb
 	}
 
 	if !startImmediately {
-		jm.sendQueuedStatusReserved(ctx, active, activeWrite, queuedPosition, progress != nil)
+		jm.sendQueuedStatusAsync(ctx, active, activeWrite, queuedPosition)
 		return nil
 	}
-	jm.sendQueuedStatusReserved(ctx, active, JobRecord{}, 0, progress != nil)
+	jm.sendQueuedStatusAsync(ctx, active, JobRecord{}, 0)
 	go jm.runJob(jobCtx, target, request.Message, active)
 	return nil
 }
@@ -604,18 +557,15 @@ func (jm *JobManager) sendQueuedStatusAsync(ctx context.Context, active *activeJ
 		logger.WarnCF("jobs", "Queued status capacity exhausted", map[string]interface{}{"job_id": active.snapshot().ID})
 		return false
 	}
-	jm.sendQueuedStatusReserved(ctx, active, running, position, false)
+	jm.sendQueuedStatusReserved(ctx, active, running, position)
 	return true
 }
 
-func (jm *JobManager) sendQueuedStatusReserved(ctx context.Context, active *activeJob, running JobRecord, position int, progressReserved bool) {
+func (jm *JobManager) sendQueuedStatusReserved(ctx context.Context, active *activeJob, running JobRecord, position int) {
 	go func() {
 		defer func() { <-jm.statusSlots }()
 		ctx, cancel := context.WithTimeout(ctx, time.Second)
 		defer cancel()
-		if progressReserved {
-			ctx = context.WithValue(ctx, reservedProgressKey{}, &atomic.Bool{})
-		}
 		if err := jm.sendQueuedStatus(ctx, active, running, position); err != nil {
 			logger.WarnCF("jobs", "Failed to send queued status", map[string]interface{}{"job_id": active.snapshot().ID, "error": err.Error()})
 			record := active.snapshot()
