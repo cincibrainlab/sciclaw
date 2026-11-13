@@ -619,11 +619,7 @@ func (jm *JobManager) sendQueuedStatusReserved(ctx context.Context, active *acti
 		if err := jm.sendQueuedStatus(ctx, active, running, position); err != nil {
 			logger.WarnCF("jobs", "Failed to send queued status", map[string]interface{}{"job_id": active.snapshot().ID, "error": err.Error()})
 			record := active.snapshot()
-			noticeCtx, cancelNotice := context.WithTimeout(context.Background(), time.Second)
-			defer cancelNotice()
-			if noticeErr := jm.sendText(noticeCtx, record.Channel, record.ChatID, "Could not send a job status card; use status "+record.ShortID+" to check the job."); noticeErr != nil {
-				logger.WarnCF("jobs", "Failed to send status failure notice", map[string]interface{}{"job_id": record.ID, "error": noticeErr.Error()})
-			}
+			_ = publishJobResponse(context.Background(), jm.bus, bus.OutboundMessage{Channel: record.Channel, ChatID: record.ChatID, Content: "Could not send a job status card; use status " + record.ShortID + " to check the job."}, "Job status failure notice dropped")
 		}
 	}()
 }

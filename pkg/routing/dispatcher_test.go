@@ -148,6 +148,54 @@ func TestDroppedPreparationRejectionIsObservableAtHighLogLevels(t *testing.T) {
 	}
 }
 
+func TestAsyncCardFailureWithFullBusIsLoggedAtHighLevels(t *testing.T) {
+	oldLevel, oldOutput := logger.GetLevel(), log.Writer()
+	file, err := os.Create(filepathJoin(t.TempDir(), "stderr.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	log.SetOutput(file)
+	defer func() { logger.SetLevel(oldLevel); log.SetOutput(oldOutput); _ = file.Close() }()
+	for _, level := range []logger.LogLevel{logger.ERROR, logger.FATAL} {
+		if err := file.Truncate(0); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := file.Seek(0, 0); err != nil {
+			t.Fatal(err)
+		}
+		logger.SetLevel(level)
+		mb := bus.NewMessageBus()
+		for i := 0; i < 100; i++ {
+			if err := mb.PublishOutbound(context.Background(), bus.OutboundMessage{}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{MaxConcurrent: 1}, mb, &fakeProgressMessenger{editFail: true}, func(LoopTarget) (JobRunner, error) { return &fakeJobRunner{}, nil })
+		if err != nil {
+			t.Fatal(err)
+		}
+		job := &activeJob{record: JobRecord{ID: "job-1", Channel: "discord", ChatID: "room", State: JobStateRunning, StatusMessageID: "card"}}
+		if _, ok := jm.refreshSelectedJobCard(context.Background(), job); !ok {
+			t.Fatal("refresh was not scheduled")
+		}
+		deadline := time.Now().Add(2 * time.Second)
+		for len(jm.statusSlots) != 0 && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+		if len(jm.statusSlots) != 0 {
+			t.Fatal("refresh did not finish")
+		}
+		mb.Close()
+		data, err := os.ReadFile(file.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(data), "Job status failure notice dropped") {
+			t.Fatalf("level %v: asynchronous failure was silent", level)
+		}
+	}
+}
+
 func TestDispatcherDispatchResolved_StagesInboundMediaBeforePoolDispatch(t *testing.T) {
 	created := 0
 	handlers := map[string]*fakeHandler{}
