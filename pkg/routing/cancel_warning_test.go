@@ -1,18 +1,28 @@
 package routing
 
 import (
+	"bytes"
 	"context"
+	"log"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
 func TestAutomaticCancellationSaveFailureWarnsWithoutBlocking(t *testing.T) {
 	for _, full := range []bool{false, true} {
 		t.Run(map[bool]string{false: "available", true: "full"}[full], func(t *testing.T) {
+			var logs bytes.Buffer
+			if full {
+				oldLevel, oldOutput := logger.GetLevel(), log.Writer()
+				logger.SetLevel(logger.FATAL)
+				log.SetOutput(&logs)
+				defer func() { logger.SetLevel(oldLevel); log.SetOutput(oldOutput) }()
+			}
 			mb := bus.NewMessageBus()
 			defer mb.Close()
 			store, err := newJobStore(filepath.Join(t.TempDir(), "jobs.json"))
@@ -46,6 +56,10 @@ func TestAutomaticCancellationSaveFailureWarnsWithoutBlocking(t *testing.T) {
 				t.Fatalf("failed save reported as durable: %v, %v", records, err)
 			}
 			if full {
+				output := logs.String()
+				if !strings.Contains(output, "Cancellation not persisted; job may run after restart") || !strings.Contains(output, "Cancellation persistence notice dropped") || strings.Contains(output, "SECRET_CANARY") {
+					t.Fatalf("missing or unsafe cancellation fallback logs: %s", output)
+				}
 				return
 			}
 			readCtx, stop := context.WithTimeout(context.Background(), 100*time.Millisecond)
