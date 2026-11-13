@@ -87,6 +87,181 @@ type fakeJobRunner struct {
 	lastMsg bus.InboundMessage
 }
 
+func TestJobStoreIgnoresStaleActiveSnapshots(t *testing.T) {
+	store, err := newJobStore(filepathJoin(t.TempDir(), "jobs.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := &activeJob{record: JobRecord{ID: "job-1", State: JobStateQueued}}
+	old := job.snapshot()
+	current := job.update(func(r *JobRecord) { r.State = JobStateCancelled })
+	if err := store.Save(current); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(old); err != nil {
+		t.Fatal(err)
+	}
+	records, err := store.All()
+	if err != nil || len(records) != 1 || records[0].State != JobStateCancelled {
+		t.Fatalf("stale save replaced cancellation: %#v, %v", records, err)
+	}
+}
+
+func TestJobStoreFailedSaveDoesNotReportSuccessInMemory(t *testing.T) {
+	store, err := newJobStore(filepathJoin(t.TempDir(), "jobs.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(JobRecord{ID: "job-1", State: JobStateQueued}); err != nil {
+		t.Fatal(err)
+	}
+	store.path = filepathJoin(t.TempDir(), "missing", "jobs.json")
+	if err := store.Save(JobRecord{ID: "job-1", State: JobStateDone}); err == nil {
+		t.Fatal("expected save error")
+	}
+	records, err := store.All()
+	if err != nil || len(records) != 1 || records[0].State != JobStateQueued {
+		t.Fatalf("failed save visible as success: %#v %v", records, err)
+	}
+}
+
+func TestSubmitPersistenceFailureDoesNotRun(t *testing.T) {
+	runner := &fakeJobRunner{}
+	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{}, nil, nil, func(LoopTarget) (JobRunner, error) { return runner, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	jm.store.mu.Lock()
+	jm.store.path = filepathJoin(t.TempDir(), "missing", "jobs.json")
+	jm.store.mu.Unlock()
+	err = jm.Submit(context.Background(), LoopTarget{Workspace: t.TempDir()}, bus.InboundMessage{Channel: "discord", ChatID: "room", Content: "work"})
+	if err == nil {
+		t.Fatal("expected persistence error")
+	}
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	if runner.runs != 0 {
+		t.Fatal("job executed despite persistence error")
+	}
+}
+
+func TestCompletionSaveFailureDoesNotReportDone(t *testing.T) {
+	progress := &fakeProgressMessenger{}
+	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{}, nil, progress, func(LoopTarget) (JobRunner, error) { return &fakeJobRunner{}, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	jm.store.mu.Lock()
+	jm.store.path = filepathJoin(t.TempDir(), "missing", "jobs.json")
+	jm.store.mu.Unlock()
+	job := &activeJob{record: JobRecord{ID: "job-1", State: JobStateRunning, Phase: "thinking"}}
+	reporter := jm.newProgressReporter(context.Background(), job)
+	defer reporter.finish()
+	reporter.complete(JobStateDone, "done", "Done. Reply posted below.", nil)
+	if got := job.snapshot(); got.State == JobStateDone {
+		t.Fatalf("reported undurable completion: %#v", got)
+	}
+	if progressHas(progress, "Done. Reply below.") {
+		t.Fatal("sent success despite persistence failure")
+	}
+}
+
+func TestPreparationOverloadWithoutBusReturnsError(t *testing.T) {
+	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{MaxConcurrent: 1}, nil, nil, func(LoopTarget) (JobRunner, error) { return &fakeJobRunner{}, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < cap(jm.preparation); i++ {
+		jm.preparation <- struct{}{}
+	}
+	err = jm.Submit(context.Background(), LoopTarget{Workspace: t.TempDir()}, bus.InboundMessage{Channel: "discord", ChatID: "room", Media: []string{"https://example.invalid/file"}})
+	if err == nil {
+		t.Fatal("overload was silently discarded")
+	}
+}
+
+func TestCancelDoesNotBlockOnHungCard(t *testing.T) {
+	progress := &hungProgress{started: make(chan struct{}, 1), release: make(chan struct{})}
+	defer close(progress.release)
+	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{}, nil, progress, func(LoopTarget) (JobRunner, error) { return &fakeJobRunner{}, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	job := &activeJob{record: JobRecord{ID: "job-1", State: JobStateQueued, StatusMessageID: "card"}, ctx: ctx, cancel: cancel}
+	jm.active["target"] = &targetActiveJobs{queuedWrites: []*activeJob{job}}
+	done := make(chan error, 1)
+	go func() { _, err := jm.cancelQueuedJob("target", job.snapshot().ID); done <- err }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("cancel blocked on progress card")
+	}
+}
+
+func TestForceDoesNotBlockOnHungCard(t *testing.T) {
+	progress := &hungProgress{started: make(chan struct{}, 1), release: make(chan struct{})}
+	defer close(progress.release)
+	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{}, nil, progress, func(LoopTarget) (JobRunner, error) { return &fakeJobRunner{}, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := &activeJob{record: JobRecord{ID: "job-1", State: JobStateQueued, StatusMessageID: "card"}}
+	jm.active["target"] = &targetActiveJobs{write: &activeJob{record: JobRecord{ID: "write", State: JobStateRunning}}, queuedWrites: []*activeJob{job}}
+	done := make(chan error, 1)
+	go func() { _, err := jm.forceQueuedJob("target", "job-1"); done <- err }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("force blocked on progress card")
+	}
+}
+
+func TestStatusDoesNotBlockOnHungCard(t *testing.T) {
+	progress := &hungProgress{started: make(chan struct{}, 1), release: make(chan struct{})}
+	defer close(progress.release)
+	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{}, nil, progress, func(LoopTarget) (JobRunner, error) { return &fakeJobRunner{}, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := &activeJob{record: JobRecord{ID: "job-1", State: JobStateRunning, StatusMessageID: "card"}}
+	done := make(chan error, 1)
+	go func() {
+		done <- jm.handleControl(context.Background(), bus.InboundMessage{}, "target", []*activeJob{job}, parsedJobControl{Kind: jobControlStatus})
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("status blocked on progress card")
+	}
+}
+
+func TestCancelControlDoesNotRewriteFinishedJob(t *testing.T) {
+	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{}, nil, nil, func(LoopTarget) (JobRunner, error) { return &fakeJobRunner{}, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	job := &activeJob{record: JobRecord{ID: "job-1", State: JobStateDone, Phase: "done"}, ctx: ctx, cancel: cancel}
+	if err := jm.handleControl(ctx, bus.InboundMessage{}, "target", []*activeJob{job}, parsedJobControl{Kind: jobControlCancel}); err != nil {
+		t.Fatal(err)
+	}
+	if got := job.snapshot(); got.Phase != "done" || ctx.Err() != nil {
+		t.Fatalf("finished job changed: %#v", got)
+	}
+}
+
 func TestQueuedAttachmentDoesNotPersistURLAndRequiresResendAfterRestart(t *testing.T) {
 	mb := bus.NewMessageBus()
 	defer mb.Close()
@@ -111,6 +286,13 @@ func TestQueuedAttachmentDoesNotPersistURLAndRequiresResendAfterRestart(t *testi
 	if err := jm.Submit(ctx, target, msg); err != nil {
 		t.Fatal(err)
 	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if findJobRecordByAskSummary(t, jm, "review attachment").StatusMessageID != "" {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -118,7 +300,11 @@ func TestQueuedAttachmentDoesNotPersistURLAndRequiresResendAfterRestart(t *testi
 	if strings.Contains(string(data), "SIGNED_SECRET") {
 		t.Error("signed attachment URL was persisted")
 	}
-	restarted, err := NewJobManager(path, config.JobsConfig{Enabled: true}, mb, progress, resolver)
+	restartPath := filepathJoin(t.TempDir(), "jobs.json")
+	if err := os.WriteFile(restartPath, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := NewJobManager(restartPath, config.JobsConfig{Enabled: true}, mb, progress, resolver)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,6 +452,7 @@ func TestJobManagerBusyStatusAndCancel(t *testing.T) {
 		t.Fatalf("second submit: %v", err)
 	}
 	waitForQueuedWrite(t, jm, target.key(), 1)
+	waitForQueuedCards(t, jm, target.key(), 1)
 	jm.mu.Lock()
 	queuedID := jm.active[target.key()].queuedWrites[0].snapshot().ShortID
 	jm.mu.Unlock()
@@ -935,7 +1122,7 @@ func TestJobManagerOrdinaryResearchTurnQueuesMainLane(t *testing.T) {
 	waitForNoActiveJobs(t, jm, target.key())
 }
 
-func TestJobManagerQueuedSubmissionRollbackOnProgressFailure(t *testing.T) {
+func TestJobManagerQueuedSubmissionSurvivesProgressFailure(t *testing.T) {
 	mb := bus.NewMessageBus()
 	defer mb.Close()
 
@@ -963,10 +1150,16 @@ func TestJobManagerQueuedSubmissionRollbackOnProgressFailure(t *testing.T) {
 		t.Fatal("timed out waiting for first job start")
 	}
 
+	progress.mu.Lock()
 	progress.sendFail = true
+	progress.mu.Unlock()
 	err = jm.Submit(context.Background(), target, bus.InboundMessage{Channel: "discord", ChatID: "room-1", Content: "second job"})
-	if err == nil || !strings.Contains(err.Error(), "send queued status") {
-		t.Fatalf("expected queued progress send failure, got %v", err)
+	if err != nil {
+		t.Fatalf("expected durable enqueue, got %v", err)
+	}
+	out := mustNextOutbound(t, mb)
+	if !strings.Contains(out.Content, "Could not send a job status card") {
+		t.Fatalf("missing status failure notice: %#v", out)
 	}
 
 	jm.mu.Lock()
@@ -976,16 +1169,16 @@ func TestJobManagerQueuedSubmissionRollbackOnProgressFailure(t *testing.T) {
 		queued = len(activeSet.queuedWrites)
 	}
 	jm.mu.Unlock()
-	if queued != 0 {
-		t.Fatalf("expected queued job rollback, still have %d queued jobs", queued)
+	if queued != 1 {
+		t.Fatalf("expected retained queued job, got %d", queued)
 	}
 	records, err := jm.store.All()
 	if err != nil {
 		t.Fatalf("store.All: %v", err)
 	}
 	for _, record := range records {
-		if record.AskSummary == "second job" && record.State == JobStateQueued {
-			t.Fatalf("expected failed queued submit to be rolled back, found stale queued record: %#v", record)
+		if record.AskSummary == "second job" && record.State != JobStateQueued {
+			t.Fatalf("expected second job to remain queued: %#v", record)
 		}
 	}
 
@@ -994,8 +1187,8 @@ func TestJobManagerQueuedSubmissionRollbackOnProgressFailure(t *testing.T) {
 
 	runner.mu.Lock()
 	defer runner.mu.Unlock()
-	if runner.runs != 1 {
-		t.Fatalf("expected only original running job to execute, runs=%d", runner.runs)
+	if runner.runs != 2 {
+		t.Fatalf("expected both jobs to execute, runs=%d", runner.runs)
 	}
 }
 
@@ -1031,6 +1224,7 @@ func TestJobManagerReplyToQueuedCardCancelsJob(t *testing.T) {
 		t.Fatalf("second submit: %v", err)
 	}
 	waitForQueuedWrite(t, jm, target.key(), 1)
+	waitForQueuedCards(t, jm, target.key(), 1)
 	jm.mu.Lock()
 	queuedStatusID := jm.active[target.key()].queuedWrites[0].snapshot().StatusMessageID
 	jm.mu.Unlock()
@@ -1094,6 +1288,7 @@ func TestJobManagerReplyToQueuedCardForcesJob(t *testing.T) {
 		t.Fatalf("third submit: %v", err)
 	}
 	waitForQueuedWrite(t, jm, target.key(), 2)
+	waitForQueuedCards(t, jm, target.key(), 2)
 
 	jm.mu.Lock()
 	second := jm.active[target.key()].queuedWrites[0].snapshot()
@@ -1159,8 +1354,10 @@ func TestJobManagerReplyToCardStatusRefreshesCanonicalCard(t *testing.T) {
 
 	jm.mu.Lock()
 	statusID := jm.active[target.key()].write.snapshot().StatusMessageID
-	before := len(progress.messages)
 	jm.mu.Unlock()
+	progress.mu.Lock()
+	before := len(progress.messages)
+	progress.mu.Unlock()
 
 	if err := jm.Submit(context.Background(), target, bus.InboundMessage{
 		Channel:  "discord",
@@ -1171,8 +1368,11 @@ func TestJobManagerReplyToCardStatusRefreshesCanonicalCard(t *testing.T) {
 		t.Fatalf("reply status submit: %v", err)
 	}
 	assertNoOutbound(t, mb)
-	if len(progress.messages) <= before {
-		t.Fatalf("expected canonical card refresh, before=%d after=%d", before, len(progress.messages))
+	progress.mu.Lock()
+	after := len(progress.messages)
+	progress.mu.Unlock()
+	if after <= before {
+		t.Fatalf("expected canonical card refresh, before=%d after=%d", before, after)
 	}
 
 	close(runner.block)
@@ -1471,6 +1671,30 @@ func waitForQueuedWrite(t *testing.T, jm *JobManager, targetKey string, want int
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %d queued writes for %s", want, targetKey)
+}
+
+func waitForQueuedCards(t *testing.T, jm *JobManager, targetKey string, want int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		jm.mu.Lock()
+		set := jm.active[targetKey]
+		ready := set != nil && len(set.queuedWrites) == want
+		if ready {
+			for _, job := range set.queuedWrites {
+				if job.snapshot().StatusMessageID == "" {
+					ready = false
+					break
+				}
+			}
+		}
+		jm.mu.Unlock()
+		if ready {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("timed out waiting for queued status cards")
 }
 
 func waitForNoActiveJobs(t *testing.T, jm *JobManager, targetKey string) {
