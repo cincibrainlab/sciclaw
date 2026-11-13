@@ -126,7 +126,7 @@ func TestJobStoreFailedSaveDoesNotReportSuccessInMemory(t *testing.T) {
 	}
 }
 
-func TestAutomaticCancellationRetriesFailedPersistence(t *testing.T) {
+func TestAutomaticCancellationDoesNotRetryFailedPersistence(t *testing.T) {
 	mb := bus.NewMessageBus()
 	defer mb.Close()
 	path := filepathJoin(t.TempDir(), "jobs.json")
@@ -150,149 +150,20 @@ func TestAutomaticCancellationRetriesFailedPersistence(t *testing.T) {
 	jm.store.mu.Lock()
 	jm.store.path = filepathJoin(t.TempDir(), "missing", "jobs.json")
 	jm.store.mu.Unlock()
-	cancel()
-	readCtx, stop := context.WithTimeout(context.Background(), 2*time.Second)
-	defer stop()
-	for {
-		out, ok := mb.SubscribeOutbound(readCtx)
-		if !ok {
-			t.Fatal("missing cancellation persistence warning")
-		}
-		if strings.Contains(out.Content, "may run after restart") {
-			break
-		}
+	job := findJobRecordByAskSummary(t, jm, "queued")
+	done := make(chan struct{})
+	go func() { jm.autoCancelQueuedJob(target.key(), job.ID); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(150 * time.Millisecond):
+		t.Fatal("automatic cancellation retried persistence")
 	}
 	jm.store.mu.Lock()
 	jm.store.path = path
 	jm.store.mu.Unlock()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		data, err := os.ReadFile(path)
-		if err == nil && strings.Contains(string(data), `"state": "cancelled"`) {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatal("cancellation was not durably retried")
-}
-
-func TestAutomaticCancellationReportsUnrecoverablePersistenceFailure(t *testing.T) {
-	mb := bus.NewMessageBus()
-	defer mb.Close()
-	path := filepathJoin(t.TempDir(), "jobs.json")
-	jm, err := NewJobManager(path, config.JobsConfig{}, mb, nil, func(LoopTarget) (JobRunner, error) { return &fakeJobRunner{}, nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	record := JobRecord{ID: "job-1", Channel: "discord", ChatID: "room", State: JobStateQueued, Class: JobClassWrite}
-	if err := jm.store.Save(record); err != nil {
-		t.Fatal(err)
-	}
-	job := &activeJob{record: record, ctx: ctx, cancel: cancel}
-	jm.active["target"] = &targetActiveJobs{queuedWrites: []*activeJob{job}}
-	jm.store.mu.Lock()
-	jm.store.path = filepathJoin(t.TempDir(), "missing", "jobs.json")
-	jm.store.mu.Unlock()
-	done := make(chan struct{})
-	go func() { jm.autoCancelQueuedJob("target", record.ID); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(3 * time.Second):
-		t.Fatal("cancellation retries did not finish")
-	}
-	readCtx, stop := context.WithTimeout(context.Background(), time.Second)
-	defer stop()
-	initial, ok := mb.SubscribeOutbound(readCtx)
-	if !ok || !strings.Contains(initial.Content, "may run after restart") {
-		t.Fatalf("missing initial warning: %#v", initial)
-	}
-	final, ok := mb.SubscribeOutbound(readCtx)
-	if !ok || !strings.Contains(final.Content, "may run after restart") || !strings.Contains(final.Content, "administrator") {
-		t.Fatalf("missing final warning: %#v", final)
-	}
 	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(data), `"state": "queued"`) {
-		t.Fatalf("unexpected persisted state: %s", data)
-	}
-}
-
-func TestAutomaticCancellationReportsRetryCapacityExhaustion(t *testing.T) {
-	logPath := filepathJoin(t.TempDir(), "server.log")
-	if err := logger.EnableFileLogging(logPath); err != nil {
-		t.Fatal(err)
-	}
-	defer logger.DisableFileLogging()
-	mb := bus.NewMessageBus()
-	defer mb.Close()
-	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{MaxConcurrent: 1}, mb, nil, func(LoopTarget) (JobRunner, error) { return &fakeJobRunner{}, nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	record := JobRecord{ID: "job-1", Channel: "discord", ChatID: "room", State: JobStateQueued}
-	if err := jm.store.Save(record); err != nil {
-		t.Fatal(err)
-	}
-	jm.active["target"] = &targetActiveJobs{queuedWrites: []*activeJob{{record: record, ctx: ctx, cancel: cancel}}}
-	jm.store.mu.Lock()
-	jm.store.path = filepathJoin(t.TempDir(), "missing", "jobs.json")
-	jm.store.mu.Unlock()
-	for i := 0; i < cap(jm.cancelRetries); i++ {
-		jm.cancelRetries <- struct{}{}
-	}
-	done := make(chan struct{})
-	go func() { jm.autoCancelQueuedJob("target", record.ID); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("retry overload blocked")
-	}
-	data, err := os.ReadFile(logPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(data), "retry capacity exhausted") || !strings.Contains(string(data), "may run after restart") {
-		t.Fatalf("missing overload log: %s", data)
-	}
-}
-
-func TestAutomaticCancellationDoesNotBlockWhenRetryCapacityAndBusAreFull(t *testing.T) {
-	mb := bus.NewMessageBus()
-	defer mb.Close()
-	for i := 0; i < 100; i++ {
-		if err := mb.PublishOutbound(context.Background(), bus.OutboundMessage{Content: "occupied"}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{MaxConcurrent: 1}, mb, nil, func(LoopTarget) (JobRunner, error) { return &fakeJobRunner{}, nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	record := JobRecord{ID: "job-1", Channel: "discord", ChatID: "room", State: JobStateQueued}
-	if err := jm.store.Save(record); err != nil {
-		t.Fatal(err)
-	}
-	jm.active["target"] = &targetActiveJobs{queuedWrites: []*activeJob{{record: record, ctx: ctx, cancel: cancel}}}
-	jm.store.mu.Lock()
-	jm.store.path = filepathJoin(t.TempDir(), "missing", "jobs.json")
-	jm.store.mu.Unlock()
-	for i := 0; i < cap(jm.cancelRetries); i++ {
-		jm.cancelRetries <- struct{}{}
-	}
-	done := make(chan struct{})
-	go func() { jm.autoCancelQueuedJob("target", record.ID); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(200 * time.Millisecond):
-		t.Fatal("cancellation waited on a full outbound bus before retry admission")
+	if err != nil || !strings.Contains(string(data), `"state": "queued"`) {
+		t.Fatalf("failed cancellation reported as durable: %s, %v", data, err)
 	}
 }
 
@@ -443,12 +314,28 @@ func TestImmediateJobRunsWhenStatusCapacityExhausted(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			slots := jm.statusSlots
 			if messenger {
-				slots = jm.progress.(*boundedProgress).slots
-			}
-			for i := 0; i < cap(slots); i++ {
-				slots <- struct{}{}
+				for i := 0; i < cap(jm.progress.(*boundedProgress).slots); i++ {
+					ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+					_, err := jm.progress.SendOrEditProgress(ctx, "discord", "room", "", bus.OutboundMessage{})
+					cancel()
+					if err == nil {
+						t.Fatal("hung call did not time out")
+					}
+					<-progress.started
+				}
+				if _, err := jm.progress.SendOrEditProgress(context.Background(), "discord", "room", "", bus.OutboundMessage{}); err == nil {
+					t.Fatal("saturated messenger accepted another call")
+				}
+				select {
+				case <-progress.started:
+					t.Fatal("extra call reached hung messenger")
+				default:
+				}
+			} else {
+				for i := 0; i < cap(jm.statusSlots); i++ {
+					jm.statusSlots <- struct{}{}
+				}
 			}
 			target := LoopTarget{Workspace: t.TempDir()}.normalized()
 			if err := jm.Submit(context.Background(), target, bus.InboundMessage{Channel: "discord", ChatID: "room", Content: "work"}); err != nil {
@@ -460,6 +347,13 @@ func TestImmediateJobRunsWhenStatusCapacityExhausted(t *testing.T) {
 				t.Fatal("job did not run with status capacity exhausted")
 			}
 			waitForNoActiveJobs(t, jm, target.key())
+			if messenger {
+				select {
+				case <-progress.started:
+					t.Fatal("job status reached saturated messenger")
+				default:
+				}
+			}
 		})
 	}
 }
@@ -480,6 +374,24 @@ func TestQueuedWriteStatusCapacityDoesNotDisturbWriter(t *testing.T) {
 	}
 	if got := jm.active[target.key()]; got.write != writer || len(got.queuedWrites) != 1 {
 		t.Fatalf("existing writer disturbed: %#v", got)
+	}
+	record := findJobRecordByAskSummary(t, jm, "new")
+	if record.State != JobStateQueued {
+		t.Fatalf("job not persisted as queued: %#v", record)
+	}
+	data, err := os.ReadFile(jm.store.path)
+	if err != nil || !strings.Contains(string(data), record.ID) || !strings.Contains(string(data), `"state": "queued"`) {
+		t.Fatalf("queued job not on disk: %s, %v", data, err)
+	}
+	if _, err := jm.cancelQueuedJob(target.key(), record.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := findJobRecordByAskSummary(t, jm, "new"); got.State != JobStateCancelled {
+		t.Fatalf("queued job was not durably cancelled: %#v", got)
+	}
+	data, err = os.ReadFile(jm.store.path)
+	if err != nil || !strings.Contains(string(data), `"state": "cancelled"`) {
+		t.Fatalf("cancellation not on disk: %s, %v", data, err)
 	}
 }
 

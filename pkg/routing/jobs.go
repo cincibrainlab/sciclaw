@@ -276,7 +276,6 @@ type JobManager struct {
 	semaphore              chan struct{}
 	preparation            chan struct{}
 	statusSlots            chan struct{}
-	cancelRetries          chan struct{}
 	allowBTWDuringWrite    bool
 	mediaRewrites          func() map[string]string
 	interruptedAttachments []JobRecord
@@ -328,7 +327,6 @@ func NewJobManager(storePath string, cfg config.JobsConfig, msgBus *bus.MessageB
 		semaphore:           make(chan struct{}, maxConcurrent),
 		preparation:         make(chan struct{}, maxConcurrent*4),
 		statusSlots:         make(chan struct{}, maxConcurrent*4),
-		cancelRetries:       make(chan struct{}, maxConcurrent*4),
 		allowBTWDuringWrite: cfg.AllowBTWDuringWrite || cfg.AllowReadOnlyDuringWrite,
 		active:              map[string]*targetActiveJobs{},
 	}
@@ -937,35 +935,6 @@ func (jm *JobManager) autoCancelQueuedJob(targetKey, jobID string) {
 		logger.WarnCF("jobs", "Failed to persist queue updates after automatic cancellation", map[string]interface{}{"job_id": jobID})
 		return
 	}
-	select {
-	case jm.cancelRetries <- struct{}{}:
-		defer func() { <-jm.cancelRetries }()
-	default:
-		logger.ErrorCF("jobs", "Cancellation not persisted; job may run after restart (retry capacity exhausted)", map[string]interface{}{"job_id": jobID})
-		return
-	}
-	ref := record.ShortID
-	if ref == "" {
-		ref = record.ID
-	}
-	notice := func(text string) {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		if err := jm.sendText(ctx, record.Channel, record.ChatID, text); err != nil {
-			logger.WarnCF("jobs", "Failed to send cancellation persistence notice", map[string]interface{}{"job_id": jobID})
-		}
-	}
-	notice(fmt.Sprintf("Cancellation of job %s could not be saved; this job may run after restart. Retrying.", ref))
-	// ponytail: three retries; use durable retry coordination if outages commonly last longer.
-	for attempt := 0; attempt < 3; attempt++ {
-		time.Sleep(200 * time.Millisecond)
-		if err = jm.store.Save(record); err == nil {
-			notice(fmt.Sprintf("Cancellation of job %s was saved.", ref))
-			return
-		}
-	}
-	logger.ErrorCF("jobs", "Cancellation not persisted; job may run after restart (retries failed)", map[string]interface{}{"job_id": jobID})
-	notice(fmt.Sprintf("Cancellation of job %s could not be saved; this job may run after restart. Please contact an administrator.", ref))
 }
 
 func (jm *JobManager) prepareJob(active *activeJob) {
