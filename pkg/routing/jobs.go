@@ -42,11 +42,16 @@ type boundedProgress struct {
 	slots chan struct{}
 }
 
+type reservedProgressKey struct{}
+
 func (p *boundedProgress) SendOrEditProgress(ctx context.Context, channel, chat, id string, msg bus.OutboundMessage) (string, error) {
-	select {
-	case p.slots <- struct{}{}:
-	default:
-		return "", fmt.Errorf("progress capacity exhausted")
+	reservation, _ := ctx.Value(reservedProgressKey{}).(*atomic.Bool)
+	if reservation == nil || !reservation.CompareAndSwap(false, true) {
+		select {
+		case p.slots <- struct{}{}:
+		default:
+			return "", fmt.Errorf("progress capacity exhausted")
+		}
 	}
 	type result struct {
 		id  string
@@ -395,6 +400,11 @@ func (jm *JobManager) Submit(ctx context.Context, target LoopTarget, msg bus.Inb
 			return jm.sendBusy(ctx, msg, snapshotActiveJobs(knownJobs), jobClass)
 		}
 	}
+	var recoveredWrite *activeJob
+	if jobClass == JobClassWrite && activeSet.write == nil && len(activeSet.queuedWrites) > 0 && (jm.allowBTWDuringWrite || activeSet.btw == nil) {
+		recoveredWrite = activeSet.popQueuedWrite()
+		activeSet.write = recoveredWrite
+	}
 	preparing := len(request.Message.Media) > 0
 	if preparing {
 		select {
@@ -404,18 +414,49 @@ func (jm *JobManager) Submit(ctx context.Context, target LoopTarget, msg bus.Inb
 				delete(jm.active, targetKey)
 			}
 			jm.mu.Unlock()
+			if recoveredWrite != nil {
+				go jm.runJob(recoveredWrite.ctx, recoveredWrite.target, recoveredWrite.msg, recoveredWrite)
+			}
 			if jm.bus == nil {
 				return fmt.Errorf("too many attachments are being prepared; please try again shortly")
 			}
 			return jm.sendText(ctx, msg.Channel, msg.ChatID, "Too many attachments are being prepared; please try again shortly.")
 		}
 	}
-	var recoveredWrite *activeJob
-	if jobClass == JobClassWrite && activeSet.write == nil && len(activeSet.queuedWrites) > 0 {
-		recoveredWrite = activeSet.popQueuedWrite()
-		activeSet.write = recoveredWrite
+	select {
+	case jm.statusSlots <- struct{}{}:
+	default:
+		if preparing {
+			<-jm.preparation
+		}
+		if activeSet.empty() {
+			delete(jm.active, targetKey)
+		}
+		jm.mu.Unlock()
+		if recoveredWrite != nil {
+			go jm.runJob(recoveredWrite.ctx, recoveredWrite.target, recoveredWrite.msg, recoveredWrite)
+		}
+		return fmt.Errorf("job status capacity exhausted; please try again shortly")
 	}
-
+	progress, _ := jm.progress.(*boundedProgress)
+	if progress != nil {
+		select {
+		case progress.slots <- struct{}{}:
+		default:
+			<-jm.statusSlots
+			if preparing {
+				<-jm.preparation
+			}
+			if activeSet.empty() {
+				delete(jm.active, targetKey)
+			}
+			jm.mu.Unlock()
+			if recoveredWrite != nil {
+				go jm.runJob(recoveredWrite.ctx, recoveredWrite.target, recoveredWrite.msg, recoveredWrite)
+			}
+			return fmt.Errorf("job progress capacity exhausted; please try again shortly")
+		}
+	}
 	jobID, shortID := jm.nextJobID()
 	jobCtx, cancel := context.WithCancel(ctx)
 	persistedMessage := request.Message
@@ -457,6 +498,10 @@ func (jm *JobManager) Submit(ctx context.Context, target LoopTarget, msg bus.Inb
 			}
 			jm.mu.Unlock()
 			<-jm.preparation
+			<-jm.statusSlots
+			if progress != nil {
+				<-progress.slots
+			}
 			cancel()
 			if recoveredWrite != nil {
 				go jm.runJob(recoveredWrite.ctx, recoveredWrite.target, recoveredWrite.msg, recoveredWrite)
@@ -467,7 +512,7 @@ func (jm *JobManager) Submit(ctx context.Context, target LoopTarget, msg bus.Inb
 		if recoveredWrite != nil {
 			go jm.runJob(recoveredWrite.ctx, recoveredWrite.target, recoveredWrite.msg, recoveredWrite)
 		}
-		jm.sendQueuedStatusAsync(ctx, active, JobRecord{}, 0)
+		jm.sendQueuedStatusReserved(ctx, active, JobRecord{}, 0, progress != nil)
 		go jm.prepareJob(active)
 		return nil
 	}
@@ -478,8 +523,12 @@ func (jm *JobManager) Submit(ctx context.Context, target LoopTarget, msg bus.Inb
 	)
 	switch jobClass {
 	case JobClassWrite:
-		if activeSet.write != nil {
-			activeWrite = activeSet.write.snapshot()
+		if activeSet.write != nil || (!jm.allowBTWDuringWrite && activeSet.btw != nil) {
+			if activeSet.write != nil {
+				activeWrite = activeSet.write.snapshot()
+			} else {
+				activeWrite = activeSet.btw.snapshot()
+			}
 			queuedPosition = activeSet.enqueueWrite(active)
 			record.Detail = fmt.Sprintf("Queued in main lane · behind %s · position %d", activeWrite.ShortID, queuedPosition)
 			record.Summary = record.Detail
@@ -505,11 +554,18 @@ func (jm *JobManager) Submit(ctx context.Context, target LoopTarget, msg bus.Inb
 			delete(jm.active, targetKey)
 		}
 		jm.mu.Unlock()
+		<-jm.statusSlots
+		if progress != nil {
+			<-progress.slots
+		}
 		cancel()
 		if recoveredWrite != nil {
 			go jm.runJob(recoveredWrite.ctx, recoveredWrite.target, recoveredWrite.msg, recoveredWrite)
 		}
 		return fmt.Errorf("persist queued job: %w", err)
+	}
+	if !startImmediately && jobClass == JobClassWrite {
+		context.AfterFunc(jobCtx, func() { _, _ = jm.cancelQueuedJob(targetKey, record.ID) })
 	}
 	jm.mu.Unlock()
 
@@ -518,9 +574,10 @@ func (jm *JobManager) Submit(ctx context.Context, target LoopTarget, msg bus.Inb
 	}
 
 	if !startImmediately {
-		jm.sendQueuedStatusAsync(ctx, active, activeWrite, queuedPosition)
+		jm.sendQueuedStatusReserved(ctx, active, activeWrite, queuedPosition, progress != nil)
 		return nil
 	}
+	jm.sendQueuedStatusReserved(ctx, active, JobRecord{}, 0, progress != nil)
 	go jm.runJob(jobCtx, target, request.Message, active)
 	return nil
 }
@@ -532,10 +589,18 @@ func (jm *JobManager) sendQueuedStatusAsync(ctx context.Context, active *activeJ
 		logger.WarnCF("jobs", "Queued status capacity exhausted", map[string]interface{}{"job_id": active.snapshot().ID})
 		return false
 	}
+	jm.sendQueuedStatusReserved(ctx, active, running, position, false)
+	return true
+}
+
+func (jm *JobManager) sendQueuedStatusReserved(ctx context.Context, active *activeJob, running JobRecord, position int, progressReserved bool) {
 	go func() {
 		defer func() { <-jm.statusSlots }()
 		ctx, cancel := context.WithTimeout(ctx, time.Second)
 		defer cancel()
+		if progressReserved {
+			ctx = context.WithValue(ctx, reservedProgressKey{}, &atomic.Bool{})
+		}
 		if err := jm.sendQueuedStatus(ctx, active, running, position); err != nil {
 			logger.WarnCF("jobs", "Failed to send queued status", map[string]interface{}{"job_id": active.snapshot().ID, "error": err.Error()})
 			record := active.snapshot()
@@ -546,7 +611,6 @@ func (jm *JobManager) sendQueuedStatusAsync(ctx context.Context, active *activeJ
 			}
 		}
 	}()
-	return true
 }
 
 func replyTargetsTrackedJob(jobs []*activeJob, replyMessageID string) bool {
@@ -962,10 +1026,11 @@ func (jm *JobManager) prepareJob(active *activeJob) {
 		} else {
 			set.btw = active
 		}
-	} else if set.write == nil {
+	} else if set.write == nil && (jm.allowBTWDuringWrite || set.btw == nil) {
 		set.write = active
 	} else {
 		set.enqueueWrite(active)
+		context.AfterFunc(ctx, func() { _, _ = jm.cancelQueuedJob(target.key(), record.ID) })
 		start = false
 	}
 	jm.mu.Unlock()
@@ -980,6 +1045,16 @@ func (jm *JobManager) forceQueuedJob(targetKey, jobID string) (JobRecord, error)
 	if activeSet == nil {
 		jm.mu.Unlock()
 		return JobRecord{}, fmt.Errorf("No queued sciClaw job matches %s.", jobID)
+	}
+	for _, candidate := range activeSet.preparing {
+		if candidate.snapshot().ID == jobID {
+			prepared := candidate.prepared
+			jm.mu.Unlock()
+			if prepared {
+				return JobRecord{}, fmt.Errorf("Job %s is waiting for another job and cannot be forced yet.", jobID)
+			}
+			return JobRecord{}, fmt.Errorf("Job %s is still preparing and cannot be forced yet.", jobID)
+		}
 	}
 	var updatedQueued []JobRecord
 	if activeSet.write != nil {
@@ -1155,7 +1230,12 @@ func (jm *JobManager) runJob(ctx context.Context, target LoopTarget, msg bus.Inb
 				return
 			}
 			activeSet.clear(jobClass)
-			if jobClass == JobClassWrite {
+			if jobClass == JobClassBTW && !jm.allowBTWDuringWrite && activeSet.write == nil {
+				nextWrite = activeSet.popQueuedWrite()
+				if nextWrite != nil {
+					activeSet.write = nextWrite
+				}
+			} else if jobClass == JobClassWrite {
 				nextWrite = activeSet.popQueuedWrite()
 				if nextWrite != nil {
 					activeSet.write = nextWrite
