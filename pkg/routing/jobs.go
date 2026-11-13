@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -76,7 +77,13 @@ func (p *boundedProgress) SendOrEditProgress(ctx context.Context, channel, chat,
 
 type handlerResolverFunc func(target LoopTarget) (JobRunner, error)
 
-type cancellationSaveError struct{ error }
+type cancellationSaveError struct{ cause error }
+
+func (e cancellationSaveError) Error() string {
+	return "Cancellation could not be saved; this job may run after restart."
+}
+
+func (e cancellationSaveError) Unwrap() error { return e.cause }
 
 type JobClass string
 
@@ -930,6 +937,12 @@ func (jm *JobManager) cancelQueuedJob(targetKey, jobID string) (JobRecord, error
 	updatedQueued := jm.reindexQueuedWritesLocked(activeSet)
 	queuedJobs := append([]*activeJob(nil), activeSet.queuedWrites...)
 	cancelErr := jm.store.Save(record)
+	if cancelErr != nil {
+		logger.ErrorCF("jobs", "Cancellation not persisted; job may run after restart", map[string]interface{}{"job_id": record.ID})
+		if logger.GetLevel() > logger.ERROR {
+			log.Print("jobs: Cancellation not persisted; job may run after restart")
+		}
+	}
 	saveErr := cancelErr
 	for _, queued := range updatedQueued {
 		if err := jm.store.Save(queued); err != nil && saveErr == nil {
@@ -963,10 +976,16 @@ func (jm *JobManager) autoCancelQueuedJob(targetKey, jobID string) {
 	}
 	var saveFailure cancellationSaveError
 	if !errors.As(err, &saveFailure) {
-		logger.WarnCF("jobs", "Failed to persist queue updates after automatic cancellation", map[string]interface{}{"job_id": jobID, "error": err.Error()})
+		logger.WarnCF("jobs", "Failed to persist queue updates after automatic cancellation", map[string]interface{}{"job_id": jobID})
 		return
 	}
-	logger.WarnCF("jobs", "Automatic cancellation not persisted; job may run after restart", map[string]interface{}{"job_id": jobID, "error": err.Error()})
+	select {
+	case jm.cancelRetries <- struct{}{}:
+		defer func() { <-jm.cancelRetries }()
+	default:
+		logger.ErrorCF("jobs", "Cancellation not persisted; job may run after restart (retry capacity exhausted)", map[string]interface{}{"job_id": jobID})
+		return
+	}
 	ref := record.ShortID
 	if ref == "" {
 		ref = record.ID
@@ -975,18 +994,10 @@ func (jm *JobManager) autoCancelQueuedJob(targetKey, jobID string) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		if err := jm.sendText(ctx, record.Channel, record.ChatID, text); err != nil {
-			logger.WarnCF("jobs", "Failed to send cancellation persistence notice", map[string]interface{}{"job_id": jobID, "error": err.Error()})
+			logger.WarnCF("jobs", "Failed to send cancellation persistence notice", map[string]interface{}{"job_id": jobID})
 		}
 	}
 	notice(fmt.Sprintf("Cancellation of job %s could not be saved; this job may run after restart. Retrying.", ref))
-	select {
-	case jm.cancelRetries <- struct{}{}:
-		defer func() { <-jm.cancelRetries }()
-	default:
-		logger.ErrorCF("jobs", "Cancellation not persisted; job may run after restart (retry capacity exhausted)", map[string]interface{}{"job_id": jobID})
-		notice(fmt.Sprintf("Cancellation of job %s could not be saved; this job may run after restart. Please contact an administrator.", ref))
-		return
-	}
 	// ponytail: three retries; use durable retry coordination if outages commonly last longer.
 	for attempt := 0; attempt < 3; attempt++ {
 		time.Sleep(200 * time.Millisecond)
@@ -995,7 +1006,7 @@ func (jm *JobManager) autoCancelQueuedJob(targetKey, jobID string) {
 			return
 		}
 	}
-	logger.ErrorCF("jobs", "Cancellation not persisted; job may run after restart (retries failed)", map[string]interface{}{"job_id": jobID, "error": err.Error()})
+	logger.ErrorCF("jobs", "Cancellation not persisted; job may run after restart (retries failed)", map[string]interface{}{"job_id": jobID})
 	notice(fmt.Sprintf("Cancellation of job %s could not be saved; this job may run after restart. Please contact an administrator.", ref))
 }
 

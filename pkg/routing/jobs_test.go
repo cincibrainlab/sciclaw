@@ -3,6 +3,7 @@ package routing
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"sync"
@@ -221,6 +222,11 @@ func TestAutomaticCancellationReportsUnrecoverablePersistenceFailure(t *testing.
 }
 
 func TestAutomaticCancellationReportsRetryCapacityExhaustion(t *testing.T) {
+	logPath := filepathJoin(t.TempDir(), "server.log")
+	if err := logger.EnableFileLogging(logPath); err != nil {
+		t.Fatal(err)
+	}
+	defer logger.DisableFileLogging()
 	mb := bus.NewMessageBus()
 	defer mb.Close()
 	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{MaxConcurrent: 1}, mb, nil, func(LoopTarget) (JobRunner, error) { return &fakeJobRunner{}, nil })
@@ -247,14 +253,120 @@ func TestAutomaticCancellationReportsRetryCapacityExhaustion(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("retry overload blocked")
 	}
-	readCtx, stop := context.WithTimeout(context.Background(), time.Second)
-	defer stop()
-	if _, ok := mb.SubscribeOutbound(readCtx); !ok {
-		t.Fatal("missing initial warning")
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
 	}
-	final, ok := mb.SubscribeOutbound(readCtx)
-	if !ok || !strings.Contains(final.Content, "may run after restart") || !strings.Contains(final.Content, "administrator") {
-		t.Fatalf("missing overload warning: %#v", final)
+	if !strings.Contains(string(data), "retry capacity exhausted") || !strings.Contains(string(data), "may run after restart") {
+		t.Fatalf("missing overload log: %s", data)
+	}
+}
+
+func TestAutomaticCancellationDoesNotBlockWhenRetryCapacityAndBusAreFull(t *testing.T) {
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+	for i := 0; i < 100; i++ {
+		if err := mb.PublishOutbound(context.Background(), bus.OutboundMessage{Content: "occupied"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{MaxConcurrent: 1}, mb, nil, func(LoopTarget) (JobRunner, error) { return &fakeJobRunner{}, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	record := JobRecord{ID: "job-1", Channel: "discord", ChatID: "room", State: JobStateQueued}
+	if err := jm.store.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	jm.active["target"] = &targetActiveJobs{queuedWrites: []*activeJob{{record: record, ctx: ctx, cancel: cancel}}}
+	jm.store.mu.Lock()
+	jm.store.path = filepathJoin(t.TempDir(), "missing", "jobs.json")
+	jm.store.mu.Unlock()
+	for i := 0; i < cap(jm.cancelRetries); i++ {
+		jm.cancelRetries <- struct{}{}
+	}
+	done := make(chan struct{})
+	go func() { jm.autoCancelQueuedJob("target", record.ID); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("cancellation waited on a full outbound bus before retry admission")
+	}
+}
+
+func TestCancellationSaveFailureLogsSynchronouslyWithoutPath(t *testing.T) {
+	logPath := filepathJoin(t.TempDir(), "server.log")
+	if err := logger.EnableFileLogging(logPath); err != nil {
+		t.Fatal(err)
+	}
+	defer logger.DisableFileLogging()
+	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{}, nil, nil, func(LoopTarget) (JobRunner, error) { return &fakeJobRunner{}, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	record := JobRecord{ID: "job-1", State: JobStateQueued}
+	if err := jm.store.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	jm.active["target"] = &targetActiveJobs{queuedWrites: []*activeJob{{record: record, ctx: ctx, cancel: cancel}}}
+	jm.store.mu.Lock()
+	jm.store.path = filepathJoin(t.TempDir(), "SECRET_CANARY", "jobs.json")
+	jm.store.mu.Unlock()
+	_, cancelErr := jm.cancelQueuedJob("target", record.ID)
+	if cancelErr == nil {
+		t.Fatal("expected persistence failure")
+	}
+	if strings.Contains(cancelErr.Error(), "SECRET_CANARY") {
+		t.Fatal("secret path leaked through cancellation error")
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "job may run after restart") {
+		t.Fatal("missing synchronous durable failure log")
+	}
+	if strings.Contains(string(data), "SECRET_CANARY") {
+		t.Fatal("secret path leaked into log")
+	}
+}
+
+func TestCancellationFailureLogsEvenAtFatalLevel(t *testing.T) {
+	oldLevel, oldOutput := logger.GetLevel(), log.Writer()
+	file, err := os.Create(filepathJoin(t.TempDir(), "stderr.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger.SetLevel(logger.FATAL)
+	log.SetOutput(file)
+	defer func() { logger.SetLevel(oldLevel); log.SetOutput(oldOutput); _ = file.Close() }()
+	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{}, nil, nil, func(LoopTarget) (JobRunner, error) { return &fakeJobRunner{}, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	record := JobRecord{ID: "job-1", State: JobStateQueued}
+	if err := jm.store.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	jm.active["target"] = &targetActiveJobs{queuedWrites: []*activeJob{{record: record, ctx: ctx, cancel: cancel}}}
+	jm.store.mu.Lock()
+	jm.store.path = filepathJoin(t.TempDir(), "missing", "jobs.json")
+	jm.store.mu.Unlock()
+	if _, err := jm.cancelQueuedJob("target", record.ID); err == nil {
+		t.Fatal("expected persistence failure")
+	}
+	data, err := os.ReadFile(file.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "job may run after restart") {
+		t.Fatal("durable failure was filtered from logs")
 	}
 }
 
