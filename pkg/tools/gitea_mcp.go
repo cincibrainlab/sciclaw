@@ -11,7 +11,20 @@ import (
 	"time"
 )
 
-type GiteaMCPTool struct{}
+type GiteaMCPTool struct {
+	workspace               string
+	restrict                bool
+	sharedWorkspace         string
+	sharedWorkspaceReadOnly bool
+}
+
+func NewGiteaMCPTool(workspace string, restrict bool) *GiteaMCPTool {
+	return &GiteaMCPTool{workspace: workspace, restrict: restrict}
+}
+
+func (t *GiteaMCPTool) SetSharedWorkspacePolicy(workspace string, readOnly bool) {
+	t.sharedWorkspace, t.sharedWorkspaceReadOnly = workspace, readOnly
+}
 
 var giteaMCPTools = []string{
 	"get_me",
@@ -84,7 +97,7 @@ func LimitGiteaProjectListResult(name string, args map[string]interface{}, resul
 func (t *GiteaMCPTool) Name() string { return "atomicqms_mcp" }
 
 func (t *GiteaMCPTool) Description() string {
-	return `Call an official Gitea MCP tool with structured arguments, without a shell. To list branches, use tool "branch_read" with arguments {"method":"list","owner":"OWNER","repo":"REPO"}.`
+	return `Call an official Gitea MCP tool with structured arguments, without a shell. To list branches, use tool "branch_read" with arguments {"method":"list","owner":"OWNER","repo":"REPO"}. For create_or_update_file, use local_path instead of content in arguments or each files entry; relative paths use the agent workspace. Files are encoded privately (20 MiB aggregate raw, 31 MiB JSON); the server must support base64. Final symlinks and root escapes are rejected; use direct paths within the workspace or permitted shared workspace.`
 }
 
 func (t *GiteaMCPTool) Parameters() map[string]interface{} {
@@ -114,6 +127,14 @@ func (t *GiteaMCPTool) Execute(ctx context.Context, args map[string]interface{})
 	if !ok || arguments == nil {
 		return ErrorResult("arguments must be a JSON object")
 	}
+	localUpload := false
+	if name == "create_or_update_file" {
+		var err error
+		arguments, localUpload, err = t.prepareLocalPaths(ctx, arguments)
+		if err != nil {
+			return ErrorResult(err.Error())
+		}
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
@@ -137,16 +158,40 @@ func (t *GiteaMCPTool) Execute(ctx context.Context, args map[string]interface{})
 	for pageNumber := 1; ; pageNumber++ {
 		input, err := json.Marshal(arguments)
 		if err != nil {
+			if localUpload {
+				return ErrorResult("cannot serialize local_path upload arguments")
+			}
 			return ErrorResult("cannot serialize Gitea MCP arguments: " + err.Error())
 		}
-		cmd := exec.CommandContext(ctx, "mcp-server-cli", "call", name, "--stdin")
+		cliArgs := []string{"call", name, "--stdin"}
+		if localUpload {
+			if len(input) > localPathJSONLimit {
+				return ErrorResult("local_path upload exceeds the 31 MiB JSON limit")
+			}
+			cliArgs = append(cliArgs, "--require-base64-support")
+		}
+		cmd := exec.CommandContext(ctx, "mcp-server-cli", cliArgs...)
 		cmd.Stdin = bytes.NewReader(input)
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr
 		if err := cmd.Start(); err != nil {
+			if localUpload {
+				return ErrorResult("local_path upload CLI could not start")
+			}
 			return ErrorResult(fmt.Sprintf("Gitea MCP call could not start: %v", err))
 		}
-		if err := cmd.Wait(); err != nil {
+		waitErr := cmd.Wait()
+		if localUpload {
+			// CLI/server responses may echo encoded bytes. Never return them to the model.
+			var response struct {
+				IsError bool `json:"isError"`
+			}
+			if waitErr != nil || json.Unmarshal(stdout.Bytes(), &response) != nil || response.IsError {
+				return ErrorResult("local_path upload failed or its outcome is unknown. Reconcile remote state before retrying; the write may have completed.")
+			}
+			return NewToolResult("Gitea MCP local file upload completed.")
+		}
+		if err := waitErr; err != nil {
 			detail := strings.TrimSpace(stderr.String())
 			if detail == "" {
 				detail = strings.TrimSpace(stdout.String())
