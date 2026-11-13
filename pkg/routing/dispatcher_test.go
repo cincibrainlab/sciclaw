@@ -3,6 +3,7 @@ package routing
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -100,6 +101,50 @@ func TestDispatcherLogsDroppedJobSubmitError(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "Job rejection notice dropped") || !strings.Contains(string(data), "queue full") {
 		t.Fatalf("missing drop log: %s", data)
+	}
+}
+
+func TestDroppedPreparationRejectionIsObservableAtHighLogLevels(t *testing.T) {
+	oldLevel, oldOutput := logger.GetLevel(), log.Writer()
+	file, err := os.Create(filepathJoin(t.TempDir(), "stderr.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	log.SetOutput(file)
+	defer func() { logger.SetLevel(oldLevel); log.SetOutput(oldOutput); _ = file.Close() }()
+	for _, level := range []logger.LogLevel{logger.ERROR, logger.FATAL} {
+		if err := file.Truncate(0); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := file.Seek(0, 0); err != nil {
+			t.Fatal(err)
+		}
+		logger.SetLevel(level)
+		mb := bus.NewMessageBus()
+		for i := 0; i < 100; i++ {
+			if err := mb.PublishOutbound(context.Background(), bus.OutboundMessage{}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{MaxConcurrent: 1}, mb, nil, func(LoopTarget) (JobRunner, error) { return &fakeJobRunner{}, nil })
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < cap(jm.preparation); i++ {
+			jm.preparation <- struct{}{}
+		}
+		err = jm.Submit(context.Background(), LoopTarget{Workspace: t.TempDir()}, bus.InboundMessage{Channel: "discord", ChatID: "room", Media: []string{"https://example.invalid/file"}})
+		mb.Close()
+		if err == nil {
+			t.Fatalf("level %v: rejection was reported as success", level)
+		}
+		data, err := os.ReadFile(file.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(data), "Job rejection notice dropped") {
+			t.Fatalf("level %v: missing drop log", level)
+		}
 	}
 }
 
@@ -279,6 +324,11 @@ func TestDispatcherOverloadWithFullOutboundDoesNotBlockCancellation(t *testing.T
 				t.Fatal("job did not start")
 			}
 			record := findJobRecordByAskSummary(t, jm, "running")
+			if err := jm.Submit(ctx, target, bus.InboundMessage{Channel: "discord", ChatID: "room", Content: "second"}); err != nil {
+				t.Fatal(err)
+			}
+			waitForQueuedWrite(t, jm, target.key(), 1)
+			second := findJobRecordByAskSummary(t, jm, "second")
 			for i := 0; i < 100; i++ {
 				if err := mb.PublishOutbound(ctx, bus.OutboundMessage{Content: "full"}); err != nil {
 					t.Fatal(err)
@@ -289,14 +339,16 @@ func TestDispatcherOverloadWithFullOutboundDoesNotBlockCancellation(t *testing.T
 					jm.preparation <- struct{}{}
 				}
 				msg.Media = []string{"https://example.invalid/file"}
-			} else if kind == "status" {
-				deadline := time.Now().Add(time.Second)
-				for len(jm.statusSlots) != 0 && time.Now().Before(deadline) {
-					time.Sleep(time.Millisecond)
-				}
-				for i := 0; i < cap(jm.statusSlots); i++ {
-					jm.statusSlots <- struct{}{}
-				}
+			}
+			deadline := time.Now().Add(time.Second)
+			for len(jm.statusSlots) != 0 && time.Now().Before(deadline) {
+				time.Sleep(time.Millisecond)
+			}
+			if len(jm.statusSlots) != 0 {
+				t.Fatal("initial statuses did not finish")
+			}
+			for i := 0; i < cap(jm.statusSlots); i++ {
+				jm.statusSlots <- struct{}{}
 			}
 			msg.Content = "rejected"
 			if kind == "busy" {
@@ -310,14 +362,18 @@ func TestDispatcherOverloadWithFullOutboundDoesNotBlockCancellation(t *testing.T
 			if err := d.enqueueDispatch(ctx, dispatchTask{target: target, msg: msg}); err != nil {
 				t.Fatal(err)
 			}
-			deadline := time.Now().Add(time.Second)
+			msg.Content = "cancel " + second.ShortID
+			if err := d.enqueueDispatch(ctx, dispatchTask{target: target, msg: msg}); err != nil {
+				t.Fatal(err)
+			}
+			deadline = time.Now().Add(time.Second)
 			for time.Now().Before(deadline) {
-				if got := findJobRecordByAskSummary(t, jm, "running").State; got == JobStateCancelled {
+				if got := findJobRecordByAskSummary(t, jm, "second").State; got == JobStateCancelled {
 					return
 				}
 				time.Sleep(time.Millisecond)
 			}
-			t.Fatal("overload response blocked the following cancellation")
+			t.Fatal("full-bus control response blocked the next cancellation")
 		})
 	}
 }

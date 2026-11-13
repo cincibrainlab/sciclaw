@@ -432,7 +432,9 @@ func (jm *JobManager) Submit(ctx context.Context, target LoopTarget, msg bus.Inb
 			if jm.bus == nil {
 				return fmt.Errorf("too many attachments are being prepared; please try again shortly")
 			}
-			publishJobNotice(ctx, jm.bus, bus.OutboundMessage{Channel: msg.Channel, ChatID: msg.ChatID, Content: "Too many attachments are being prepared; please try again shortly."})
+			if err := publishJobNotice(ctx, jm.bus, bus.OutboundMessage{Channel: msg.Channel, ChatID: msg.ChatID, Content: "Too many attachments are being prepared; please try again shortly."}); err != nil {
+				return fmt.Errorf("too many attachments are being prepared; rejection notice unavailable: %w", err)
+			}
 			return nil
 		}
 	}
@@ -814,18 +816,18 @@ func parseRuntimeProfileKey(key string) RuntimeProfile {
 
 func (jm *JobManager) handleControl(ctx context.Context, msg bus.InboundMessage, targetKey string, jobs []*activeJob, control parsedJobControl) error {
 	if len(jobs) == 0 {
-		return jm.sendOutbound(ctx, msg.Channel, msg.ChatID, formatControlNoJobsOutbound(control))
+		return jm.sendControlOutbound(ctx, msg.Channel, msg.ChatID, formatControlNoJobsOutbound(control))
 	}
 
 	selected, err := selectTrackedJob(jobs, control.TargetID, msg.Metadata["reply_message_id"])
 	if err != nil {
 		if control.TargetID == "" && len(jobs) > 1 && control.Kind == jobControlStatus {
-			return jm.sendOutbound(ctx, msg.Channel, msg.ChatID, formatControlJobListOutbound(control, snapshotActiveJobs(jobs), false))
+			return jm.sendControlOutbound(ctx, msg.Channel, msg.ChatID, formatControlJobListOutbound(control, snapshotActiveJobs(jobs), false))
 		}
 		if control.TargetID == "" && len(jobs) > 1 && control.Kind == jobControlCancel {
-			return jm.sendOutbound(ctx, msg.Channel, msg.ChatID, formatControlJobListOutbound(control, snapshotActiveJobs(jobs), true))
+			return jm.sendControlOutbound(ctx, msg.Channel, msg.ChatID, formatControlJobListOutbound(control, snapshotActiveJobs(jobs), true))
 		}
-		return jm.sendOutbound(ctx, msg.Channel, msg.ChatID, formatControlErrorOutbound(control, err.Error()))
+		return jm.sendControlOutbound(ctx, msg.Channel, msg.ChatID, formatControlErrorOutbound(control, err.Error()))
 	}
 
 	record := selected.snapshot()
@@ -835,17 +837,17 @@ func (jm *JobManager) handleControl(ctx context.Context, msg bus.InboundMessage,
 			_ = synced
 			return nil
 		}
-		return jm.sendOutbound(ctx, msg.Channel, msg.ChatID, formatControlRecordOutbound(control, record, humanizePhase(record.Phase)))
+		return jm.sendControlOutbound(ctx, msg.Channel, msg.ChatID, formatControlRecordOutbound(control, record, humanizePhase(record.Phase)))
 	case jobControlCancel:
 		if record.State == JobStateQueued {
 			cancelled, cancelErr := jm.cancelQueuedJob(targetKey, record.ID)
 			if cancelErr != nil {
-				return jm.sendOutbound(ctx, msg.Channel, msg.ChatID, formatControlErrorOutbound(control, cancelErr.Error()))
+				return jm.sendControlOutbound(ctx, msg.Channel, msg.ChatID, formatControlErrorOutbound(control, cancelErr.Error()))
 			}
 			if strings.TrimSpace(cancelled.StatusMessageID) != "" {
 				return nil
 			}
-			return jm.sendOutbound(ctx, msg.Channel, msg.ChatID, formatControlRecordOutbound(control, cancelled, "Removed from main queue"))
+			return jm.sendControlOutbound(ctx, msg.Channel, msg.ChatID, formatControlRecordOutbound(control, cancelled, "Removed from main queue"))
 		}
 		cancelling := false
 		record = selected.update(func(record *JobRecord) {
@@ -859,32 +861,41 @@ func (jm *JobManager) handleControl(ctx context.Context, msg bus.InboundMessage,
 			}
 		})
 		if !cancelling {
-			return jm.sendOutbound(ctx, msg.Channel, msg.ChatID, formatControlRecordOutbound(control, record, "Already finished"))
+			return jm.sendControlOutbound(ctx, msg.Channel, msg.ChatID, formatControlRecordOutbound(control, record, "Already finished"))
 		}
 		if synced, ok := jm.refreshSelectedJobCard(ctx, selected); ok {
 			_ = synced
 			return nil
 		}
-		return jm.sendOutbound(ctx, msg.Channel, msg.ChatID, formatControlRecordOutbound(control, record, "Stopping now"))
+		return jm.sendControlOutbound(ctx, msg.Channel, msg.ChatID, formatControlRecordOutbound(control, record, "Stopping now"))
 	case jobControlForce:
 		if record.State != JobStateQueued {
 			if synced, ok := jm.refreshSelectedJobCard(ctx, selected); ok {
 				_ = synced
 				return nil
 			}
-			return jm.sendOutbound(ctx, msg.Channel, msg.ChatID, formatControlRecordOutbound(control, record, "Already running"))
+			return jm.sendControlOutbound(ctx, msg.Channel, msg.ChatID, formatControlRecordOutbound(control, record, "Already running"))
 		}
 		forced, forceErr := jm.forceQueuedJob(targetKey, record.ID)
 		if forceErr != nil {
-			return jm.sendOutbound(ctx, msg.Channel, msg.ChatID, formatControlErrorOutbound(control, forceErr.Error()))
+			return jm.sendControlOutbound(ctx, msg.Channel, msg.ChatID, formatControlErrorOutbound(control, forceErr.Error()))
 		}
 		if strings.TrimSpace(forced.StatusMessageID) != "" {
 			return nil
 		}
-		return jm.sendOutbound(ctx, msg.Channel, msg.ChatID, formatControlRecordOutbound(control, forced, "Moved to the front of the main queue"))
+		return jm.sendControlOutbound(ctx, msg.Channel, msg.ChatID, formatControlRecordOutbound(control, forced, "Moved to the front of the main queue"))
 	default:
 		return nil
 	}
+}
+
+func (jm *JobManager) sendControlOutbound(ctx context.Context, channel, chatID string, msg bus.OutboundMessage) error {
+	if jm.bus == nil {
+		return nil
+	}
+	msg.Channel, msg.ChatID = channel, chatID
+	_ = publishJobResponse(ctx, jm.bus, msg, "Job control response dropped")
+	return nil
 }
 
 func (jm *JobManager) refreshSelectedJobCard(ctx context.Context, job *activeJob) (JobRecord, bool) {
@@ -2150,7 +2161,12 @@ func hasQueuedMainLane(records []JobRecord) bool {
 }
 
 func (jm *JobManager) sendBusy(ctx context.Context, msg bus.InboundMessage, records []JobRecord, requestedClass JobClass) error {
-	publishJobNotice(ctx, jm.bus, bus.OutboundMessage{Channel: msg.Channel, ChatID: msg.ChatID, Content: formatBusyMessage(records, requestedClass)})
+	if jm.bus == nil {
+		return nil
+	}
+	if err := publishJobNotice(ctx, jm.bus, bus.OutboundMessage{Channel: msg.Channel, ChatID: msg.ChatID, Content: formatBusyMessage(records, requestedClass)}); err != nil {
+		return fmt.Errorf("job lane busy; rejection notice unavailable: %w", err)
+	}
 	return nil
 }
 
