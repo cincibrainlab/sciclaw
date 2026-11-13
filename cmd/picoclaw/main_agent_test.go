@@ -393,11 +393,11 @@ func TestAgentCmdJSONRetriesTransientProviderFailure(t *testing.T) {
 	defer server.Close()
 
 	home := t.TempDir()
-	if err := os.Mkdir(filepath.Join(home, ".picoclaw"), 0700); err != nil {
+	if err := os.Mkdir(filepath.Join(home, ".sciclaw"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(os.Args[0], "-test.run=^TestAgentCmdRetryHelper$")
-	cmd.Env = append(os.Environ(), "GO_WANT_AGENT_CMD_RETRY_HELPER=1", "HOME="+home, "RETRY_TEST_API_BASE="+server.URL)
+	cmd.Env = append(os.Environ(), "GO_WANT_AGENT_CMD_RETRY_HELPER=1", "HOME="+home, "SCICLAW_HOME="+filepath.Join(home, "sciclaw"), "SCICLAW_STATE_HOME="+filepath.Join(home, ".sciclaw"), "RETRY_TEST_API_BASE="+server.URL)
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("agent command error = %v", err)
@@ -425,11 +425,11 @@ func TestAgentCmdJSONDoesNotRetryAmbiguousProviderFailure(t *testing.T) {
 	defer server.Close()
 
 	home := t.TempDir()
-	if err := os.Mkdir(filepath.Join(home, ".picoclaw"), 0700); err != nil {
+	if err := os.Mkdir(filepath.Join(home, ".sciclaw"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(os.Args[0], "-test.run=^TestAgentCmdRetryHelper$")
-	cmd.Env = append(os.Environ(), "GO_WANT_AGENT_CMD_RETRY_HELPER=1", "HOME="+home, "RETRY_TEST_API_BASE="+server.URL)
+	cmd.Env = append(os.Environ(), "GO_WANT_AGENT_CMD_RETRY_HELPER=1", "HOME="+home, "SCICLAW_HOME="+filepath.Join(home, "sciclaw"), "SCICLAW_STATE_HOME="+filepath.Join(home, ".sciclaw"), "RETRY_TEST_API_BASE="+server.URL)
 	out, err := cmd.Output()
 	if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() != 1 {
 		t.Fatalf("exit error = %v, want code 1", err)
@@ -453,7 +453,7 @@ func TestAgentCmdRetryHelper(t *testing.T) {
 	cfg.Providers.OpenAI.APIKey = "test-key"
 	cfg.Providers.OpenAI.APIBase = os.Getenv("RETRY_TEST_API_BASE")
 	home, _ := os.UserHomeDir()
-	if err := config.SaveConfig(filepath.Join(home, ".picoclaw", "config.json"), cfg); err != nil {
+	if err := config.SaveConfig(filepath.Join(home, ".sciclaw", "config.json"), cfg); err != nil {
 		panic(err)
 	}
 	os.Args = []string{"picoclaw", "agent", "--json", "-m", "retry"}

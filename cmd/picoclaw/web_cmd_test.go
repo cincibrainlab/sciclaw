@@ -19,8 +19,8 @@ import (
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
-	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/paths"
+	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/routing"
 )
 
@@ -322,7 +322,9 @@ func TestHandleChatRateLimitDoesNotStartFullAgent(t *testing.T) {
 
 			home := t.TempDir()
 			t.Setenv("HOME", home)
-			if err := os.Mkdir(filepath.Join(home, ".picoclaw"), 0700); err != nil {
+			t.Setenv("SCICLAW_HOME", filepath.Join(home, "sciclaw"))
+			t.Setenv("SCICLAW_STATE_HOME", filepath.Join(home, ".sciclaw"))
+			if err := os.Mkdir(filepath.Join(home, ".sciclaw"), 0700); err != nil {
 				t.Fatal(err)
 			}
 			cfg := config.DefaultConfig()
@@ -331,7 +333,7 @@ func TestHandleChatRateLimitDoesNotStartFullAgent(t *testing.T) {
 			cfg.Agents.Defaults.Model = "gpt-5.6-luna"
 			cfg.Providers.OpenAI.APIKey = "test-key"
 			cfg.Providers.OpenAI.APIBase = upstream.URL
-			if err := config.SaveConfig(filepath.Join(home, ".picoclaw", "config.json"), cfg); err != nil {
+			if err := config.SaveConfig(filepath.Join(home, ".sciclaw", "config.json"), cfg); err != nil {
 				t.Fatal(err)
 			}
 
@@ -379,7 +381,9 @@ func TestHandleChatRateLimitRetainsTerminalDiagnostic(t *testing.T) {
 
 			home := t.TempDir()
 			t.Setenv("HOME", home)
-			if err := os.Mkdir(filepath.Join(home, ".picoclaw"), 0700); err != nil {
+			t.Setenv("SCICLAW_HOME", filepath.Join(home, "sciclaw"))
+			t.Setenv("SCICLAW_STATE_HOME", filepath.Join(home, ".sciclaw"))
+			if err := os.Mkdir(filepath.Join(home, ".sciclaw"), 0700); err != nil {
 				t.Fatal(err)
 			}
 			cfg := config.DefaultConfig()
@@ -388,7 +392,7 @@ func TestHandleChatRateLimitRetainsTerminalDiagnostic(t *testing.T) {
 			cfg.Agents.Defaults.Model = "gpt-5.6-luna"
 			cfg.Providers.OpenAI.APIKey = "test-key"
 			cfg.Providers.OpenAI.APIBase = upstream.URL
-			if err := config.SaveConfig(filepath.Join(home, ".picoclaw", "config.json"), cfg); err != nil {
+			if err := config.SaveConfig(filepath.Join(home, ".sciclaw", "config.json"), cfg); err != nil {
 				t.Fatal(err)
 			}
 

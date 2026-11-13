@@ -1621,12 +1621,7 @@ func gatewayCmd() {
 	// `sciclaw addon enable <name>` actually spawns a process and hook
 	// events can find the live sidecar.
 	//
-	// sciclawHome must match whatever path the CLI's sciclawHomeDir() uses
-	// so gateway reconciler and CLI install/enable agree on where
-	// registry.json lives. On unmigrated installs this is still ~/.picoclaw,
-	// not ~/sciclaw — the directory-unification migration from the RFC has
-	// not been implemented yet. Going through sciclawHomeDir() keeps the
-	// two sides in sync automatically when that migration lands.
+	// Use the same add-on root as the CLI.
 	sciclawHome := sciclawHomeDir()
 	addonStore := addons.NewStore(sciclawHome)
 	addonSidecarRegistry = addons.NewSidecarRegistry()
@@ -1682,7 +1677,7 @@ func gatewayCmd() {
 	}
 
 	// Wire per-user profile store for answer theme resolution
-	gatewayProfileStore := profile.NewStore(filepath.Join(picoDir, "profiles"))
+	gatewayProfileStore := profile.NewStore(filepath.Join(sciclawHome, "profiles"))
 	gatewayProfileStore.OnProfileUpdated = func(senderID string, p *profile.UserProfile) {
 		fireAddonHook("profile_updated", map[string]any{
 			"sender_id": senderID,

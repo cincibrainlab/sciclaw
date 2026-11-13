@@ -63,6 +63,22 @@ func resolveGlobalSkillsDir(sharedWorkspace string) string {
 	return paths.GlobalSkillsDir()
 }
 
+func hasSkillsDir(path string) bool {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(path, entry.Name(), "SKILL.md")); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
 func NewContextBuilder(workspace string, sharedWorkspace ...string) *ContextBuilder {
 	// builtin skills: skills directory in current project
 	// Use the skills/ directory under the current working directory
