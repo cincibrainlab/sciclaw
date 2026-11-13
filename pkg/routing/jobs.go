@@ -1056,13 +1056,27 @@ func (jm *JobManager) prepareJob(active *activeJob) {
 			r.Detail = "Cancelled"
 			r.Summary = r.Detail
 		})
-		if err := jm.store.Save(record); err != nil {
-			logger.WarnCF("jobs", "Failed to persist cancelled preparation", map[string]interface{}{"job_id": record.ID, "error": err.Error()})
+		saveErr := jm.store.Save(record)
+		if saveErr != nil {
+			logger.ErrorCF("jobs", "Failed to persist cancelled preparation", map[string]interface{}{"job_id": record.ID})
 		}
 		if set.empty() {
 			delete(jm.active, target.key())
 		}
 		jm.mu.Unlock()
+		if saveErr != nil {
+			_ = publishJobResponse(context.Background(), jm.bus, bus.OutboundMessage{Channel: record.Channel, ChatID: record.ChatID, Content: "Cancellation could not be saved; check the job after restart."}, "Cancellation persistence notice dropped")
+			return
+		}
+		if jm.progress != nil && strings.TrimSpace(record.StatusMessageID) != "" {
+			noticeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			_, err := jm.syncTrackedJobProgress(noticeCtx, active)
+			cancel()
+			if err == nil {
+				return
+			}
+		}
+		_ = publishJobResponse(context.Background(), jm.bus, bus.OutboundMessage{Channel: record.Channel, ChatID: record.ChatID, Content: fmt.Sprintf("Job %s was cancelled.", record.ShortID)}, "Cancellation notice dropped")
 		return
 	}
 	active.msg, active.prepared = msg, true

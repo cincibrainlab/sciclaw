@@ -346,6 +346,117 @@ func TestDispatcherCancelDuringAttachmentStaging(t *testing.T) {
 	waitForNoActiveJobs(t, jm, target.key())
 }
 
+func TestParentCancellationDuringStagingUpdatesCardOrNotifies(t *testing.T) {
+	for _, mode := range []string{"edit", "edit-failure", "capacity"} {
+		t.Run(mode, func(t *testing.T) {
+			started := make(chan struct{})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { close(started); <-r.Context().Done() }))
+			defer server.Close()
+			mb := bus.NewMessageBus()
+			defer mb.Close()
+			progress := &fakeProgressMessenger{}
+			runner := &fakeJobRunner{}
+			storePath := filepathJoin(t.TempDir(), "jobs.json")
+			jm, err := NewJobManager(storePath, config.JobsConfig{MaxConcurrent: 1}, mb, progress, func(LoopTarget) (JobRunner, error) { return runner, nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			target := LoopTarget{Workspace: t.TempDir()}.normalized()
+			msg := bus.InboundMessage{Channel: "discord", ChatID: "room", Content: "attachment", Media: []string{server.URL + "/file?token=SIGNED_CANARY"}}
+			if err := jm.Submit(ctx, target, msg); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-started:
+			case <-time.After(time.Second):
+				t.Fatal("staging did not start")
+			}
+			deadline := time.Now().Add(time.Second)
+			cardID := ""
+			for time.Now().Before(deadline) {
+				cardID = findJobRecordByAskSummary(t, jm, "attachment").StatusMessageID
+				if cardID != "" {
+					break
+				}
+				time.Sleep(time.Millisecond)
+			}
+			if cardID == "" {
+				t.Fatal("initial card was not persisted")
+			}
+			progress.mu.Lock()
+			progress.editFail = mode == "edit-failure"
+			progress.mu.Unlock()
+			if mode == "capacity" {
+				bounded := jm.progress.(*boundedProgress)
+				for i := 0; i < cap(bounded.slots); i++ {
+					bounded.slots <- struct{}{}
+				}
+			}
+			cancel()
+			if mode != "edit" {
+				readCtx, stop := context.WithTimeout(context.Background(), time.Second)
+				defer stop()
+				out, ok := mb.SubscribeOutbound(readCtx)
+				if !ok || !strings.Contains(strings.ToLower(out.Content), "cancelled") {
+					t.Fatalf("missing cancellation fallback: %#v", out)
+				}
+				if strings.Contains(out.Content, "SIGNED_CANARY") {
+					t.Fatal("signed URL leaked in fallback")
+				}
+			} else {
+				deadline = time.Now().Add(time.Second)
+				updated := false
+				for time.Now().Before(deadline) {
+					progress.mu.Lock()
+					for _, call := range progress.messages {
+						if call.messageID == cardID && strings.Contains(strings.ToLower(call.content), "cancelled") {
+							updated = true
+						}
+					}
+					progress.mu.Unlock()
+					if updated {
+						break
+					}
+					time.Sleep(time.Millisecond)
+				}
+				if !updated {
+					t.Fatal("cancelled state was not sent to the initial card")
+				}
+			}
+			waitForNoActiveJobs(t, jm, target.key())
+			if got := findJobRecordByAskSummary(t, jm, "attachment").State; got != JobStateCancelled {
+				t.Fatalf("state = %s", got)
+			}
+			runner.mu.Lock()
+			runs := runner.runs
+			runner.mu.Unlock()
+			if runs != 0 {
+				t.Fatalf("cancelled job ran %d times", runs)
+			}
+			progress.mu.Lock()
+			leaked := false
+			for _, call := range progress.messages {
+				if strings.Contains(call.content, "SIGNED_CANARY") {
+					leaked = true
+				}
+			}
+			progress.mu.Unlock()
+			if leaked {
+				t.Fatal("signed URL leaked in progress")
+			}
+			data, err := os.ReadFile(storePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(data), "SIGNED_CANARY") {
+				t.Fatal("signed URL persisted")
+			}
+		})
+	}
+}
+
 func TestDispatcherOverloadWithFullOutboundDoesNotBlockCancellation(t *testing.T) {
 	for _, kind := range []string{"preparation", "status", "busy"} {
 		t.Run(kind, func(t *testing.T) {
