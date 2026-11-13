@@ -125,6 +125,139 @@ func TestJobStoreFailedSaveDoesNotReportSuccessInMemory(t *testing.T) {
 	}
 }
 
+func TestAutomaticCancellationRetriesFailedPersistence(t *testing.T) {
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+	path := filepathJoin(t.TempDir(), "jobs.json")
+	runner := &fakeJobRunner{started: make(chan struct{}), block: make(chan struct{})}
+	jm, err := NewJobManager(path, config.JobsConfig{}, mb, nil, func(LoopTarget) (JobRunner, error) { return runner, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := LoopTarget{Workspace: t.TempDir()}.normalized()
+	defer func() { close(runner.block); waitForNoActiveJobs(t, jm, target.key()) }()
+	if err := jm.Submit(context.Background(), target, bus.InboundMessage{Channel: "discord", ChatID: "room", Content: "writer"}); err != nil {
+		t.Fatal(err)
+	}
+	<-runner.started
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := jm.Submit(ctx, target, bus.InboundMessage{Channel: "discord", ChatID: "room", SessionKey: "discord:room", Content: "queued"}); err != nil {
+		t.Fatal(err)
+	}
+	waitForQueuedWrite(t, jm, target.key(), 1)
+	jm.store.mu.Lock()
+	jm.store.path = filepathJoin(t.TempDir(), "missing", "jobs.json")
+	jm.store.mu.Unlock()
+	cancel()
+	readCtx, stop := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stop()
+	for {
+		out, ok := mb.SubscribeOutbound(readCtx)
+		if !ok {
+			t.Fatal("missing cancellation persistence warning")
+		}
+		if strings.Contains(out.Content, "may run after restart") {
+			break
+		}
+	}
+	jm.store.mu.Lock()
+	jm.store.path = path
+	jm.store.mu.Unlock()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(path)
+		if err == nil && strings.Contains(string(data), `"state": "cancelled"`) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("cancellation was not durably retried")
+}
+
+func TestAutomaticCancellationReportsUnrecoverablePersistenceFailure(t *testing.T) {
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+	path := filepathJoin(t.TempDir(), "jobs.json")
+	jm, err := NewJobManager(path, config.JobsConfig{}, mb, nil, func(LoopTarget) (JobRunner, error) { return &fakeJobRunner{}, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	record := JobRecord{ID: "job-1", Channel: "discord", ChatID: "room", State: JobStateQueued, Class: JobClassWrite}
+	if err := jm.store.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	job := &activeJob{record: record, ctx: ctx, cancel: cancel}
+	jm.active["target"] = &targetActiveJobs{queuedWrites: []*activeJob{job}}
+	jm.store.mu.Lock()
+	jm.store.path = filepathJoin(t.TempDir(), "missing", "jobs.json")
+	jm.store.mu.Unlock()
+	done := make(chan struct{})
+	go func() { jm.autoCancelQueuedJob("target", record.ID); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("cancellation retries did not finish")
+	}
+	readCtx, stop := context.WithTimeout(context.Background(), time.Second)
+	defer stop()
+	initial, ok := mb.SubscribeOutbound(readCtx)
+	if !ok || !strings.Contains(initial.Content, "may run after restart") {
+		t.Fatalf("missing initial warning: %#v", initial)
+	}
+	final, ok := mb.SubscribeOutbound(readCtx)
+	if !ok || !strings.Contains(final.Content, "may run after restart") || !strings.Contains(final.Content, "administrator") {
+		t.Fatalf("missing final warning: %#v", final)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"state": "queued"`) {
+		t.Fatalf("unexpected persisted state: %s", data)
+	}
+}
+
+func TestAutomaticCancellationReportsRetryCapacityExhaustion(t *testing.T) {
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{MaxConcurrent: 1}, mb, nil, func(LoopTarget) (JobRunner, error) { return &fakeJobRunner{}, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	record := JobRecord{ID: "job-1", Channel: "discord", ChatID: "room", State: JobStateQueued}
+	if err := jm.store.Save(record); err != nil {
+		t.Fatal(err)
+	}
+	jm.active["target"] = &targetActiveJobs{queuedWrites: []*activeJob{{record: record, ctx: ctx, cancel: cancel}}}
+	jm.store.mu.Lock()
+	jm.store.path = filepathJoin(t.TempDir(), "missing", "jobs.json")
+	jm.store.mu.Unlock()
+	for i := 0; i < cap(jm.cancelRetries); i++ {
+		jm.cancelRetries <- struct{}{}
+	}
+	done := make(chan struct{})
+	go func() { jm.autoCancelQueuedJob("target", record.ID); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("retry overload blocked")
+	}
+	readCtx, stop := context.WithTimeout(context.Background(), time.Second)
+	defer stop()
+	if _, ok := mb.SubscribeOutbound(readCtx); !ok {
+		t.Fatal("missing initial warning")
+	}
+	final, ok := mb.SubscribeOutbound(readCtx)
+	if !ok || !strings.Contains(final.Content, "may run after restart") || !strings.Contains(final.Content, "administrator") {
+		t.Fatalf("missing overload warning: %#v", final)
+	}
+}
+
 func TestSubmitPersistenceFailureDoesNotRun(t *testing.T) {
 	runner := &fakeJobRunner{}
 	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{}, nil, nil, func(LoopTarget) (JobRunner, error) { return runner, nil })

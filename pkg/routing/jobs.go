@@ -3,6 +3,7 @@ package routing
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -74,6 +75,8 @@ func (p *boundedProgress) SendOrEditProgress(ctx context.Context, channel, chat,
 }
 
 type handlerResolverFunc func(target LoopTarget) (JobRunner, error)
+
+type cancellationSaveError struct{ error }
 
 type JobClass string
 
@@ -271,6 +274,7 @@ type JobManager struct {
 	semaphore              chan struct{}
 	preparation            chan struct{}
 	statusSlots            chan struct{}
+	cancelRetries          chan struct{}
 	allowBTWDuringWrite    bool
 	mediaRewrites          func() map[string]string
 	interruptedAttachments []JobRecord
@@ -322,6 +326,7 @@ func NewJobManager(storePath string, cfg config.JobsConfig, msgBus *bus.MessageB
 		semaphore:           make(chan struct{}, maxConcurrent),
 		preparation:         make(chan struct{}, maxConcurrent*4),
 		statusSlots:         make(chan struct{}, maxConcurrent*4),
+		cancelRetries:       make(chan struct{}, maxConcurrent*4),
 		allowBTWDuringWrite: cfg.AllowBTWDuringWrite || cfg.AllowReadOnlyDuringWrite,
 		active:              map[string]*targetActiveJobs{},
 	}
@@ -565,7 +570,7 @@ func (jm *JobManager) Submit(ctx context.Context, target LoopTarget, msg bus.Inb
 		return fmt.Errorf("persist queued job: %w", err)
 	}
 	if !startImmediately && jobClass == JobClassWrite {
-		context.AfterFunc(jobCtx, func() { _, _ = jm.cancelQueuedJob(targetKey, record.ID) })
+		context.AfterFunc(jobCtx, func() { jm.autoCancelQueuedJob(targetKey, record.ID) })
 	}
 	jm.mu.Unlock()
 
@@ -924,7 +929,8 @@ func (jm *JobManager) cancelQueuedJob(targetKey, jobID string) (JobRecord, error
 	job.cancel()
 	updatedQueued := jm.reindexQueuedWritesLocked(activeSet)
 	queuedJobs := append([]*activeJob(nil), activeSet.queuedWrites...)
-	saveErr := jm.store.Save(record)
+	cancelErr := jm.store.Save(record)
+	saveErr := cancelErr
 	for _, queued := range updatedQueued {
 		if err := jm.store.Save(queued); err != nil && saveErr == nil {
 			saveErr = err
@@ -936,7 +942,10 @@ func (jm *JobManager) cancelQueuedJob(targetKey, jobID string) (JobRecord, error
 	jm.mu.Unlock()
 
 	if saveErr != nil {
-		return JobRecord{}, saveErr
+		if cancelErr != nil {
+			return record, cancellationSaveError{cancelErr}
+		}
+		return record, saveErr
 	}
 	if !jm.sendQueuedStatusAsync(context.Background(), job, JobRecord{}, 0) {
 		record.StatusMessageID = ""
@@ -945,6 +954,49 @@ func (jm *JobManager) cancelQueuedJob(targetKey, jobID string) (JobRecord, error
 		jm.sendQueuedStatusAsync(context.Background(), queued, JobRecord{}, 0)
 	}
 	return record, nil
+}
+
+func (jm *JobManager) autoCancelQueuedJob(targetKey, jobID string) {
+	record, err := jm.cancelQueuedJob(targetKey, jobID)
+	if err == nil || record.ID == "" {
+		return
+	}
+	var saveFailure cancellationSaveError
+	if !errors.As(err, &saveFailure) {
+		logger.WarnCF("jobs", "Failed to persist queue updates after automatic cancellation", map[string]interface{}{"job_id": jobID, "error": err.Error()})
+		return
+	}
+	logger.WarnCF("jobs", "Automatic cancellation not persisted; job may run after restart", map[string]interface{}{"job_id": jobID, "error": err.Error()})
+	ref := record.ShortID
+	if ref == "" {
+		ref = record.ID
+	}
+	notice := func(text string) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := jm.sendText(ctx, record.Channel, record.ChatID, text); err != nil {
+			logger.WarnCF("jobs", "Failed to send cancellation persistence notice", map[string]interface{}{"job_id": jobID, "error": err.Error()})
+		}
+	}
+	notice(fmt.Sprintf("Cancellation of job %s could not be saved; this job may run after restart. Retrying.", ref))
+	select {
+	case jm.cancelRetries <- struct{}{}:
+		defer func() { <-jm.cancelRetries }()
+	default:
+		logger.ErrorCF("jobs", "Cancellation not persisted; job may run after restart (retry capacity exhausted)", map[string]interface{}{"job_id": jobID})
+		notice(fmt.Sprintf("Cancellation of job %s could not be saved; this job may run after restart. Please contact an administrator.", ref))
+		return
+	}
+	// ponytail: three retries; use durable retry coordination if outages commonly last longer.
+	for attempt := 0; attempt < 3; attempt++ {
+		time.Sleep(200 * time.Millisecond)
+		if err = jm.store.Save(record); err == nil {
+			notice(fmt.Sprintf("Cancellation of job %s was saved.", ref))
+			return
+		}
+	}
+	logger.ErrorCF("jobs", "Cancellation not persisted; job may run after restart (retries failed)", map[string]interface{}{"job_id": jobID, "error": err.Error()})
+	notice(fmt.Sprintf("Cancellation of job %s could not be saved; this job may run after restart. Please contact an administrator.", ref))
 }
 
 func (jm *JobManager) prepareJob(active *activeJob) {
@@ -1019,9 +1071,7 @@ func (jm *JobManager) prepareJob(active *activeJob) {
 	if record.Class == JobClassBTW {
 		if !jm.allowBTWDuringWrite && set.write != nil {
 			set.preparing = append(set.preparing, active)
-			context.AfterFunc(ctx, func() {
-				_, _ = jm.cancelQueuedJob(target.key(), record.ID)
-			})
+			context.AfterFunc(ctx, func() { jm.autoCancelQueuedJob(target.key(), record.ID) })
 			start = false
 		} else {
 			set.btw = active
@@ -1030,7 +1080,7 @@ func (jm *JobManager) prepareJob(active *activeJob) {
 		set.write = active
 	} else {
 		set.enqueueWrite(active)
-		context.AfterFunc(ctx, func() { _, _ = jm.cancelQueuedJob(target.key(), record.ID) })
+		context.AfterFunc(ctx, func() { jm.autoCancelQueuedJob(target.key(), record.ID) })
 		start = false
 	}
 	jm.mu.Unlock()
