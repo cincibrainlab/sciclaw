@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/sipeed/picoclaw/pkg/paths"
 )
 
 // LocalExecutor runs commands directly on the host.
@@ -77,20 +79,26 @@ func (e *LocalExecutor) ExecCommand(timeout time.Duration, args ...string) (stri
 }
 
 func (e *LocalExecutor) ReadFile(path string) (string, error) {
+	if err := paths.ValidateHomes(); err != nil {
+		return "", err
+	}
 	b, err := os.ReadFile(path)
 	return string(b), err
 }
 
 func (e *LocalExecutor) WriteFile(path string, data []byte, perm os.FileMode) error {
+	if err := paths.ValidateHomes(); err != nil {
+		return err
+	}
 	return os.WriteFile(path, data, perm)
 }
 
 func (e *LocalExecutor) ConfigPath() string {
-	return filepath.Join(e.home, ".picoclaw", "config.json")
+	return paths.ConfigPath()
 }
 
 func (e *LocalExecutor) AuthPath() string {
-	return filepath.Join(e.home, ".picoclaw", "auth.json")
+	return paths.AuthPath()
 }
 
 func (e *LocalExecutor) HomePath() string   { return e.home }

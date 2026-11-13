@@ -18,6 +18,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/constants"
 	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/paths"
 	"github.com/sipeed/picoclaw/pkg/state"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
@@ -362,11 +363,16 @@ func (hs *HeartbeatService) logError(format string, args ...any) {
 
 // log writes a message to the heartbeat log file
 func (hs *HeartbeatService) log(level, format string, args ...any) {
-	logFile := filepath.Join(hs.workspace, "heartbeat.log")
-	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	logFile := filepath.Join(paths.WorkspaceStateDir(hs.workspace), "heartbeat.log")
+	if err := os.MkdirAll(filepath.Dir(logFile), 0700); err != nil {
+		return
+	}
+	_ = os.Chmod(filepath.Dir(logFile), 0700)
+	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		return
 	}
+	_ = os.Chmod(logFile, 0600)
 	defer f.Close()
 
 	timestamp := time.Now().Format("2006-01-02 15:04:05")

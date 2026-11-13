@@ -2,10 +2,11 @@ package service
 
 import (
 	"fmt"
+	"html"
 	"strings"
 )
 
-func renderSystemdUnit(description, exePath string, args []string, pathEnv string) string {
+func renderSystemdUnit(description, exePath string, args []string, pathEnv, userHome, stateHome string) string {
 	command := strings.TrimSpace(strings.Join(append([]string{exePath}, args...), " "))
 	return fmt.Sprintf(`[Unit]
 Description=%s
@@ -19,14 +20,16 @@ Restart=always
 RestartSec=3
 Environment=HOME=%%h
 Environment=PATH=%s
+Environment="SCICLAW_HOME=%s"
+Environment="SCICLAW_STATE_HOME=%s"
 WorkingDirectory=%%h
 
 [Install]
 WantedBy=default.target
-`, description, command, pathEnv)
+`, description, command, pathEnv, escapeSystemdEnvironment(userHome), escapeSystemdEnvironment(stateHome))
 }
 
-func renderLaunchdPlist(label, exePath string, args []string, stdoutPath, stderrPath, pathEnv string) string {
+func renderLaunchdPlist(label, exePath string, args []string, stdoutPath, stderrPath, pathEnv, userHome, stateHome string) string {
 	var programArgs strings.Builder
 	programArgs.WriteString("    <string>" + exePath + "</string>\n")
 	for _, arg := range args {
@@ -60,8 +63,17 @@ func renderLaunchdPlist(label, exePath string, args []string, stdoutPath, stderr
   <dict>
     <key>PATH</key>
     <string>%s</string>
+    <key>SCICLAW_HOME</key>
+    <string>%s</string>
+    <key>SCICLAW_STATE_HOME</key>
+    <string>%s</string>
   </dict>
 </dict>
 </plist>
-`, label, programArgs.String(), stdoutPath, stderrPath, pathEnv)
+`, label, programArgs.String(), stdoutPath, stderrPath, pathEnv, html.EscapeString(userHome), html.EscapeString(stateHome))
+}
+
+func escapeSystemdEnvironment(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	return strings.ReplaceAll(value, `"`, `\"`)
 }

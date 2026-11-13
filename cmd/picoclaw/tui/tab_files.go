@@ -419,11 +419,7 @@ func resolveVMScript() string {
 		}
 	}
 	if exe, err := os.Executable(); err == nil {
-		dir := filepath.Dir(exe)
-		for _, rel := range []string{
-			filepath.Join(dir, "..", "share", "sciclaw", "deploy", "vm"),
-			filepath.Join(dir, "..", "share", "picoclaw", "deploy", "vm"),
-		} {
+		for _, rel := range packagedVMScriptPaths(exe) {
 			p := filepath.Clean(rel)
 			if _, err := os.Stat(p); err == nil {
 				return p
@@ -431,6 +427,11 @@ func resolveVMScript() string {
 		}
 	}
 	return ""
+}
+
+func packagedVMScriptPaths(executable string) []string {
+	dir := filepath.Dir(executable)
+	return []string{filepath.Join(dir, "..", "share", "sciclaw", "deploy", "vm")}
 }
 
 func stopVM() tea.Cmd {

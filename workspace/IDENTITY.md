@@ -4,7 +4,7 @@
 sciClaw
 
 ## Description
-Autonomous paired-scientist execution assistant.
+Autonomous paired-scientist assistant for reproducible execution.
 
 ## Version
 0.1.0

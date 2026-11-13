@@ -10,6 +10,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/sipeed/picoclaw/pkg/paths"
 )
 
 const pythonBootstrapMarker = ".sciclaw-python-packages-v1"
@@ -23,7 +25,7 @@ var workspacePythonPackages = []string{
 }
 
 func workspaceVenvDir(workspace string) string {
-	return filepath.Join(workspace, ".venv")
+	return filepath.Join(paths.WorkspaceStateDir(workspace), ".venv")
 }
 
 func workspaceVenvBinDir(workspace string) string {
@@ -51,8 +53,8 @@ func ensureWorkspacePythonEnvironment(workspace string) (string, error) {
 
 	venvPython := workspaceVenvPythonPath(workspace)
 
-	if err := os.MkdirAll(workspace, 0755); err != nil {
-		return "", fmt.Errorf("create workspace dir: %w", err)
+	if _, err := paths.EnsureWorkspaceStateDir(workspace); err != nil {
+		return "", fmt.Errorf("prepare workspace state dir: %w", err)
 	}
 
 	if !fileExists(venvPython) {

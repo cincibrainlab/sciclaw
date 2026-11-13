@@ -3,14 +3,13 @@ package models
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/sipeed/picoclaw/pkg/auth"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/paths"
 )
 
 const anthropicOAuthBetaHeader = "oauth-2025-04-20"
@@ -133,7 +132,7 @@ func PrintList(cfg *config.Config) {
 
 	providers := ListProviders(cfg)
 	if len(providers) == 0 {
-		fmt.Println("\nNo providers configured. Add API keys to ~/.picoclaw/config.json")
+		fmt.Println("\nNo providers configured. Add provider settings to ~/.sciclaw/config.json")
 		return
 	}
 
@@ -245,8 +244,7 @@ func PrintStatus(cfg *config.Config) {
 
 // GetConfigPath returns the standard config file path.
 func GetConfigPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".picoclaw", "config.json")
+	return paths.ConfigPath()
 }
 
 func resolveAuthMethod(provider string, cfg *config.Config) string {

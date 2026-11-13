@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/sipeed/picoclaw/pkg/paths"
 )
 
 type launchdManager struct {
@@ -40,8 +42,8 @@ func newLaunchdManagerForSpec(exePath string, runner commandRunner, spec Spec) M
 		domainTarget:  domain,
 		serviceTarget: serviceTarget,
 		plistPath:     filepath.Join(home, "Library", "LaunchAgents", label+".plist"),
-		stdoutPath:    filepath.Join(home, ".picoclaw", spec.StdoutFile),
-		stderrPath:    filepath.Join(home, ".picoclaw", spec.StderrFile),
+		stdoutPath:    filepath.Join(paths.LogsDir(), spec.StdoutFile),
+		stderrPath:    filepath.Join(paths.LogsDir(), spec.StderrFile),
 	}
 }
 
@@ -52,6 +54,9 @@ func (m *launchdManager) Install() error {
 	// clean slate. This is idempotent — Uninstall is a no-op when the
 	// service was never installed.
 	_ = m.Uninstall()
+	if err := paths.EnsureStateLayout(); err != nil {
+		return err
+	}
 
 	if err := os.MkdirAll(filepath.Dir(m.plistPath), 0755); err != nil {
 		return err
@@ -61,7 +66,7 @@ func (m *launchdManager) Install() error {
 	}
 
 	pathEnv := buildSystemdPath(os.Getenv("PATH"), m.detectBrewPrefix())
-	plist := renderLaunchdPlist(m.label, m.exePath, m.spec.Args, m.stdoutPath, m.stderrPath, pathEnv)
+	plist := renderLaunchdPlist(m.label, m.exePath, m.spec.Args, m.stdoutPath, m.stderrPath, pathEnv, paths.UserHome(), paths.StateHome())
 	if err := os.WriteFile(m.plistPath, []byte(plist), 0644); err != nil {
 		return err
 	}

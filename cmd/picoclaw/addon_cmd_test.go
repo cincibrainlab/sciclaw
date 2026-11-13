@@ -1256,3 +1256,12 @@ func TestSciclawHomeDir_Nonempty(t *testing.T) {
 		t.Fatalf("unexpected home dir: %q", dir)
 	}
 }
+
+func TestAddonRootUsesVisibleSciClawHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SCICLAW_HOME", home)
+	t.Setenv("SCICLAW_STATE_HOME", t.TempDir())
+	if got := sciclawHomeDir(); got != home {
+		t.Fatalf("add-on root = %q, want %q", got, home)
+	}
+}

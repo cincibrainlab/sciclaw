@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sipeed/picoclaw/pkg/paths"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
@@ -73,7 +74,7 @@ func TestExecuteHeartbeat_Error(t *testing.T) {
 	hs.executeHeartbeat()
 
 	// Check log file for error message
-	logFile := filepath.Join(tmpDir, "heartbeat.log")
+	logFile := filepath.Join(paths.WorkspaceStateDir(tmpDir), "heartbeat.log")
 	data, err := os.ReadFile(logFile)
 	if err != nil {
 		t.Fatalf("Failed to read log file: %v", err)
@@ -111,7 +112,7 @@ func TestExecuteHeartbeat_Silent(t *testing.T) {
 	hs.executeHeartbeat()
 
 	// Check log file for completion message
-	logFile := filepath.Join(tmpDir, "heartbeat.log")
+	logFile := filepath.Join(paths.WorkspaceStateDir(tmpDir), "heartbeat.log")
 	data, err := os.ReadFile(logFile)
 	if err != nil {
 		t.Fatalf("Failed to read log file: %v", err)
@@ -180,7 +181,7 @@ func TestExecuteHeartbeat_NilResult(t *testing.T) {
 	hs.executeHeartbeat()
 }
 
-// TestLogPath verifies heartbeat log is written to workspace directory
+// TestLogPath verifies heartbeat logs stay in machine-managed workspace state.
 func TestLogPath(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "heartbeat-test-*")
 	if err != nil {
@@ -193,8 +194,7 @@ func TestLogPath(t *testing.T) {
 	// Write a log entry
 	hs.log("INFO", "Test log entry")
 
-	// Verify log file exists at workspace root
-	expectedLogPath := filepath.Join(tmpDir, "heartbeat.log")
+	expectedLogPath := filepath.Join(paths.WorkspaceStateDir(tmpDir), "heartbeat.log")
 	if _, err := os.Stat(expectedLogPath); os.IsNotExist(err) {
 		t.Errorf("Expected log file at %s, but it doesn't exist", expectedLogPath)
 	}

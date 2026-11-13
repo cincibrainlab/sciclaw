@@ -3,8 +3,9 @@ package auth
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"time"
+
+	"github.com/sipeed/picoclaw/pkg/paths"
 )
 
 type AuthCredential struct {
@@ -35,11 +36,13 @@ func (c *AuthCredential) NeedsRefresh() bool {
 }
 
 func authFilePath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".picoclaw", "auth.json")
+	return paths.AuthPath()
 }
 
 func LoadStore() (*AuthStore, error) {
+	if err := paths.ValidateHomes(); err != nil {
+		return nil, err
+	}
 	path := authFilePath()
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -60,11 +63,10 @@ func LoadStore() (*AuthStore, error) {
 }
 
 func SaveStore(store *AuthStore) error {
-	path := authFilePath()
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := paths.EnsureStateLayout(); err != nil {
 		return err
 	}
+	path := authFilePath()
 
 	data, err := json.MarshalIndent(store, "", "  ")
 	if err != nil {
