@@ -35,7 +35,7 @@ func (e *responseDecodeError) Error() string { return e.err.Error() }
 func (e *responseDecodeError) Unwrap() error { return e.err }
 
 func NewHTTPProvider(apiKey, apiBase, proxy string) *HTTPProvider {
-	return NewHTTPProviderWithTimeout(apiKey, apiBase, proxy, 30*time.Second)
+	return NewHTTPProviderWithTimeout(apiKey, apiBase, proxy, 120*time.Second)
 }
 
 func NewHTTPProviderWithTimeout(apiKey, apiBase, proxy string, timeout time.Duration) *HTTPProvider {

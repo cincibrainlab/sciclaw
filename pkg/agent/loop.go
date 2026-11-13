@@ -230,7 +230,9 @@ func createToolRegistry(workspace string, restrict bool, cfg *config.Config, msg
 	registry.Register(appendFileTool)
 
 	registry.Register(tools.NewRememberTool(workspace, restrict))
-	registry.Register(&tools.GiteaMCPTool{})
+	giteaTool := tools.NewGiteaMCPTool(workspace, restrict)
+	giteaTool.SetSharedWorkspacePolicy(sharedWorkspace, sharedReadOnly)
+	registry.Register(giteaTool)
 
 	// Shell execution
 	execTool := tools.NewExecTool(workspace, restrict)
