@@ -1,9 +1,9 @@
 FROM golang:1.27 AS builder
 
-ARG GITEA_MCP_REF=aaba3da5ecbd6badaa524177a29eb2ee7e8deb62
+ARG GITEA_MCP_REF=34ba56e9a95d3a59113a293f1263685c3986f37c
 
 RUN git init /src \
- && git -C /src remote add origin https://gitea.com/anshmendiratta/gitea-mcp.git \
+ && git -C /src remote add origin https://gitea.com/gitea/gitea-mcp.git \
  && git -C /src fetch --depth 1 origin "$GITEA_MCP_REF" \
  && git -C /src checkout --detach FETCH_HEAD \
  && test "$(git -C /src rev-parse HEAD)" = "$GITEA_MCP_REF"
