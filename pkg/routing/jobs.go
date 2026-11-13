@@ -935,6 +935,7 @@ func (jm *JobManager) autoCancelQueuedJob(targetKey, jobID string) {
 		logger.WarnCF("jobs", "Failed to persist queue updates after automatic cancellation", map[string]interface{}{"job_id": jobID})
 		return
 	}
+	_ = publishJobResponse(context.Background(), jm.bus, bus.OutboundMessage{Channel: record.Channel, ChatID: record.ChatID, Content: saveFailure.Error()}, "Cancellation persistence notice dropped")
 }
 
 func (jm *JobManager) prepareJob(active *activeJob) {
