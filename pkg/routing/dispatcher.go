@@ -3,6 +3,7 @@ package routing
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 
@@ -272,9 +273,29 @@ func (d *Dispatcher) sendJobSubmitError(ctx context.Context, msg bus.InboundMess
 	if detail := strings.TrimSpace(err.Error()); detail != "" {
 		content += ": " + detail
 	}
-	d.bus.PublishOutbound(ctx, bus.OutboundMessage{
+	_ = publishJobNotice(ctx, d.bus, bus.OutboundMessage{
 		Channel: msg.Channel,
 		ChatID:  msg.ChatID,
 		Content: content,
 	})
+}
+
+func publishJobNotice(ctx context.Context, msgBus *bus.MessageBus, msg bus.OutboundMessage) error {
+	return publishJobResponse(ctx, msgBus, msg, "Job rejection notice dropped")
+}
+
+func publishJobResponse(ctx context.Context, msgBus *bus.MessageBus, msg bus.OutboundMessage, failure string) error {
+	var err error
+	if msgBus == nil {
+		err = fmt.Errorf("message bus unavailable")
+	} else {
+		err = msgBus.TryPublishOutbound(ctx, msg)
+	}
+	if err != nil {
+		logger.ErrorCF("routing", failure, map[string]interface{}{"reason": err.Error()})
+		if logger.GetLevel() > logger.ERROR {
+			log.Print("routing: " + failure)
+		}
+	}
+	return err
 }
