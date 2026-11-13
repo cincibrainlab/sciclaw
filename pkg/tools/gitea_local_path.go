@@ -3,16 +3,56 @@ package tools
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
 const localPathRawLimit = 20 << 20
 const localPathJSONLimit = 31 << 20
+
+var localPathBranchRef = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$`)
+
+func localPathUploadResult(output []byte, arguments map[string]interface{}, callErr error) *ToolResult {
+	var response struct {
+		IsError bool `json:"isError"`
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if callErr != nil || json.Unmarshal(output, &response) != nil || response.IsError {
+		return ErrorResult("local_path upload failed or its outcome is unknown. Reconcile remote state before retrying; the write may have completed.")
+	}
+	branch, _ := arguments["new_branch_name"].(string)
+	if branch == "" {
+		branch, _ = arguments["branch_name"].(string)
+	}
+	files, _ := arguments["files"].([]interface{})
+	count := len(files)
+	if path, _ := arguments["path"].(string); path != "" {
+		count++
+	}
+	// CreateOrUpdateFileFn returns a JSON-encoded string via to.TextResult,
+	// not a commit object. Match its entire confirmation against the request;
+	// expose only a bounded branch token, never arbitrary response text or URLs.
+	if count > 0 && localPathBranchRef.MatchString(branch) {
+		expected := fmt.Sprintf("Committed %d file(s) to branch %s", count, branch)
+		for _, content := range response.Content {
+			var text string
+			if content.Type == "text" && json.Unmarshal([]byte(content.Text), &text) == nil && text == expected {
+				return NewToolResult(fmt.Sprintf("Server confirmed %d file(s) committed to branch %q. Commit SHA verification unavailable (server returned only a branch confirmation).", count, branch))
+			}
+		}
+	}
+	return NewToolResult("Gitea MCP local file upload completed; saved-reference verification unavailable.")
+}
 
 // Copies only the containers being changed. Encoded bytes never enter caller arguments.
 func (t *GiteaMCPTool) prepareLocalPaths(ctx context.Context, arguments map[string]interface{}) (map[string]interface{}, bool, error) {

@@ -182,14 +182,7 @@ func (t *GiteaMCPTool) Execute(ctx context.Context, args map[string]interface{})
 		}
 		waitErr := cmd.Wait()
 		if localUpload {
-			// CLI/server responses may echo encoded bytes. Never return them to the model.
-			var response struct {
-				IsError bool `json:"isError"`
-			}
-			if waitErr != nil || json.Unmarshal(stdout.Bytes(), &response) != nil || response.IsError {
-				return ErrorResult("local_path upload failed or its outcome is unknown. Reconcile remote state before retrying; the write may have completed.")
-			}
-			return NewToolResult("Gitea MCP local file upload completed.")
+			return localPathUploadResult(stdout.Bytes(), arguments, waitErr)
 		}
 		if err := waitErr; err != nil {
 			detail := strings.TrimSpace(stderr.String())

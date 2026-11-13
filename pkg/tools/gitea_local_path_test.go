@@ -198,3 +198,59 @@ func TestGiteaLocalPathErrorRedaction(t *testing.T) {
 		}
 	}
 }
+
+func TestGiteaLocalPathSavedReference(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "file"), []byte{0, 1, 2, 255}, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, response, branch string
+		confirmed              bool
+	}{
+		{"server branch confirmation", "Committed 1 file(s) to branch uploads/report", "uploads/report", true},
+		{"top-level", "Committed 1 file(s) to branch uploads/report", "uploads/report", true},
+		{"no reference", "success", "uploads/report", false},
+		{"different branch", "Committed 1 file(s) to branch other", "uploads/report", false},
+		{"different count", "Committed 2 file(s) to branch uploads/report", "uploads/report", false},
+		{"arbitrary URL", "Committed 1 file(s) to branch https://private.example/secret", "https://private.example/secret", false},
+		{"appended payload", "Committed 1 file(s) to branch uploads/report AAEC/w==", "uploads/report", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("UPLOAD_RESPONSE", tc.response)
+			// The real server's to.TextResult JSON-encodes the confirmation string
+			// inside the MCP text block; the CLI serializes the entire MCP envelope.
+			localPathCLI(t, `a=json.load(sys.stdin)
+entry = a if 'content' in a else a['files'][0]
+print(json.dumps({'content':[{'type':'text','text':json.dumps(os.environ['UPLOAD_RESPONSE'])}, {'type':'text','text':entry['content']}], 'payload':a, 'url':'https://private.example/secret'}))
+`)
+			arguments := map[string]interface{}{
+				"owner": "owner", "repo": "repo", "branch_name": "main", "new_branch_name": tc.branch,
+				"files": []interface{}{map[string]interface{}{"path": "dest.bin", "local_path": "file"}},
+			}
+			if tc.name == "top-level" {
+				delete(arguments, "files")
+				delete(arguments, "new_branch_name")
+				arguments["branch_name"], arguments["path"], arguments["local_path"] = tc.branch, "dest.bin", "file"
+			}
+			result := NewGiteaMCPTool(dir, true).Execute(context.Background(), map[string]interface{}{
+				"tool": "create_or_update_file", "arguments": arguments,
+			})
+			if result.IsError {
+				t.Fatalf("upload failed: %#v", result)
+			}
+			if tc.confirmed {
+				if !strings.Contains(result.ForLLM, `branch "uploads/report"`) || !strings.Contains(result.ForLLM, "1 file(s)") {
+					t.Fatalf("server confirmation discarded: %s", result.ForLLM)
+				}
+			} else if !strings.Contains(result.ForLLM, "saved-reference verification unavailable") {
+				t.Fatalf("missing verification status: %s", result.ForLLM)
+			}
+			for _, secret := range []string{"AAEC/w==", "https://", "private.example", "local_path", dir} {
+				if strings.Contains(result.ForLLM+result.ForUser, secret) {
+					t.Fatalf("response leaked %q: %#v", secret, result)
+				}
+			}
+		})
+	}
+}
