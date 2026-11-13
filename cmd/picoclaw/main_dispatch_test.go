@@ -81,6 +81,53 @@ func TestRunGatewayDefaultDispatch_StagesInboundMediaBeforeJob(t *testing.T) {
 	}
 }
 
+func TestRunGatewayDefaultDispatch_CancelDuringAttachmentStaging(t *testing.T) {
+	started, cancelled := make(chan struct{}), make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { close(started); <-r.Context().Done(); close(cancelled) }))
+	defer server.Close()
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+	path := filepath.Join(t.TempDir(), "jobs.json")
+	runner := &captureJobRunner{received: make(chan bus.InboundMessage, 1)}
+	jm, err := routing.NewJobManager(path, config.JobsConfig{Enabled: true}, mb, nil, func(routing.LoopTarget) (routing.JobRunner, error) { return runner, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go runGatewayDefaultDispatch(ctx, mb, nil, jm, routing.LoopTarget{Workspace: t.TempDir()}, nil)
+	msg := bus.InboundMessage{Channel: "discord", ChatID: "room", Content: "review", Media: []string{server.URL + "/slow"}}
+	if err := mb.PublishInbound(ctx, msg); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("staging did not start")
+	}
+	msg.Content, msg.Media = "cancel", nil
+	msg.Metadata = map[string]string{"has_direct_mention": "true"}
+	if err := mb.PublishInbound(ctx, msg); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("cancellation did not interrupt staging")
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		data, _ := os.ReadFile(path)
+		if strings.Contains(string(data), `"cancelled"`) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("cancelled job not persisted")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 type captureDispatchProvider struct{ messages chan []providers.Message }
 
 func (p *captureDispatchProvider) Chat(_ context.Context, messages []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]interface{}) (*providers.LLMResponse, error) {

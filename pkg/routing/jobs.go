@@ -49,25 +49,26 @@ const (
 )
 
 type JobRecord struct {
-	ID              string             `json:"id"`
-	ShortID         string             `json:"short_id"`
-	Channel         string             `json:"channel"`
-	ChatID          string             `json:"chat_id"`
-	Workspace       string             `json:"workspace"`
-	RuntimeKey      string             `json:"runtime_key"`
-	TargetKey       string             `json:"target_key"`
-	Class           JobClass           `json:"class"`
-	State           JobState           `json:"state"`
-	Phase           string             `json:"phase,omitempty"`
-	Detail          string             `json:"detail,omitempty"`
-	StatusMessageID string             `json:"status_message_id,omitempty"`
-	Summary         string             `json:"summary,omitempty"`
-	AskSummary      string             `json:"ask_summary,omitempty"`
-	LastError       string             `json:"last_error,omitempty"`
-	Runtime         RuntimeProfile     `json:"runtime,omitempty"`
-	Message         bus.InboundMessage `json:"message,omitempty"`
-	StartedAt       int64              `json:"started_at"`
-	UpdatedAt       int64              `json:"updated_at"`
+	ID                 string             `json:"id"`
+	ShortID            string             `json:"short_id"`
+	Channel            string             `json:"channel"`
+	ChatID             string             `json:"chat_id"`
+	Workspace          string             `json:"workspace"`
+	RuntimeKey         string             `json:"runtime_key"`
+	TargetKey          string             `json:"target_key"`
+	Class              JobClass           `json:"class"`
+	State              JobState           `json:"state"`
+	Phase              string             `json:"phase,omitempty"`
+	Detail             string             `json:"detail,omitempty"`
+	StatusMessageID    string             `json:"status_message_id,omitempty"`
+	Summary            string             `json:"summary,omitempty"`
+	AskSummary         string             `json:"ask_summary,omitempty"`
+	LastError          string             `json:"last_error,omitempty"`
+	Runtime            RuntimeProfile     `json:"runtime,omitempty"`
+	Message            bus.InboundMessage `json:"message,omitempty"`
+	AttachmentsPending bool               `json:"attachments_pending,omitempty"`
+	StartedAt          int64              `json:"started_at"`
+	UpdatedAt          int64              `json:"updated_at"`
 }
 
 type jobStore struct {
@@ -219,14 +220,16 @@ func (s *targetActiveJobs) moveQueuedWriteToFront(jobID string) *activeJob {
 }
 
 type JobManager struct {
-	bus                 *bus.MessageBus
-	progress            ProgressMessenger
-	resolve             handlerResolverFunc
-	resolveSideLane     handlerResolverFunc
-	progressInterval    time.Duration
-	store               *jobStore
-	semaphore           chan struct{}
-	allowBTWDuringWrite bool
+	bus                    *bus.MessageBus
+	progress               ProgressMessenger
+	resolve                handlerResolverFunc
+	resolveSideLane        handlerResolverFunc
+	progressInterval       time.Duration
+	store                  *jobStore
+	semaphore              chan struct{}
+	allowBTWDuringWrite    bool
+	mediaRewrites          func() map[string]string
+	interruptedAttachments []JobRecord
 
 	mu      sync.Mutex
 	active  map[string]*targetActiveJobs
@@ -247,7 +250,7 @@ func formatShortJobRef(n uint64) string {
 	return strings.Repeat("0", width-len(ref)) + ref
 }
 
-func NewJobManager(storePath string, cfg config.JobsConfig, msgBus *bus.MessageBus, progress ProgressMessenger, resolve handlerResolverFunc) (*JobManager, error) {
+func NewJobManager(storePath string, cfg config.JobsConfig, msgBus *bus.MessageBus, progress ProgressMessenger, resolve handlerResolverFunc, rewrites ...func() map[string]string) (*JobManager, error) {
 	if strings.TrimSpace(storePath) == "" {
 		return nil, fmt.Errorf("job store path is required")
 	}
@@ -275,6 +278,9 @@ func NewJobManager(storePath string, cfg config.JobsConfig, msgBus *bus.MessageB
 		semaphore:           make(chan struct{}, maxConcurrent),
 		allowBTWDuringWrite: cfg.AllowBTWDuringWrite || cfg.AllowReadOnlyDuringWrite,
 		active:              map[string]*targetActiveJobs{},
+	}
+	if len(rewrites) > 0 {
+		jm.mediaRewrites = rewrites[0]
 	}
 	if err := jm.restoreCounterFromStore(); err != nil {
 		return nil, err
@@ -327,7 +333,7 @@ func (jm *JobManager) Submit(ctx context.Context, target LoopTarget, msg bus.Inb
 	jm.mu.Lock()
 	activeSet := jm.active[targetKey]
 	knownJobs := activeSet.snapshotAll()
-	if control.Kind != jobControlNone && (control.Directed || replyTargetsTrackedJob(knownJobs, msg.Metadata["reply_message_id"])) {
+	if len(msg.Media) == 0 && control.Kind != jobControlNone && (control.Directed || replyTargetsTrackedJob(knownJobs, msg.Metadata["reply_message_id"])) {
 		jm.mu.Unlock()
 		return jm.handleControl(ctx, msg, targetKey, knownJobs, control)
 	}
@@ -343,23 +349,26 @@ func (jm *JobManager) Submit(ctx context.Context, target LoopTarget, msg bus.Inb
 
 	jobID, shortID := jm.nextJobID()
 	jobCtx, cancel := context.WithCancel(ctx)
+	persistedMessage := request.Message
+	persistedMessage.Media = nil
 	record := JobRecord{
-		ID:         jobID,
-		ShortID:    shortID,
-		Channel:    msg.Channel,
-		ChatID:     msg.ChatID,
-		Workspace:  target.Workspace,
-		RuntimeKey: target.Runtime.Key(),
-		TargetKey:  targetKey,
-		Class:      jobClass,
-		State:      JobStateQueued,
-		Phase:      "queued",
-		Detail:     "Queued",
-		AskSummary: summarizeJobAsk(request.Message.Content),
-		Runtime:    target.Runtime,
-		Message:    request.Message,
-		StartedAt:  time.Now().UnixMilli(),
-		UpdatedAt:  time.Now().UnixMilli(),
+		ID:                 jobID,
+		ShortID:            shortID,
+		Channel:            msg.Channel,
+		ChatID:             msg.ChatID,
+		Workspace:          target.Workspace,
+		RuntimeKey:         target.Runtime.Key(),
+		TargetKey:          targetKey,
+		Class:              jobClass,
+		State:              JobStateQueued,
+		Phase:              "queued",
+		Detail:             "Queued",
+		AskSummary:         summarizeJobAsk(request.Message.Content),
+		Runtime:            target.Runtime,
+		Message:            persistedMessage,
+		AttachmentsPending: len(request.Message.Media) > 0,
+		StartedAt:          time.Now().UnixMilli(),
+		UpdatedAt:          time.Now().UnixMilli(),
 	}
 	active := &activeJob{
 		record: record,
@@ -487,10 +496,16 @@ func (jm *JobManager) interruptStaleActiveJobs() error {
 		record.State = JobStateInterrupted
 		record.Phase = "interrupted"
 		record.Detail = "Gateway restarted before this job finished"
+		if record.AttachmentsPending {
+			record.Detail = "Gateway restarted; please resend the attachments"
+		}
 		record.LastError = "interrupted on restart"
 		record.UpdatedAt = time.Now().UnixMilli()
 		if err := jm.store.Save(record); err != nil {
 			return err
+		}
+		if record.AttachmentsPending {
+			jm.interruptedAttachments = append(jm.interruptedAttachments, record)
 		}
 	}
 	return nil
@@ -510,6 +525,18 @@ func (jm *JobManager) rehydrateQueuedJobs() error {
 
 	for _, record := range records {
 		if record.State != JobStateQueued {
+			continue
+		}
+		if record.AttachmentsPending {
+			record.State = JobStateInterrupted
+			record.Phase = "interrupted"
+			record.Detail = "Gateway restarted; please resend the attachments"
+			record.Summary = record.Detail
+			record.UpdatedAt = time.Now().UnixMilli()
+			if err := jm.store.Save(record); err != nil {
+				return err
+			}
+			jm.interruptedAttachments = append(jm.interruptedAttachments, record)
 			continue
 		}
 		target, msg, err := rehydrateQueuedJob(record)
@@ -560,6 +587,23 @@ func (jm *JobManager) rehydrateQueuedJobs() error {
 		}
 	}
 	return nil
+}
+
+// NotifyInterruptedAttachments updates restart notices after channels are ready.
+func (jm *JobManager) NotifyInterruptedAttachments(ctx context.Context) {
+	for _, record := range jm.interruptedAttachments {
+		noticeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		_, updated := jm.trySyncProgressRecord(noticeCtx, record)
+		cancel()
+		if !updated {
+			noticeCtx, cancel = context.WithTimeout(ctx, 5*time.Second)
+			if err := jm.sendText(noticeCtx, record.Channel, record.ChatID, "A job was interrupted by a restart. Please resend its attachments."); err != nil {
+				logger.WarnCF("jobs", "Failed to send interrupted attachment notice", map[string]interface{}{"job_id": record.ID, "error": err.Error()})
+			}
+			cancel()
+		}
+	}
+	jm.interruptedAttachments = nil
 }
 
 func rehydrateQueuedJob(record JobRecord) (LoopTarget, bus.InboundMessage, error) {
@@ -881,8 +925,13 @@ func (jm *JobManager) reindexQueuedWritesLocked(activeSet *targetActiveJobs) []J
 }
 
 func (jm *JobManager) syncProgressRecord(ctx context.Context, record JobRecord) JobRecord {
+	record, _ = jm.trySyncProgressRecord(ctx, record)
+	return record
+}
+
+func (jm *JobManager) trySyncProgressRecord(ctx context.Context, record JobRecord) (JobRecord, bool) {
 	if jm.progress == nil || strings.TrimSpace(record.StatusMessageID) == "" {
-		return record
+		return record, false
 	}
 	message := formatProgressOutbound(record)
 	message.Channel = record.Channel
@@ -890,7 +939,7 @@ func (jm *JobManager) syncProgressRecord(ctx context.Context, record JobRecord) 
 	messageID, err := jm.progress.SendOrEditProgress(ctx, record.Channel, record.ChatID, record.StatusMessageID, message)
 	if err != nil {
 		logger.WarnCF("jobs", "Failed to sync progress record", map[string]interface{}{"job_id": record.ID, "error": err.Error()})
-		return record
+		return record, false
 	}
 	if trimmed := strings.TrimSpace(messageID); trimmed != "" && trimmed != strings.TrimSpace(record.StatusMessageID) {
 		record.StatusMessageID = trimmed
@@ -898,7 +947,7 @@ func (jm *JobManager) syncProgressRecord(ctx context.Context, record JobRecord) 
 			logger.WarnCF("jobs", "Failed to persist synced progress record", map[string]interface{}{"job_id": record.ID, "error": err.Error()})
 		}
 	}
-	return record
+	return record, true
 }
 
 func (jm *JobManager) syncProgressRecords(ctx context.Context, records ...JobRecord) []JobRecord {
@@ -946,6 +995,22 @@ func (jm *JobManager) runJob(ctx context.Context, target LoopTarget, msg bus.Inb
 	}
 
 	progress.update(JobStateRunning, "preparing_context", "Preparing context")
+	staged := msg
+	staged.Metadata = map[string]string{"message_id": msg.Metadata["message_id"] + "-" + active.snapshot().ID}
+	var rewrites map[string]string
+	if jm.mediaRewrites != nil {
+		rewrites = jm.mediaRewrites()
+	}
+	stageErr := prepareInboundMedia(ctx, target.Workspace, &staged, rewrites)
+	if ctx.Err() != nil {
+		progress.complete(JobStateCancelled, "cancelled", "Cancelled", ctx.Err())
+		return
+	}
+	msg.Content, msg.Media = staged.Content, staged.Media
+	if stageErr != nil {
+		msg.Media = nil
+		msg.Content = appendInboundContent(msg.Content, "Attachments could not be staged locally.")
+	}
 
 	handler, err := jm.resolveForClass(jobClass, target)
 	if err != nil {

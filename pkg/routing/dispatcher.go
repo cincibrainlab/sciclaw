@@ -146,6 +146,13 @@ func (d *Dispatcher) runDispatchLane(ctx context.Context, key string, lane *disp
 
 func (d *Dispatcher) dispatchResolved(ctx context.Context, task dispatchTask) {
 	msg := task.msg
+	if jobs := d.getJobManager(); jobs != nil && jobs.ShouldHandleChannel(msg.Channel) {
+		if err := jobs.Submit(ctx, task.target, msg); err != nil {
+			logger.ErrorCF("routing", "job_submit_failed", map[string]interface{}{"channel": msg.Channel, "chat_id": msg.ChatID, "reason": err.Error()})
+			d.sendJobSubmitError(ctx, msg, err)
+		}
+		return
+	}
 	if err := prepareInboundMedia(ctx, task.target.Workspace, &msg, d.getResolver().InboundMediaURLRewrites()); err != nil {
 		logger.ErrorCF("routing", "inbound_media_stage_failed", map[string]interface{}{
 			"channel":   msg.Channel,
@@ -159,22 +166,6 @@ func (d *Dispatcher) dispatchResolved(ctx context.Context, task dispatchTask) {
 		}
 		msg.Media = nil
 		msg.Content = appendInboundContent(msg.Content, "Attachments could not be staged locally.")
-	}
-	if jobs := d.getJobManager(); jobs != nil && jobs.ShouldHandleChannel(msg.Channel) {
-		if err := jobs.Submit(ctx, task.target, msg); err != nil {
-			logger.ErrorCF("routing", "job_submit_failed", map[string]interface{}{
-				"channel":   msg.Channel,
-				"chat_id":   msg.ChatID,
-				"sender_id": msg.SenderID,
-				"workspace": task.decision.Workspace,
-				"mode":      task.decision.Runtime.Mode,
-				"backend":   task.decision.Runtime.LocalBackend,
-				"model":     task.decision.Runtime.LocalModel,
-				"reason":    err.Error(),
-			})
-			d.sendJobSubmitError(ctx, msg, err)
-		}
-		return
 	}
 	if err := d.pool.Dispatch(ctx, task.target, msg); err != nil {
 		logger.ErrorCF("routing", "route_invalid", map[string]interface{}{

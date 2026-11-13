@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
 func TestPrepareInboundMedia_DownloadsURLIntoWorkspaceAndAnnotatesContent(t *testing.T) {
@@ -49,6 +50,49 @@ func TestPrepareInboundMedia_DownloadsURLIntoWorkspaceAndAnnotatesContent(t *tes
 	}
 	if !strings.Contains(msg.Content, ".sciclaw/inbound/discord/msg-1/") {
 		t.Fatalf("expected relative staged path in content, got %q", msg.Content)
+	}
+}
+
+func TestPrepareInboundMediaDoesNotLogSignedURLOnCancellation(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "server.log")
+	if err := logger.EnableFileLogging(logPath); err != nil {
+		t.Fatal(err)
+	}
+	defer logger.DisableFileLogging()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	msg := &bus.InboundMessage{Channel: "discord", ChatID: "room", Media: []string{"https://example.invalid/SECRET_PATH?token=SECRET_QUERY"}}
+	if err := prepareInboundMedia(ctx, t.TempDir(), msg, nil); err != context.Canceled {
+		t.Fatalf("got %v, want cancellation", err)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "SECRET_PATH") || strings.Contains(string(data), "SECRET_QUERY") {
+		t.Fatalf("signed URL leaked into log: %s", data)
+	}
+}
+
+func TestPrepareInboundMediaDoesNotExposeSignedURLOnDownloadFailure(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "server.log")
+	if err := logger.EnableFileLogging(logPath); err != nil {
+		t.Fatal(err)
+	}
+	defer logger.DisableFileLogging()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "failed", http.StatusInternalServerError) }))
+	defer server.Close()
+	msg := &bus.InboundMessage{Channel: "discord", ChatID: "room", Media: []string{server.URL + "/SECRET_PATH?token=SECRET_QUERY"}}
+	err := prepareInboundMedia(context.Background(), t.TempDir(), msg, nil)
+	if err == nil {
+		t.Fatal("expected download failure")
+	}
+	data, readErr := os.ReadFile(logPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if strings.Contains(string(data)+err.Error(), "SECRET_PATH") || strings.Contains(string(data)+err.Error(), "SECRET_QUERY") {
+		t.Fatalf("signed URL leaked into log or error: %s %v", data, err)
 	}
 }
 

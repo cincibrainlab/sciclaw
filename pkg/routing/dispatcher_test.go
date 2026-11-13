@@ -191,6 +191,64 @@ func TestDispatcherDispatchResolved_StagesInboundMediaBeforeJobSubmit(t *testing
 	}
 }
 
+func TestDispatcherCancelDuringAttachmentStaging(t *testing.T) {
+	started, cancelled := make(chan struct{}), make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { close(started); <-r.Context().Done(); close(cancelled) }))
+	defer server.Close()
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{Enabled: true}, mb, nil, func(LoopTarget) (JobRunner, error) { return &fakeJobRunner{}, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := NewDispatcher(mb, nil, nil)
+	d.SetJobManager(jm)
+	target := LoopTarget{Workspace: t.TempDir()}.normalized()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	msg := bus.InboundMessage{Channel: "discord", ChatID: "room", Content: "review", Media: []string{server.URL + "/slow"}}
+	if err := d.enqueueDispatch(ctx, dispatchTask{target: target, msg: msg}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("staging did not start")
+	}
+	msg.Content, msg.Media = "cancel", nil
+	msg.Metadata = map[string]string{"has_direct_mention": "true"}
+	if err := d.enqueueDispatch(ctx, dispatchTask{target: target, msg: msg}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("cancellation did not interrupt staging")
+	}
+	waitForNoActiveJobs(t, jm, target.key())
+}
+
+func TestDispatcherAttachmentCaptionIsNotJobControl(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("file")) }))
+	defer server.Close()
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+	runner := &fakeJobRunner{}
+	jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{Enabled: true}, mb, nil, func(LoopTarget) (JobRunner, error) { return runner, nil }, func() map[string]string { return map[string]string{"https://public.invalid": server.URL} })
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := LoopTarget{Workspace: t.TempDir()}.normalized()
+	d := NewDispatcher(mb, nil, nil)
+	d.SetJobManager(jm)
+	d.dispatchResolved(context.Background(), dispatchTask{target: target, msg: bus.InboundMessage{Channel: "discord", ChatID: "room", Content: "cancel", Media: []string{"https://public.invalid/file"}, Metadata: map[string]string{"has_direct_mention": "true"}}})
+	waitForNoActiveJobs(t, jm, target.key())
+	got := runner.snapshotLastMsg()
+	if len(got.Media) != 1 || !strings.Contains(got.Content, "cancel") {
+		t.Fatalf("attachment caption was not processed as a job: %+v", got)
+	}
+}
+
 func TestDispatcherDispatchResolved_PreservesTextWhenStagingFails(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/slow.ogg" {

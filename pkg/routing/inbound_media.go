@@ -62,16 +62,23 @@ func prepareInboundMedia(ctx context.Context, workspace string, msg *bus.Inbound
 			err = copyInboundFile(source, destPath)
 		}
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			fields := map[string]any{"channel": msg.Channel, "chat_id": msg.ChatID}
+			if isHTTPURL(source) {
+				if err.Error() != fmt.Sprintf("attachment exceeds %d bytes", inboundMediaMaxDownloadBytes) {
+					err = fmt.Errorf("attachment download failed")
+				}
+			} else {
+				fields["source"] = source
+				fields["dest_path"] = destPath
+			}
+			fields["error"] = err.Error()
 			if firstErr == nil {
 				firstErr = err
 			}
-			logger.WarnCF("routing", "Failed to stage inbound attachment", map[string]any{
-				"channel":   msg.Channel,
-				"chat_id":   msg.ChatID,
-				"source":    source,
-				"dest_path": destPath,
-				"error":     err.Error(),
-			})
+			logger.WarnCF("routing", "Failed to stage inbound attachment", fields)
 			failedLines = append(failedLines, fmt.Sprintf("- %s", filename))
 			continue
 		}
