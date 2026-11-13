@@ -104,95 +104,71 @@ func TestDispatcherLogsDroppedJobSubmitError(t *testing.T) {
 	}
 }
 
-func TestDroppedPreparationRejectionIsObservableAtHighLogLevels(t *testing.T) {
-	oldLevel, oldOutput := logger.GetLevel(), log.Writer()
-	file, err := os.Create(filepathJoin(t.TempDir(), "stderr.log"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	log.SetOutput(file)
-	defer func() { logger.SetLevel(oldLevel); log.SetOutput(oldOutput); _ = file.Close() }()
-	for _, level := range []logger.LogLevel{logger.ERROR, logger.FATAL} {
-		if err := file.Truncate(0); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := file.Seek(0, 0); err != nil {
-			t.Fatal(err)
-		}
-		logger.SetLevel(level)
-		mb := bus.NewMessageBus()
-		for i := 0; i < 100; i++ {
-			if err := mb.PublishOutbound(context.Background(), bus.OutboundMessage{}); err != nil {
+func TestDroppedNoticesAreObservableAtHighLogLevels(t *testing.T) {
+	for _, scenario := range []string{"preparation", "async-card"} {
+		t.Run(scenario, func(t *testing.T) {
+			oldLevel, oldOutput := logger.GetLevel(), log.Writer()
+			file, err := os.Create(filepathJoin(t.TempDir(), "stderr.log"))
+			if err != nil {
 				t.Fatal(err)
 			}
-		}
-		jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{MaxConcurrent: 1}, mb, nil, func(LoopTarget) (JobRunner, error) { return &fakeJobRunner{}, nil })
-		if err != nil {
-			t.Fatal(err)
-		}
-		for i := 0; i < cap(jm.preparation); i++ {
-			jm.preparation <- struct{}{}
-		}
-		err = jm.Submit(context.Background(), LoopTarget{Workspace: t.TempDir()}, bus.InboundMessage{Channel: "discord", ChatID: "room", Media: []string{"https://example.invalid/file"}})
-		mb.Close()
-		if err == nil {
-			t.Fatalf("level %v: rejection was reported as success", level)
-		}
-		data, err := os.ReadFile(file.Name())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(string(data), "Job rejection notice dropped") {
-			t.Fatalf("level %v: missing drop log", level)
-		}
-	}
-}
-
-func TestAsyncCardFailureWithFullBusIsLoggedAtHighLevels(t *testing.T) {
-	oldLevel, oldOutput := logger.GetLevel(), log.Writer()
-	file, err := os.Create(filepathJoin(t.TempDir(), "stderr.log"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	log.SetOutput(file)
-	defer func() { logger.SetLevel(oldLevel); log.SetOutput(oldOutput); _ = file.Close() }()
-	for _, level := range []logger.LogLevel{logger.ERROR, logger.FATAL} {
-		if err := file.Truncate(0); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := file.Seek(0, 0); err != nil {
-			t.Fatal(err)
-		}
-		logger.SetLevel(level)
-		mb := bus.NewMessageBus()
-		for i := 0; i < 100; i++ {
-			if err := mb.PublishOutbound(context.Background(), bus.OutboundMessage{}); err != nil {
-				t.Fatal(err)
+			log.SetOutput(file)
+			defer func() { logger.SetLevel(oldLevel); log.SetOutput(oldOutput); _ = file.Close() }()
+			for _, level := range []logger.LogLevel{logger.ERROR, logger.FATAL} {
+				if err := file.Truncate(0); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := file.Seek(0, 0); err != nil {
+					t.Fatal(err)
+				}
+				logger.SetLevel(level)
+				mb := bus.NewMessageBus()
+				for i := 0; i < 100; i++ {
+					if err := mb.PublishOutbound(context.Background(), bus.OutboundMessage{}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				var progress ProgressMessenger
+				if scenario == "async-card" {
+					progress = &fakeProgressMessenger{editFail: true}
+				}
+				jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{MaxConcurrent: 1}, mb, progress, func(LoopTarget) (JobRunner, error) { return &fakeJobRunner{}, nil })
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := "Job rejection notice dropped"
+				if scenario == "preparation" {
+					for i := 0; i < cap(jm.preparation); i++ {
+						jm.preparation <- struct{}{}
+					}
+					err = jm.Submit(context.Background(), LoopTarget{Workspace: t.TempDir()}, bus.InboundMessage{Channel: "discord", ChatID: "room", Media: []string{"https://example.invalid/file"}})
+					if err == nil {
+						t.Fatalf("level %v: rejection was reported as success", level)
+					}
+				} else {
+					want = "Job status failure notice dropped"
+					job := &activeJob{record: JobRecord{ID: "job-1", Channel: "discord", ChatID: "room", State: JobStateRunning, StatusMessageID: "card"}}
+					if _, ok := jm.refreshSelectedJobCard(context.Background(), job); !ok {
+						t.Fatal("refresh was not scheduled")
+					}
+					deadline := time.Now().Add(2 * time.Second)
+					for len(jm.statusSlots) != 0 && time.Now().Before(deadline) {
+						time.Sleep(time.Millisecond)
+					}
+					if len(jm.statusSlots) != 0 {
+						t.Fatal("refresh did not finish")
+					}
+				}
+				mb.Close()
+				data, err := os.ReadFile(file.Name())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !strings.Contains(string(data), want) {
+					t.Fatalf("level %v: missing drop log %q", level, want)
+				}
 			}
-		}
-		jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{MaxConcurrent: 1}, mb, &fakeProgressMessenger{editFail: true}, func(LoopTarget) (JobRunner, error) { return &fakeJobRunner{}, nil })
-		if err != nil {
-			t.Fatal(err)
-		}
-		job := &activeJob{record: JobRecord{ID: "job-1", Channel: "discord", ChatID: "room", State: JobStateRunning, StatusMessageID: "card"}}
-		if _, ok := jm.refreshSelectedJobCard(context.Background(), job); !ok {
-			t.Fatal("refresh was not scheduled")
-		}
-		deadline := time.Now().Add(2 * time.Second)
-		for len(jm.statusSlots) != 0 && time.Now().Before(deadline) {
-			time.Sleep(time.Millisecond)
-		}
-		if len(jm.statusSlots) != 0 {
-			t.Fatal("refresh did not finish")
-		}
-		mb.Close()
-		data, err := os.ReadFile(file.Name())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(string(data), "Job status failure notice dropped") {
-			t.Fatalf("level %v: asynchronous failure was silent", level)
-		}
+		})
 	}
 }
 
