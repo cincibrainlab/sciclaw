@@ -133,7 +133,7 @@ RUN mkdir -p /root/sciclaw/profile /root/sciclaw/skills \
       /opt/sciclaw/templates/workspace/IDENTITY.md /opt/sciclaw/templates/workspace/SOUL.md \
       /opt/sciclaw/templates/workspace/TOOLS.md /opt/sciclaw/templates/workspace/USER.md \
       /root/sciclaw/profile/ && \
-    cp /opt/sciclaw/templates/workspace/memory/MEMORY.md /root/sciclaw/workspaces/default/memory/MEMORY.md
+    cp /opt/sciclaw/templates/workspace/MEMORY.md /root/sciclaw/workspaces/default/memory/MEMORY.md
 
 ENTRYPOINT ["sciclaw-docker-entrypoint"]
 CMD ["gateway"]
