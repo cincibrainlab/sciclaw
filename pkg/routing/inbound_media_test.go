@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
 func TestPrepareInboundMedia_DownloadsURLIntoWorkspaceAndAnnotatesContent(t *testing.T) {
@@ -31,7 +32,7 @@ func TestPrepareInboundMedia_DownloadsURLIntoWorkspaceAndAnnotatesContent(t *tes
 		},
 	}
 
-	if err := prepareInboundMedia(context.Background(), workspace, msg); err != nil {
+	if err := prepareInboundMedia(context.Background(), workspace, msg, nil); err != nil {
 		t.Fatalf("prepareInboundMedia: %v", err)
 	}
 	if len(msg.Media) != 1 {
@@ -47,8 +48,82 @@ func TestPrepareInboundMedia_DownloadsURLIntoWorkspaceAndAnnotatesContent(t *tes
 	if !strings.Contains(msg.Content, "Attachments staged locally and available to tools:") {
 		t.Fatalf("expected staged attachment summary in content, got %q", msg.Content)
 	}
-	if !strings.Contains(msg.Content, ".sciclaw/inbound/discord/msg-1/report.docx") {
+	if !strings.Contains(msg.Content, ".sciclaw/inbound/discord/msg-1/") {
 		t.Fatalf("expected relative staged path in content, got %q", msg.Content)
+	}
+}
+
+func TestPrepareInboundMediaDoesNotLogSignedURLOnCancellation(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "server.log")
+	if err := logger.EnableFileLogging(logPath); err != nil {
+		t.Fatal(err)
+	}
+	defer logger.DisableFileLogging()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	msg := &bus.InboundMessage{Channel: "discord", ChatID: "room", Media: []string{"https://example.invalid/SECRET_PATH?token=SECRET_QUERY"}}
+	if err := prepareInboundMedia(ctx, t.TempDir(), msg, nil); err != context.Canceled {
+		t.Fatalf("got %v, want cancellation", err)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "SECRET_PATH") || strings.Contains(string(data), "SECRET_QUERY") {
+		t.Fatalf("signed URL leaked into log: %s", data)
+	}
+}
+
+func TestPrepareInboundMediaDoesNotExposeSignedURLOnDownloadFailure(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "server.log")
+	if err := logger.EnableFileLogging(logPath); err != nil {
+		t.Fatal(err)
+	}
+	defer logger.DisableFileLogging()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "failed", http.StatusInternalServerError) }))
+	defer server.Close()
+	msg := &bus.InboundMessage{Channel: "discord", ChatID: "room", Media: []string{server.URL + "/SECRET_PATH?token=SECRET_QUERY"}}
+	err := prepareInboundMedia(context.Background(), t.TempDir(), msg, nil)
+	if err == nil {
+		t.Fatal("expected download failure")
+	}
+	data, readErr := os.ReadFile(logPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if strings.Contains(string(data)+err.Error(), "SECRET_PATH") || strings.Contains(string(data)+err.Error(), "SECRET_QUERY") {
+		t.Fatalf("signed URL leaked into log or error: %s %v", data, err)
+	}
+}
+
+func TestPrepareInboundMedia_RewritesLocalPublicURLToInternalOrigin(t *testing.T) {
+	workspace := t.TempDir()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.URL.RequestURI(), "/attachments/guild/id/report.pdf?ex=1"; got != want {
+			t.Fatalf("request URI=%q want %q", got, want)
+		}
+		_, _ = w.Write([]byte("stub pdf"))
+	}))
+	defer server.Close()
+
+	msg := &bus.InboundMessage{
+		Channel: "discord",
+		ChatID:  "chan-1",
+		Media:   []string{"http://localhost:13001/attachments/guild/id/report.pdf?ex=1"},
+		Metadata: map[string]string{
+			"message_id": "msg-local-url",
+		},
+	}
+	if err := prepareInboundMedia(
+		context.Background(),
+		workspace,
+		msg,
+		map[string]string{"http://localhost:13001": server.URL},
+	); err != nil {
+		t.Fatalf("prepareInboundMedia: %v", err)
+	}
+	if len(msg.Media) != 1 || !strings.HasPrefix(msg.Media[0], workspace) {
+		t.Fatalf("staged media=%#v", msg.Media)
 	}
 }
 
@@ -71,7 +146,7 @@ func TestPrepareInboundMedia_CopiesLocalFileIntoWorkspace(t *testing.T) {
 		},
 	}
 
-	if err := prepareInboundMedia(context.Background(), workspace, msg); err != nil {
+	if err := prepareInboundMedia(context.Background(), workspace, msg, nil); err != nil {
 		t.Fatalf("prepareInboundMedia: %v", err)
 	}
 	if len(msg.Media) != 1 {
@@ -88,7 +163,7 @@ func TestPrepareInboundMedia_CopiesLocalFileIntoWorkspace(t *testing.T) {
 	if string(data) != "hello" {
 		t.Fatalf("unexpected staged file content: %q", string(data))
 	}
-	if !strings.Contains(msg.Content, ".sciclaw/inbound/discord/msg-2/input.docx") {
+	if !strings.Contains(msg.Content, ".sciclaw/inbound/discord/msg-2/") {
 		t.Fatalf("expected staged path in content, got %q", msg.Content)
 	}
 }
@@ -114,7 +189,7 @@ func TestPrepareInboundMedia_UsesContextCancellationForDownloads(t *testing.T) {
 		},
 	}
 
-	err := prepareInboundMedia(ctx, workspace, msg)
+	err := prepareInboundMedia(ctx, workspace, msg, nil)
 	if err == nil {
 		t.Fatal("expected cancelled context to abort download")
 	}
@@ -139,7 +214,7 @@ func TestPrepareInboundMedia_RejectsOversizedDownloads(t *testing.T) {
 		},
 	}
 
-	err := prepareInboundMedia(context.Background(), workspace, msg)
+	err := prepareInboundMedia(context.Background(), workspace, msg, nil)
 	if err == nil {
 		t.Fatal("expected oversized attachment to fail")
 	}
@@ -175,11 +250,30 @@ func TestPrepareInboundMedia_RejectsOversizedLocalFiles(t *testing.T) {
 		},
 	}
 
-	err = prepareInboundMedia(context.Background(), workspace, msg)
+	err = prepareInboundMedia(context.Background(), workspace, msg, nil)
 	if err == nil {
 		t.Fatal("expected oversized local attachment to fail")
 	}
 	if !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("expected oversized error, got %v", err)
+	}
+}
+
+func TestRewriteInboundMediaURL_InvalidTargetsLeaveSourceUnchanged(t *testing.T) {
+	source := "http://localhost:13001/attachments/report.pdf?token=1"
+	for _, target := range []string{"http://:3001", "http://server:65536", "http://server:99999", "ftp://server:3001", "http://server:3001/path", "http://user@server:3001", "http://server:3001#fragment", "http://server:3001?"} {
+		t.Run(target, func(t *testing.T) {
+			if got := rewriteInboundMediaURL(source, map[string]string{"http://localhost:13001": target}); got != source {
+				t.Fatalf("got %q, want %q", got, source)
+			}
+		})
+	}
+}
+
+func TestRewriteInboundMediaURL_MaximumPort(t *testing.T) {
+	source := "http://localhost:13001/attachments/report.pdf?token=1"
+	got := rewriteInboundMediaURL(source, map[string]string{"http://localhost:13001": "http://server:65535"})
+	if got != "http://server:65535/attachments/report.pdf?token=1" {
+		t.Fatalf("got %q", got)
 	}
 }

@@ -146,7 +146,14 @@ func (d *Dispatcher) runDispatchLane(ctx context.Context, key string, lane *disp
 
 func (d *Dispatcher) dispatchResolved(ctx context.Context, task dispatchTask) {
 	msg := task.msg
-	if err := prepareInboundMedia(ctx, task.target.Workspace, &msg); err != nil {
+	if jobs := d.getJobManager(); jobs != nil && jobs.ShouldHandleChannel(msg.Channel) {
+		if err := jobs.Submit(ctx, task.target, msg); err != nil {
+			logger.ErrorCF("routing", "job_submit_failed", map[string]interface{}{"channel": msg.Channel, "chat_id": msg.ChatID, "reason": err.Error()})
+			d.sendJobSubmitError(ctx, msg, err)
+		}
+		return
+	}
+	if err := prepareInboundMedia(ctx, task.target.Workspace, &msg, d.getResolver().InboundMediaURLRewrites()); err != nil {
 		logger.ErrorCF("routing", "inbound_media_stage_failed", map[string]interface{}{
 			"channel":   msg.Channel,
 			"chat_id":   msg.ChatID,
@@ -154,24 +161,11 @@ func (d *Dispatcher) dispatchResolved(ctx context.Context, task dispatchTask) {
 			"workspace": task.target.Workspace,
 			"reason":    err.Error(),
 		})
-		d.sendInboundMediaStageError(ctx, msg, err)
-		return
-	}
-	if jobs := d.getJobManager(); jobs != nil && jobs.ShouldHandleChannel(msg.Channel) {
-		if err := jobs.Submit(ctx, task.target, msg); err != nil {
-			logger.ErrorCF("routing", "job_submit_failed", map[string]interface{}{
-				"channel":   msg.Channel,
-				"chat_id":   msg.ChatID,
-				"sender_id": msg.SenderID,
-				"workspace": task.decision.Workspace,
-				"mode":      task.decision.Runtime.Mode,
-				"backend":   task.decision.Runtime.LocalBackend,
-				"model":     task.decision.Runtime.LocalModel,
-				"reason":    err.Error(),
-			})
-			d.sendJobSubmitError(ctx, msg, err)
+		if ctx.Err() != nil {
+			return
 		}
-		return
+		msg.Media = nil
+		msg.Content = appendInboundContent(msg.Content, "Attachments could not be staged locally.")
 	}
 	if err := d.pool.Dispatch(ctx, task.target, msg); err != nil {
 		logger.ErrorCF("routing", "route_invalid", map[string]interface{}{
@@ -275,21 +269,6 @@ func (d *Dispatcher) sendJobSubmitError(ctx context.Context, msg bus.InboundMess
 		return
 	}
 	content := "Failed to start background job"
-	if detail := strings.TrimSpace(err.Error()); detail != "" {
-		content += ": " + detail
-	}
-	d.bus.PublishOutbound(ctx, bus.OutboundMessage{
-		Channel: msg.Channel,
-		ChatID:  msg.ChatID,
-		Content: content,
-	})
-}
-
-func (d *Dispatcher) sendInboundMediaStageError(ctx context.Context, msg bus.InboundMessage, err error) {
-	if constants.IsInternalChannel(msg.Channel) {
-		return
-	}
-	content := "Failed to stage inbound attachments"
 	if detail := strings.TrimSpace(err.Error()); detail != "" {
 		content += ": " + detail
 	}

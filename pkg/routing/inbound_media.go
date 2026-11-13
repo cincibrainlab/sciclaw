@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,7 +22,11 @@ var inboundMediaHTTPClient = &http.Client{Timeout: 60 * time.Second}
 
 const inboundMediaMaxDownloadBytes int64 = 64 * 1024 * 1024
 
-func prepareInboundMedia(ctx context.Context, workspace string, msg *bus.InboundMessage) error {
+func PrepareInboundMedia(ctx context.Context, workspace string, msg *bus.InboundMessage, rewrites map[string]string) error {
+	return prepareInboundMedia(ctx, workspace, msg, rewrites)
+}
+
+func prepareInboundMedia(ctx context.Context, workspace string, msg *bus.InboundMessage, rewrites map[string]string) error {
 	if msg == nil || strings.TrimSpace(workspace) == "" || len(msg.Media) == 0 {
 		return nil
 	}
@@ -29,13 +34,7 @@ func prepareInboundMedia(ctx context.Context, workspace string, msg *bus.Inbound
 		ctx = context.Background()
 	}
 
-	stageDir := filepath.Join(
-		workspace,
-		".sciclaw",
-		"inbound",
-		sanitizePathSegment(msg.Channel),
-		inboundMediaMessageDir(msg),
-	)
+	stageDir := filepath.Join(workspace, ".sciclaw", "inbound", sanitizePathSegment(msg.Channel), inboundMediaMessageDir(msg))
 	if err := os.MkdirAll(stageDir, 0755); err != nil {
 		return fmt.Errorf("create inbound media staging dir: %w", err)
 	}
@@ -52,6 +51,7 @@ func prepareInboundMedia(ctx context.Context, workspace string, msg *bus.Inbound
 			continue
 		}
 
+		source = rewriteInboundMediaURL(source, rewrites)
 		filename := uniqueInboundFilename(deriveInboundFilename(source, i+1), seenNames)
 		destPath := filepath.Join(stageDir, filename)
 		var err error
@@ -62,16 +62,23 @@ func prepareInboundMedia(ctx context.Context, workspace string, msg *bus.Inbound
 			err = copyInboundFile(source, destPath)
 		}
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			fields := map[string]any{"channel": msg.Channel, "chat_id": msg.ChatID}
+			if isHTTPURL(source) {
+				if err.Error() != fmt.Sprintf("attachment exceeds %d bytes", inboundMediaMaxDownloadBytes) {
+					err = fmt.Errorf("attachment download failed")
+				}
+			} else {
+				fields["source"] = source
+				fields["dest_path"] = destPath
+			}
+			fields["error"] = err.Error()
 			if firstErr == nil {
 				firstErr = err
 			}
-			logger.WarnCF("routing", "Failed to stage inbound attachment", map[string]any{
-				"channel":   msg.Channel,
-				"chat_id":   msg.ChatID,
-				"source":    source,
-				"dest_path": destPath,
-				"error":     err.Error(),
-			})
+			logger.WarnCF("routing", "Failed to stage inbound attachment", fields)
 			failedLines = append(failedLines, fmt.Sprintf("- %s", filename))
 			continue
 		}
@@ -101,6 +108,29 @@ func prepareInboundMedia(ctx context.Context, workspace string, msg *bus.Inbound
 	}
 
 	return nil
+}
+
+func rewriteInboundMediaURL(source string, rewrites map[string]string) string {
+	sourceURL, err := url.Parse(source)
+	if err != nil || sourceURL.Scheme == "" || sourceURL.Host == "" {
+		return source
+	}
+	target, ok := rewrites[sourceURL.Scheme+"://"+sourceURL.Host]
+	if !ok {
+		return source
+	}
+	targetURL, err := url.Parse(target)
+	if err != nil || (targetURL.Scheme != "http" && targetURL.Scheme != "https") || targetURL.Hostname() == "" || targetURL.User != nil || targetURL.Path != "" || targetURL.RawQuery != "" || targetURL.ForceQuery || targetURL.Fragment != "" {
+		return source
+	}
+	if port := targetURL.Port(); port != "" {
+		if _, err := strconv.ParseUint(port, 10, 16); err != nil {
+			return source
+		}
+	}
+	sourceURL.Scheme = targetURL.Scheme
+	sourceURL.Host = targetURL.Host
+	return sourceURL.String()
 }
 
 func inboundMediaMessageDir(msg *bus.InboundMessage) string {

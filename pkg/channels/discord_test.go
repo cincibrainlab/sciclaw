@@ -3,6 +3,8 @@ package channels
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +15,7 @@ import (
 	"github.com/bwmarrin/discordgo"
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/routing"
 )
 
 func newTestDiscordChannel() *DiscordChannel {
@@ -1285,5 +1288,36 @@ func TestProcessIncomingMessage_NewMessageWithoutMention(t *testing.T) {
 	}
 	if got.Metadata["is_edit"] != "false" {
 		t.Fatalf("expected is_edit=false, got %q", got.Metadata["is_edit"])
+	}
+}
+
+func TestDiscordProcessIncomingMessage_ProxyOnlyAttachmentsAreStaged(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("attachment")) }))
+	defer server.Close()
+	for _, filename := range []string{"voice.ogg", "document.pdf"} {
+		t.Run(filename, func(t *testing.T) {
+			ch := newTestDiscordChannel()
+			defer ch.BaseChannel.bus.Close()
+			proxy := server.URL + "/" + filename
+			msg := &discordgo.Message{ID: "m-1", ChannelID: "chan-1", Author: &discordgo.User{ID: "user-1"}, Attachments: []*discordgo.MessageAttachment{{Filename: filename, ProxyURL: proxy}}}
+			ch.processIncomingMessage(newTestSession("bot-1"), msg, false)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			in, ok := ch.BaseChannel.bus.ConsumeInbound(ctx)
+			if !ok || len(in.Media) != 1 || in.Media[0] != proxy {
+				t.Fatalf("inbound = %+v, ok = %v", in, ok)
+			}
+			if filename == "voice.ogg" && !strings.Contains(in.Content, "[audio: voice.ogg]") {
+				t.Fatalf("audio download did not succeed: %q", in.Content)
+			}
+			workspace := t.TempDir()
+			if err := routing.PrepareInboundMedia(ctx, workspace, &in, nil); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(in.Media[0])
+			if err != nil || string(data) != "attachment" || !strings.Contains(in.Content, "Attachments staged locally") {
+				t.Fatalf("staged media = %q, content = %q, error = %v", data, in.Content, err)
+			}
+		})
 	}
 }

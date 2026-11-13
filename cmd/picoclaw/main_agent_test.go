@@ -107,7 +107,7 @@ func TestAttachChannelHistoryCallback_WiresSideLaneLoop(t *testing.T) {
 		ToolProfile: agent.ToolProfileSideLane,
 	})
 
-	attachChannelHistoryCallback(al, func(channelID string, limit int, beforeID string) ([]tools.ChannelHistoryMessage, error) {
+	attachChannelHistoryCallback(al, func(ctx context.Context, channelID string, limit int, beforeID string) ([]tools.ChannelHistoryMessage, error) {
 		if channelID != "room-1" {
 			t.Fatalf("channelID = %q, want room-1", channelID)
 		}
@@ -123,7 +123,7 @@ func TestAttachChannelHistoryCallback_WiresSideLaneLoop(t *testing.T) {
 			Content:   "hello from history",
 			Timestamp: "2026-03-15 10:00",
 		}}, nil
-	})
+	}, nil)
 
 	out, err := al.RunJob(context.Background(), bus.InboundMessage{
 		Channel:    "discord",

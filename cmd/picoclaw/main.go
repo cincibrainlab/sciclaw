@@ -22,10 +22,13 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/bwmarrin/discordgo"
 	"github.com/chzyer/readline"
+	"github.com/google/uuid"
 	"github.com/sipeed/picoclaw/cmd/picoclaw/tui"
 	"github.com/sipeed/picoclaw/pkg/addons"
 	"github.com/sipeed/picoclaw/pkg/agent"
@@ -1752,11 +1755,13 @@ func gatewayCmd() {
 		}
 	}
 
+	var inboundMediaRewrites atomic.Pointer[map[string]string]
+	inboundMediaRewrites.Store(&cfg.Routing.InboundMediaURLRewrites)
 	var channelHistoryCB tools.FetchChannelHistoryCallback
 	if discordCh, ok := channelManager.GetChannel("discord"); ok {
 		if dc, ok := discordCh.(*channels.DiscordChannel); ok {
-			channelHistoryCB = discordHistoryCallback(dc)
-			attachChannelHistoryCallback(agentLoop, channelHistoryCB)
+			channelHistoryCB = discordHistoryCallback(dc.GetChannelMessages)
+			attachChannelHistoryCallback(agentLoop, channelHistoryCB, &inboundMediaRewrites)
 			dc.SetSlashSkillCatalogCallback(func(channelID, guildID, userID string) ([]channels.SlashSkillChoice, error) {
 				return listDiscordSlashSkills(cfg, channelID, guildID, userID)
 			})
@@ -1816,7 +1821,7 @@ func gatewayCmd() {
 		al := agent.NewAgentLoopWithOptions(cloned, msgBus, loopProvider, agent.LoopOptions{
 			ToolProfile: agent.ToolProfileSideLane,
 		})
-		attachChannelHistoryCallback(al, channelHistoryCB)
+		attachChannelHistoryCallback(al, channelHistoryCB, &inboundMediaRewrites)
 		return al, nil
 	}
 	if cfg.Jobs.Enabled && cfg.Jobs.DiscordAsyncDefault {
@@ -1831,6 +1836,7 @@ func gatewayCmd() {
 				}
 				return agentLoop, nil
 			},
+			func() map[string]string { return currentInboundMediaRewrites(&inboundMediaRewrites) },
 		)
 		if jmErr != nil {
 			fmt.Printf("Warning: background jobs disabled: %v\n", jmErr)
@@ -1859,7 +1865,7 @@ func gatewayCmd() {
 		})
 		if channelHistoryCB != nil {
 			poolSetup = append(poolSetup, func(al *agent.AgentLoop) {
-				attachChannelHistoryCallback(al, channelHistoryCB)
+				attachChannelHistoryCallback(al, channelHistoryCB, &inboundMediaRewrites)
 			})
 		}
 		loopPool = routing.NewAgentLoopPool(cfg, msgBus, poolSetup...)
@@ -1877,22 +1883,18 @@ func gatewayCmd() {
 		}()
 		fmt.Printf("✓ Routing enabled: %d mapping(s)\n", len(cfg.Routing.Mappings))
 	}
-	go watchRoutingReload(ctx, routingDispatcher)
+	go watchRoutingReload(ctx, routingDispatcher, &inboundMediaRewrites)
 	fmt.Printf("✓ Routing reload trigger: %s\n", routingReloadTriggerPath())
 	if !cfg.Routing.Enabled {
-		if jobManager != nil {
-			go runGatewayDefaultDispatch(ctx, msgBus, agentLoop, jobManager, routing.LoopTarget{
-				Workspace: cfg.WorkspacePath(),
-				Runtime: routing.RuntimeProfile{
-					Mode:         cfg.EffectiveMode(),
-					LocalBackend: cfg.Agents.Defaults.LocalBackend,
-					LocalModel:   cfg.Agents.Defaults.LocalModel,
-					LocalPreset:  cfg.Agents.Defaults.LocalPreset,
-				},
-			})
-		} else {
-			go agentLoop.Run(ctx)
-		}
+		go runGatewayDefaultDispatch(ctx, msgBus, agentLoop, jobManager, routing.LoopTarget{
+			Workspace: cfg.WorkspacePath(),
+			Runtime: routing.RuntimeProfile{
+				Mode:         cfg.EffectiveMode(),
+				LocalBackend: cfg.Agents.Defaults.LocalBackend,
+				LocalModel:   cfg.Agents.Defaults.LocalModel,
+				LocalPreset:  cfg.Agents.Defaults.LocalPreset,
+			},
+		}, &inboundMediaRewrites)
 	}
 
 	if err := cronService.Start(); err != nil {
@@ -1907,6 +1909,9 @@ func gatewayCmd() {
 
 	if err := channelManager.StartAll(ctx); err != nil {
 		fmt.Printf("Error starting channels: %v\n", err)
+	}
+	if jobManager != nil {
+		jobManager.NotifyInterruptedAttachments(ctx)
 	}
 
 	sigChan := make(chan os.Signal, 1)
@@ -2254,18 +2259,64 @@ func modelsCmd() {
 	}
 }
 
-// discordHistoryCallback builds a FetchChannelHistoryCallback that reads
-// messages from the Discord REST API via the given DiscordChannel.
-func attachChannelHistoryCallback(al *agent.AgentLoop, cb tools.FetchChannelHistoryCallback) {
+func currentInboundMediaRewrites(rewrites *atomic.Pointer[map[string]string]) map[string]string {
+	if rewrites == nil {
+		return nil
+	}
+	if current := rewrites.Load(); current != nil {
+		return *current
+	}
+	return nil
+}
+
+func attachChannelHistoryCallback(al *agent.AgentLoop, cb tools.FetchChannelHistoryCallback, rewrites *atomic.Pointer[map[string]string]) {
 	if al == nil || cb == nil {
 		return
 	}
-	al.SetChannelHistoryCallback(cb)
+	al.SetChannelHistoryCallback(historyStagingCallback(al.Workspace(), cb, rewrites))
 }
 
-func discordHistoryCallback(dc *channels.DiscordChannel) tools.FetchChannelHistoryCallback {
-	return func(channelID string, limit int, beforeID string) ([]tools.ChannelHistoryMessage, error) {
-		msgs, err := dc.GetChannelMessages(channelID, limit, beforeID)
+func historyStagingCallback(workspace string, cb tools.FetchChannelHistoryCallback, rewrites *atomic.Pointer[map[string]string]) tools.FetchChannelHistoryCallback {
+	return func(ctx context.Context, channelID string, limit int, beforeID string) ([]tools.ChannelHistoryMessage, error) {
+		messages, err := cb(ctx, channelID, limit, beforeID)
+		if err != nil {
+			return nil, err
+		}
+		for i := range messages {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			msg := &messages[i]
+			if len(msg.Media) == 0 {
+				continue
+			}
+			root := filepath.Join(workspace, ".sciclaw", "inbound", "discord-history")
+			if err := os.MkdirAll(root, 0755); err != nil {
+				msg.Content += "\nAttachments could not be staged locally."
+				continue
+			}
+			dir, err := os.MkdirTemp(root, "message-")
+			if err != nil {
+				msg.Content += "\nAttachments could not be staged locally."
+				continue
+			}
+			inbound := bus.InboundMessage{Channel: "discord-history", ChatID: channelID, Content: msg.Content, Media: msg.Media, Metadata: map[string]string{"message_id": filepath.Base(dir)}}
+			err = routing.PrepareInboundMedia(ctx, workspace, &inbound, currentInboundMediaRewrites(rewrites))
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			if err != nil {
+				inbound.Content += "\nAttachments could not be staged locally."
+			}
+			msg.Content = inbound.Content
+		}
+		return messages, nil
+	}
+}
+
+func discordHistoryCallback(fetch func(string, int, string) ([]*discordgo.Message, error)) tools.FetchChannelHistoryCallback {
+	return func(ctx context.Context, channelID string, limit int, beforeID string) ([]tools.ChannelHistoryMessage, error) {
+		msgs, err := fetch(channelID, limit, beforeID)
 		if err != nil {
 			return nil, err
 		}
@@ -2276,10 +2327,22 @@ func discordHistoryCallback(dc *channels.DiscordChannel) tools.FetchChannelHisto
 			if msg.Author != nil {
 				author = msg.Author.Username
 			}
+			var media []string
+			for _, attachment := range msg.Attachments {
+				if attachment == nil {
+					continue
+				}
+				attachmentURL := attachment.URL
+				if attachmentURL == "" {
+					attachmentURL = attachment.ProxyURL
+				}
+				media = append(media, attachmentURL)
+			}
 			result[len(msgs)-1-i] = tools.ChannelHistoryMessage{
 				ID:        msg.ID,
 				Author:    author,
 				Content:   msg.Content,
+				Media:     media,
 				Timestamp: msg.Timestamp.Format("2006-01-02 15:04"),
 			}
 		}
@@ -2895,7 +2958,7 @@ func getConfigPath() string {
 	return filepath.Join(home, ".picoclaw", "config.json")
 }
 
-func runGatewayDefaultDispatch(ctx context.Context, msgBus *bus.MessageBus, agentLoop *agent.AgentLoop, jobManager *routing.JobManager, target routing.LoopTarget) {
+func runGatewayDefaultDispatch(ctx context.Context, msgBus *bus.MessageBus, agentLoop *agent.AgentLoop, jobManager *routing.JobManager, target routing.LoopTarget, inboundMediaURLRewrites *atomic.Pointer[map[string]string]) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -2907,13 +2970,20 @@ func runGatewayDefaultDispatch(ctx context.Context, msgBus *bus.MessageBus, agen
 			}
 			if jobManager != nil && jobManager.ShouldHandleChannel(msg.Channel) {
 				if err := jobManager.Submit(ctx, target, msg); err != nil && !constants.IsInternalChannel(msg.Channel) {
-					_ = msgBus.PublishOutbound(ctx, bus.OutboundMessage{
-						Channel: msg.Channel,
-						ChatID:  msg.ChatID,
-						Content: fmt.Sprintf("Failed to start background job: %v", err),
-					})
+					_ = msgBus.PublishOutbound(ctx, bus.OutboundMessage{Channel: msg.Channel, ChatID: msg.ChatID, Content: fmt.Sprintf("Failed to start background job: %v", err)})
 				}
 				continue
+			}
+			staged := msg
+			staged.Metadata = map[string]string{"message_id": msg.Metadata["message_id"] + "-" + uuid.NewString()}
+			stageErr := routing.PrepareInboundMedia(ctx, target.Workspace, &staged, currentInboundMediaRewrites(inboundMediaURLRewrites))
+			msg.Content, msg.Media = staged.Content, staged.Media
+			if stageErr != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				msg.Media = nil
+				msg.Content = strings.TrimSpace(msg.Content) + "\nAttachments could not be staged locally."
 			}
 			agentLoop.HandleInbound(ctx, msg)
 		}
@@ -2932,7 +3002,7 @@ func routingReloadTriggerPath() string {
 // routing is currently disabled, because the user may enable routing
 // at runtime and CLI addon hooks should reach addons as soon as routing
 // marker updates appear.
-func watchRoutingReload(ctx context.Context, dispatcher *routing.Dispatcher) {
+func watchRoutingReload(ctx context.Context, dispatcher *routing.Dispatcher, rewrites *atomic.Pointer[map[string]string]) {
 	triggerPath := routingReloadTriggerPath()
 	lastSeen := time.Time{}
 	if st, err := os.Stat(triggerPath); err == nil {
@@ -2976,6 +3046,7 @@ func watchRoutingReload(ctx context.Context, dispatcher *routing.Dispatcher) {
 				}
 				dispatcher.ReplaceResolver(resolver)
 			}
+			rewrites.Store(&cfg.Routing.InboundMediaURLRewrites)
 			logger.InfoCF("routing", "route_reload_success", map[string]interface{}{
 				"mappings":   len(cfg.Routing.Mappings),
 				"dispatcher": dispatcher != nil,

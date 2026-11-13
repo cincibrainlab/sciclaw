@@ -94,9 +94,10 @@ const (
 )
 
 type RoutingConfig struct {
-	Enabled          bool             `json:"enabled"`
-	UnmappedBehavior string           `json:"unmapped_behavior"`
-	Mappings         []RoutingMapping `json:"mappings"`
+	Enabled                 bool              `json:"enabled"`
+	UnmappedBehavior        string            `json:"unmapped_behavior"`
+	Mappings                []RoutingMapping  `json:"mappings"`
+	InboundMediaURLRewrites map[string]string `json:"inbound_media_url_rewrites,omitempty"`
 }
 
 type RoutingMapping struct {
