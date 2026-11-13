@@ -13,6 +13,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
 func TestDispatcherSendBlockNotice_UnmappedIncludesAppAndMentionOnlyGuidance(t *testing.T) {
@@ -75,6 +76,30 @@ func TestDispatcherSendJobSubmitError_UsesBackgroundJobMessage(t *testing.T) {
 	}
 	if out.Content != "Failed to start background job: context deadline exceeded" {
 		t.Fatalf("unexpected job submit error content: %q", out.Content)
+	}
+}
+
+func TestDispatcherLogsDroppedJobSubmitError(t *testing.T) {
+	logPath := filepathJoin(t.TempDir(), "server.log")
+	if err := logger.EnableFileLogging(logPath); err != nil {
+		t.Fatal(err)
+	}
+	defer logger.DisableFileLogging()
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+	for i := 0; i < 100; i++ {
+		if err := mb.PublishOutbound(context.Background(), bus.OutboundMessage{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d := NewDispatcher(mb, nil, nil)
+	d.sendJobSubmitError(context.Background(), bus.InboundMessage{Channel: "discord", ChatID: "room"}, fmt.Errorf("rejected"))
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "Job rejection notice dropped") || !strings.Contains(string(data), "queue full") {
+		t.Fatalf("missing drop log: %s", data)
 	}
 }
 
@@ -226,6 +251,75 @@ func TestDispatcherCancelDuringAttachmentStaging(t *testing.T) {
 		t.Fatal("cancellation did not interrupt staging")
 	}
 	waitForNoActiveJobs(t, jm, target.key())
+}
+
+func TestDispatcherOverloadWithFullOutboundDoesNotBlockCancellation(t *testing.T) {
+	for _, kind := range []string{"preparation", "status", "busy"} {
+		t.Run(kind, func(t *testing.T) {
+			mb := bus.NewMessageBus()
+			defer mb.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			runner := &fakeJobRunner{started: make(chan struct{}), block: make(chan struct{})}
+			jm, err := NewJobManager(filepathJoin(t.TempDir(), "jobs.json"), config.JobsConfig{MaxConcurrent: 1}, mb, &fakeProgressMessenger{}, func(LoopTarget) (JobRunner, error) { return runner, nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			d := NewDispatcher(mb, nil, nil)
+			d.SetJobManager(jm)
+			target := LoopTarget{Workspace: t.TempDir()}.normalized()
+			defer func() { cancel(); waitForNoActiveJobs(t, jm, target.key()) }()
+			msg := bus.InboundMessage{Channel: "discord", ChatID: "room", Content: "running"}
+			if err := d.enqueueDispatch(ctx, dispatchTask{target: target, msg: msg}); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-runner.started:
+			case <-time.After(time.Second):
+				t.Fatal("job did not start")
+			}
+			record := findJobRecordByAskSummary(t, jm, "running")
+			for i := 0; i < 100; i++ {
+				if err := mb.PublishOutbound(ctx, bus.OutboundMessage{Content: "full"}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if kind == "preparation" {
+				for i := 0; i < cap(jm.preparation); i++ {
+					jm.preparation <- struct{}{}
+				}
+				msg.Media = []string{"https://example.invalid/file"}
+			} else if kind == "status" {
+				deadline := time.Now().Add(time.Second)
+				for len(jm.statusSlots) != 0 && time.Now().Before(deadline) {
+					time.Sleep(time.Millisecond)
+				}
+				for i := 0; i < cap(jm.statusSlots); i++ {
+					jm.statusSlots <- struct{}{}
+				}
+			}
+			msg.Content = "rejected"
+			if kind == "busy" {
+				msg.Content = "/btw rejected"
+			}
+			if err := d.enqueueDispatch(ctx, dispatchTask{target: target, msg: msg}); err != nil {
+				t.Fatal(err)
+			}
+			msg.Content, msg.Media = "cancel "+record.ShortID, nil
+			msg.Metadata = map[string]string{"has_direct_mention": "true"}
+			if err := d.enqueueDispatch(ctx, dispatchTask{target: target, msg: msg}); err != nil {
+				t.Fatal(err)
+			}
+			deadline := time.Now().Add(time.Second)
+			for time.Now().Before(deadline) {
+				if got := findJobRecordByAskSummary(t, jm, "running").State; got == JobStateCancelled {
+					return
+				}
+				time.Sleep(time.Millisecond)
+			}
+			t.Fatal("overload response blocked the following cancellation")
+		})
+	}
 }
 
 func TestDispatcherLaterJobRunsWhileAttachmentPreparing(t *testing.T) {

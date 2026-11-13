@@ -432,7 +432,8 @@ func (jm *JobManager) Submit(ctx context.Context, target LoopTarget, msg bus.Inb
 			if jm.bus == nil {
 				return fmt.Errorf("too many attachments are being prepared; please try again shortly")
 			}
-			return jm.sendText(ctx, msg.Channel, msg.ChatID, "Too many attachments are being prepared; please try again shortly.")
+			publishJobNotice(ctx, jm.bus, bus.OutboundMessage{Channel: msg.Channel, ChatID: msg.ChatID, Content: "Too many attachments are being prepared; please try again shortly."})
+			return nil
 		}
 	}
 	select {
@@ -2149,7 +2150,8 @@ func hasQueuedMainLane(records []JobRecord) bool {
 }
 
 func (jm *JobManager) sendBusy(ctx context.Context, msg bus.InboundMessage, records []JobRecord, requestedClass JobClass) error {
-	return jm.sendText(ctx, msg.Channel, msg.ChatID, formatBusyMessage(records, requestedClass))
+	publishJobNotice(ctx, jm.bus, bus.OutboundMessage{Channel: msg.Channel, ChatID: msg.ChatID, Content: formatBusyMessage(records, requestedClass)})
+	return nil
 }
 
 func humanizePhase(phase string) string {

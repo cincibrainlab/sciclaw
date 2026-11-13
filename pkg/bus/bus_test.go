@@ -2,9 +2,32 @@ package bus
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
+
+func TestTryPublishOutbound(t *testing.T) {
+	mb := NewMessageBus()
+	ctx := context.Background()
+	for i := 0; i < 100; i++ {
+		if err := mb.TryPublishOutbound(ctx, OutboundMessage{Content: "queued"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := mb.TryPublishOutbound(ctx, OutboundMessage{}); !errors.Is(err, ErrBusFull) {
+		t.Fatalf("full bus error = %v", err)
+	}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := mb.TryPublishOutbound(cancelled, OutboundMessage{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled error = %v", err)
+	}
+	mb.Close()
+	if err := mb.TryPublishOutbound(ctx, OutboundMessage{}); !errors.Is(err, ErrBusClosed) {
+		t.Fatalf("closed bus error = %v", err)
+	}
+}
 
 func TestPublishConsumeInbound(t *testing.T) {
 	mb := NewMessageBus()

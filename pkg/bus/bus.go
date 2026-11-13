@@ -7,6 +7,7 @@ import (
 )
 
 var ErrBusClosed = errors.New("message bus closed")
+var ErrBusFull = errors.New("message bus outbound queue full")
 
 type MessageBus struct {
 	inbound  chan InboundMessage
@@ -59,6 +60,23 @@ func (mb *MessageBus) PublishOutbound(ctx context.Context, msg OutboundMessage) 
 		return ctx.Err()
 	case mb.outbound <- msg:
 		return nil
+	}
+}
+
+// TryPublishOutbound publishes only when capacity is immediately available.
+func (mb *MessageBus) TryPublishOutbound(ctx context.Context, msg OutboundMessage) error {
+	if err := mb.publishStateErr(ctx); err != nil {
+		return err
+	}
+	select {
+	case <-mb.done:
+		return ErrBusClosed
+	case <-ctx.Done():
+		return ctx.Err()
+	case mb.outbound <- msg:
+		return nil
+	default:
+		return ErrBusFull
 	}
 }
 

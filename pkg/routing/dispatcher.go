@@ -272,9 +272,19 @@ func (d *Dispatcher) sendJobSubmitError(ctx context.Context, msg bus.InboundMess
 	if detail := strings.TrimSpace(err.Error()); detail != "" {
 		content += ": " + detail
 	}
-	d.bus.PublishOutbound(ctx, bus.OutboundMessage{
+	publishJobNotice(ctx, d.bus, bus.OutboundMessage{
 		Channel: msg.Channel,
 		ChatID:  msg.ChatID,
 		Content: content,
 	})
+}
+
+func publishJobNotice(ctx context.Context, msgBus *bus.MessageBus, msg bus.OutboundMessage) {
+	if msgBus == nil {
+		logger.WarnCF("routing", "Job rejection notice dropped: message bus unavailable", map[string]interface{}{"channel": msg.Channel, "chat_id": msg.ChatID})
+		return
+	}
+	if err := msgBus.TryPublishOutbound(ctx, msg); err != nil {
+		logger.WarnCF("routing", "Job rejection notice dropped", map[string]interface{}{"channel": msg.Channel, "chat_id": msg.ChatID, "reason": err.Error()})
+	}
 }
