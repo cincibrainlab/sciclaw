@@ -2188,7 +2188,8 @@ func (al *AgentLoop) maybeSummarize(sessionKey string) {
 	}
 }
 
-// GetStartupInfo returns information about loaded tools and skills for logging.
+func (al *AgentLoop) Workspace() string { return al.workspace }
+
 // SetChannelHistoryCallback sets the fetch callback on the channel_history tool.
 func (al *AgentLoop) SetChannelHistoryCallback(cb tools.FetchChannelHistoryCallback) {
 	if tool, ok := al.tools.Get("channel_history"); ok {
